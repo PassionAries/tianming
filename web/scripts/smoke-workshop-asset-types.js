@@ -34,9 +34,11 @@ assert(/packageKind: 'store-zip'/.test(cm), 'packageKind 标注 store-zip（服�
 // ── 刀B：BGM 工坊轨（tm-audio-theme.js）──
 const au = fs.readFileSync(path.join(ROOT, 'tm-audio-theme.js'), 'utf8');
 assert(/loadWorkshopTracks: function/.test(au), 'loadWorkshopTracks 生效函数在');
-assert(/tm-content:\/\/workshop\/' \+ encodeURIComponent\(p\.id\) \+ '\/manifest\.json/.test(au),
-  '经 tm-content 协议读 manifest（零新 IPC）');
-assert(/p\.type === 'music' && p\.enabled !== false/.test(au), '只并入已启用的 music 类包');
+// 批Ⅴ重构后：manifest 取件统一挪进 TM.WorkshopAssets 桥（tm-content-manager.js）·audio 走桥
+const cmSrc = fs.readFileSync(path.join(ROOT, 'tm-content-manager.js'), 'utf8');
+assert(/tm-content:\/\/workshop\/' \+ encodeURIComponent\(pk\.id\) \+ '\/manifest\.json/.test(cmSrc),
+  '经 tm-content 协议读 manifest（桥内·零新 IPC）');
+assert(/p\.type === 'music'/.test(au) && /enabled !== false/.test(cmSrc), '只并入已启用的 music 类包（桥过滤）');
 assert(/\/\\\.\(mp3\|ogg\|wav\)\$\/i/.test(au), '曲目按音频扩展名过滤（与主进程 ALLOWED_PACK_EXTS 同族）');
 assert(/t && \(t\.user \|\| t\.workshop\)/.test(au), 'loadPlaylist 重建时保工坊轨（与导入轨同命·不被冲掉）');
 assert(/this\.loadWorkshopTracks\(function/.test(au), 'init 接线（异步就绪后刷新音声面板）');

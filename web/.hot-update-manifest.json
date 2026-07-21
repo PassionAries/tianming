@@ -2291,8 +2291,8 @@
     },
     {
       "path": "map-editor-io.js",
-      "sha256": "f79b18ce17f9b266e8bff00e97340050d247d726c8bf281fdad5ed624095b8ae",
-      "size": 32801
+      "sha256": "1d6593278f012e09aaf09a33c995eb8bd5326bdcf578e9cd7c0004e493a0bb58",
+      "size": 34980
     },
     {
       "path": "map-editor-juben-handoff.js",
@@ -3536,8 +3536,8 @@
     },
     {
       "path": "tm-audio-theme.js",
-      "sha256": "ad62ccf4ae422e4c1a6335727c14e42aff1d51454d2da267a2d4fb6d8065a0c6",
-      "size": 47189
+      "sha256": "c895e5f98d36abb81838d5800d83c0f44b8090a0a7286f84207c658b055971ca",
+      "size": 47298
     },
     {
       "path": "tm-audit.js",
@@ -3816,13 +3816,13 @@
     },
     {
       "path": "tm-content-manager-community.js",
-      "sha256": "ce477b30d260e74c57889530dddaebc8add59b19d4916540c84de1a6552a2cbe",
-      "size": 154843
+      "sha256": "865282c648e8b235909a7765424191a47f460487becb290292c81d33f97ac6a6",
+      "size": 155280
     },
     {
       "path": "tm-content-manager.js",
-      "sha256": "d9611eaac7c0e28ecc914f888eddfb76b0c316317c499a68bf6b2d2611421060",
-      "size": 149965
+      "sha256": "d85b0c0e6ff759aba457075aab53fdfe3bb93b562c7dcb677a4e862c223eee77",
+      "size": 158945
     },
     {
       "path": "tm-context-zones.js",
@@ -5131,13 +5131,13 @@
     },
     {
       "path": "tm-renwu-tuzhi.js",
-      "sha256": "93da51cd909686a12c9014fa0b152eb249034ee928ff907c0fd7d29279da14a2",
-      "size": 151034
+      "sha256": "9b964c3e92e404bc9559d54cd09d88ac3cda006a18e9a57007d8aa93498815e1",
+      "size": 151184
     },
     {
       "path": "tm-renwu-ui.js",
-      "sha256": "b5c3b2ea973c80ccbd9443bca44722686d318a78162a62889dd64056fb3a1d59",
-      "size": 61849
+      "sha256": "a35de99f65b1d10cf4aa8e9f4d0d57424376b294370c593d0e4a1dd1faabff17",
+      "size": 62083
     },
     {
       "path": "tm-reported-view.js",
@@ -5401,8 +5401,8 @@
     },
     {
       "path": "tm-zip-store.js",
-      "sha256": "131da71aa9944a2662c91edcccbf1d07906bb62421cde065b4fcf835dcff5d2c",
-      "size": 3041
+      "sha256": "cf3c58a6b1720d4079473d22e292b442802da269bad4d75faa6f9d753213ecbd",
+      "size": 5921
     },
     {
       "path": "vendor/models/README.md",

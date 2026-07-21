@@ -354,6 +354,8 @@
   function webInstalledRow(rec) {
     var upd = (state.workshopUpdates || {})[rec.packId];
     var badge = upd ? '<span style="border:1px solid #7ec98b;color:#7ec98b;font-size:0.7rem;padding:.05rem .3rem;margin-left:.4rem;">有新版 ' + esc(upd.to) + '</span>' : '';
+    // 批Ⅴ·资产包记录带类型签（音乐/立绘/地图等·与剧本同列管理·同卸载同更新）
+    if (rec.kind === 'asset') badge = '<span style="border:1px solid var(--gold-d,#8a6d2b);color:var(--gold,#c9a85f);font-size:0.7rem;padding:.05rem .3rem;margin-left:.4rem;">' + esc(({ portrait: '立绘包', music: '音乐包', map: '地图包', mod: 'MOD' })[rec.type] || rec.type || '资产包') + '</span>' + badge;
     return '<div class="tm-pack">' +
       '<div>' +
         '<div class="tm-pack-title">' + esc(rec.title || rec.packId) + badge + '</div>' +

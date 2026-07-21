@@ -83,30 +83,76 @@
     };
   }
 
+  // 批Ⅴ(2026-07-22)·三格式归一装载（file picker 与工坊图幅交接件共用）：
+  // GeoJSON FeatureCollection→GeoJSON 线；游戏 regions→转 divisions；原生 divisions→直载。
+  function importParsedObject(obj, fname){
+    if (!obj) return false;
+    if (obj.type === 'FeatureCollection'){
+      importGeoJSONData(obj, fname);
+      return true;
+    }
+    if (!obj.divisions){
+      var gm = Array.isArray(obj.regions) ? obj
+             : (obj.map && Array.isArray(obj.map.regions)) ? obj.map : null;
+      if (gm){
+        obj = gameMapToEditor(gm, Array.isArray(obj.regions) ? null : obj);
+      }
+    }
+    if (!obj.divisions){
+      meAlert('该 JSON 既非地图编辑器格式 (缺 divisions)·也非游戏地图 (缺 regions)·也非 GeoJSON FeatureCollection');
+      return false;
+    }
+    ME.loadMap(obj);
+    ME.fire('map-imported', { name: fname });
+    return true;
+  }
+
   function importJSON(){
     pickJSON(function(obj, fname){
       if (!obj) return;
-      // 自动识别·GeoJSON FeatureCollection → 路由 GeoJSON 解析
-      if (obj.type === 'FeatureCollection'){
-        importGeoJSONData(obj, fname);
-        return;
-      }
-      // 游戏格式·obj.regions (P.map / s.map) 或 obj.map.regions (完整 scenario) → 转编辑器格式 divisions
-      if (!obj.divisions){
-        var gm = Array.isArray(obj.regions) ? obj
-               : (obj.map && Array.isArray(obj.map.regions)) ? obj.map : null;
-        if (gm){
-          obj = gameMapToEditor(gm, Array.isArray(obj.regions) ? null : obj);
-        }
-      }
-      // 地图编辑器原生格式
-      if (!obj.divisions){
-        meAlert('该 JSON 既非地图编辑器格式 (缺 divisions)·也非游戏地图 (缺 regions)·也非 GeoJSON FeatureCollection');
-        return;
-      }
-      ME.loadMap(obj);
-      ME.fire('map-imported', { name: fname });
+      importParsedObject(obj, fname);
     });
+  }
+
+  // 批Ⅴ·工坊图幅交接件：创意工坊「在地图编辑器中打开」把图幅 JSON 存 IDB(__me_import)后开本页——
+  // 编辑器就绪后自取自删（一次性·失败不打扰正常打开流）。
+  function _checkWorkshopHandoff(retry){
+    try {
+      if (typeof indexedDB === 'undefined') return;
+      var req = indexedDB.open('tianming_workshop', 1);
+      req.onupgradeneeded = function(e){ var db = e.target.result; if (!db.objectStoreNames.contains('packs')) db.createObjectStore('packs', { keyPath: 'packId' }); };
+      req.onsuccess = function(e){
+        var db = e.target.result;
+        try {
+          var tx = db.transaction('packs', 'readwrite');
+          var st = tx.objectStore('packs');
+          var g = st.get('__me_import');
+          g.onsuccess = function(){
+            var rec = g.result;
+            if (!rec || !rec.json) { db.close(); return; }
+            if (!(global.ME && ME.loadMap)){
+              db.close();
+              if (!retry) setTimeout(function(){ _checkWorkshopHandoff(true); }, 2500);
+              return;
+            }
+            st.delete('__me_import');
+            try {
+              var obj = JSON.parse(rec.json);
+              importParsedObject(obj, rec.title || '工坊图幅');
+              if (global.meToast) meToast('已载入工坊图幅「' + (rec.title || '') + '」', 'info', 2600);
+            } catch (err){
+              if (global.meAlert) meAlert('工坊图幅解析失败：' + (err && err.message || err));
+            }
+            db.close();
+          };
+          g.onerror = function(){ db.close(); };
+        } catch (e2){ try { db.close(); } catch (e3) {} }
+      };
+    } catch (e) {}
+  }
+  if (typeof document !== 'undefined' && document.addEventListener){
+    if (document.readyState === 'complete' || document.readyState === 'interactive') setTimeout(function(){ _checkWorkshopHandoff(false); }, 800);
+    else document.addEventListener('DOMContentLoaded', function(){ setTimeout(function(){ _checkWorkshopHandoff(false); }, 800); });
   }
 
   // ─── GeoJSON import ─────────────────────────────────────
@@ -818,6 +864,7 @@
   global.TM.MapEditor.io = {
     importBitmap: importBitmap,
     importJSON: importJSON,
+    importParsedObject: importParsedObject,
     importGeoJSON: importGeoJSON,
     importGeoJSONData: importGeoJSONData,
     importShapefile: importShapefile,

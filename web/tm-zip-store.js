@@ -40,7 +40,51 @@
     return btoa(bin);
   }
 
-  var api = { buildZip: buildZip, bytesToBase64: bytesToBase64, crc32: crc32 };
+  function strFromBytes(b){
+    if (typeof TextDecoder !== 'undefined') return new TextDecoder('utf-8').decode(b);
+    var s = '', i = 0;
+    while (i < b.length) { var c = b[i]; if (c < 128) { s += String.fromCharCode(c); i += 1; } else if (c < 224) { s += String.fromCharCode(((c & 31) << 6) | (b[i + 1] & 63)); i += 2; } else { s += String.fromCharCode(((c & 15) << 12) | ((b[i + 1] & 63) << 6) | (b[i + 2] & 63)); i += 3; } }
+    return s;
+  }
+  function rd16(b, o){ return b[o] | (b[o + 1] << 8); }
+  function rd32(b, o){ return (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0; }
+
+  // 批Ⅴ(2026-07-22)·STORE zip 解析器：解本构建器（及任何 store 法）打的包——网页/安卓端
+  // 装资产包用。压缩条目(method≠0)直接明说拒解（工坊网页发布一律 store·外部压缩包请走桌面版）。
+  // bytes: Uint8Array(zip) → [{ name:String, data:Uint8Array }]
+  function parseZip(bytes){
+    if (!(bytes && bytes.length > 22)) throw new Error('zip 数据过短');
+    // 从尾部找 EOCD（容许 comment·最多回扫 64KB+22）
+    var eocd = -1, lo = Math.max(0, bytes.length - 65558);
+    for (var i = bytes.length - 22; i >= lo; i--) {
+      if (bytes[i] === 0x50 && bytes[i + 1] === 0x4b && bytes[i + 2] === 0x05 && bytes[i + 3] === 0x06) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error('不是有效的 zip（未找到目录尾）');
+    var count = rd16(bytes, eocd + 10), cdOfs = rd32(bytes, eocd + 16);
+    var out = [], p = cdOfs;
+    for (var n = 0; n < count; n++) {
+      if (rd32(bytes, p) !== 0x02014b50) throw new Error('zip 中央目录损坏');
+      var method = rd16(bytes, p + 10);
+      var csize = rd32(bytes, p + 20), usize = rd32(bytes, p + 24);
+      var nlen = rd16(bytes, p + 28), elen = rd16(bytes, p + 30), clen = rd16(bytes, p + 32);
+      var lofs = rd32(bytes, p + 42);
+      var name = strFromBytes(bytes.subarray(p + 46, p + 46 + nlen));
+      p += 46 + nlen + elen + clen;
+      if (name.slice(-1) === '/') continue; // 目录条目
+      if (name.indexOf('..') >= 0) throw new Error('zip 含越界路径: ' + name);
+      if (method !== 0) throw new Error('仅支持 store（不压缩）zip——工坊网页发布的包即是；外部压缩包请用桌面版安装');
+      // 局部头：跳过其 name/extra（长度可能与中央目录不同·以局部头为准）
+      if (rd32(bytes, lofs) !== 0x04034b50) throw new Error('zip 局部头损坏: ' + name);
+      var lnlen = rd16(bytes, lofs + 26), lelen = rd16(bytes, lofs + 28);
+      var dstart = lofs + 30 + lnlen + lelen;
+      var data = bytes.slice(dstart, dstart + (csize || usize));
+      if (crc32(data) !== rd32(bytes, p - nlen - elen - clen - 46 + 16)) throw new Error('zip 校验不符: ' + name);
+      out.push({ name: name, data: data });
+    }
+    return out;
+  }
+
+  var api = { buildZip: buildZip, bytesToBase64: bytesToBase64, parseZip: parseZip, crc32: crc32 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (root) root.TMZipStore = api;
 })(typeof window !== 'undefined' ? window : null);

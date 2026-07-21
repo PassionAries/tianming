@@ -330,7 +330,8 @@ function _rwRenderCard(c,ctx) {
   if (_isPlayer) _cardCls += ' player';
 
   // 立轴头像 + 忠诚环
-  var _portraitInner = _ch.portrait ? '<img loading="lazy" decoding="async" src="'+escHtml(_ch.portrait)+'" alt="">' : escHtml((c.name||'').charAt(0));
+  var _wsPortrait = _ch.portrait || (window.TM && TM.WorkshopAssets ? TM.WorkshopAssets.portraitFor(c.name) : ''); // 批Ⅴ·工坊立绘包同名兜底
+  var _portraitInner = _wsPortrait ? '<img loading="lazy" decoding="async" src="'+escHtml(_wsPortrait)+'" alt="">' : escHtml((c.name||'').charAt(0));
   var _loy = _ch.loyalty != null ? _ch.loyalty : 50;
   var _loyRing = _rwLoyRing(_loy);
 

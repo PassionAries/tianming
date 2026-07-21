@@ -163,16 +163,18 @@ var AudioSystem = {
   // 生效链从此闭环：网页发包(刀A带manifest)→审核上架→桌面安装→重启/进设置即入曲库。
   loadWorkshopTracks: function(done) {
     var self = this;
-    if (!(window.tianming && typeof window.tianming.listWorkshopPacks === 'function')) { if (done) done(0); return; }
-    window.tianming.listWorkshopPacks().then(function(res) {
-      var packs = (res && res.success && Array.isArray(res.packs)) ? res.packs : [];
-      var musicPacks = packs.filter(function(p) { return p && p.type === 'music' && p.enabled !== false; });
+    // 批Ⅴ(2026-07-22)·统一走 TM.WorkshopAssets 桥：桌面=tm-content://·网页/安卓=IDB objectURL。
+    // 桥晚装载时此处空转·桥 warmup 尾会回手再调一遍（双向兜底）。
+    var WA = window.TM && TM.WorkshopAssets;
+    if (!WA || typeof WA.listAssetPacks !== 'function') { if (done) done(0); return; }
+    WA.listAssetPacks().then(function(list) {
+      var musicPacks = (list || []).filter(function(p) { return p && p.type === 'music'; });
       if (!musicPacks.length) { if (done) done(0); return; }
       var pending = musicPacks.length, added = 0;
       var finish = function() { if (--pending <= 0 && done) done(added); };
       musicPacks.forEach(function(p) {
-        fetch('tm-content://workshop/' + encodeURIComponent(p.id) + '/manifest.json')
-          .then(function(r) { return r.ok ? r.json() : null; })
+        var pre = (p.source === 'idb' && WA.hydrate) ? WA.hydrate(p) : Promise.resolve(p);
+        pre.then(function() { return WA.getManifest(p); })
           .then(function(mf) {
             var files = (mf && Array.isArray(mf.files)) ? mf.files : [];
             var audio = files.filter(function(f) { return /\.(mp3|ogg|wav)$/i.test(String(f || '')); });
@@ -180,13 +182,15 @@ var AudioSystem = {
             audio.forEach(function(f, i) {
               var tid = 'ws-' + p.id + '-' + i;
               if ((self.playlist || []).some(function(t) { return t && t.id === tid; })) return;
+              var src = WA.fileUrl(p, String(f));
+              if (!src) return;
               var label = (assets[i] && assets[i].name) || String(f).replace(/\.[^.]+$/, '');
               if (!Array.isArray(self.playlist)) self.playlist = [];
               self.playlist.push({
                 id: tid,
                 title: label,
-                meta: '工坊·' + (mf.title || p.title || p.id),
-                src: 'tm-content://workshop/' + encodeURIComponent(p.id) + '/' + encodeURIComponent(String(f)),
+                meta: '工坊·' + ((mf && mf.title) || p.title || p.id),
+                src: src,
                 workshop: true
               });
               added++;

@@ -835,6 +835,7 @@
                 (isResumePack(p)
                   ? '<button class="btn primary"' + (disabled ? ' disabled' : '') + ' onclick="TMContentManager.resumePlay(' + jsArg(p.packageUrl || '') + ',' + jsArg(p.id || '') + ')" title="载入这局推演进度，从此接演续写">从此接演</button>'
                   : '<button class="btn primary"' + (disabled ? ' disabled' : '') + ' onclick="TMContentManager.installCatalogPack(' + jsArg(p.packageUrl || '') + ',' + jsArg(p.sha256 || '') + ',' + jsArg(p.id || '') + ')">' + esc(packInstallLabel(ptype)) + '</button>') +
+                (ptype === 'map' ? '<button class="btn" onclick="TMContentManager.openMapPackInEditor(' + jsArg(p.id || '') + ')" title="已安装后取包内图幅 JSON 递交地图编辑器">在地图编辑器中打开</button>' : '') +
                 (loggedIn ? '<span style="font-size:12px;color:var(--ink-dim);">评分 ' + rateStars + '</span>' : '') +
               '</div>' +
               '<div class="dacts" style="margin-top:8px;">' +
@@ -1387,11 +1388,44 @@
       try { resolvedUrl = new URL(packageUrl, state.catalogUrl || state.defaultCatalogUrl || location.href).toString(); } catch (e0) {}
       var resp = await fetch(resolvedUrl, { mode: 'cors', cache: 'no-store' });
       if (!resp.ok) throw new Error('下载失败 HTTP ' + resp.status);
-      var text = await resp.text();
+      var rawBuf = new Uint8Array(await resp.arrayBuffer());
+      // 批Ⅴ(2026-07-22)·zip 资产包分支：PK 魔数→网页/安卓也能装（store zip 解包入 IDB·
+      // 音乐/立绘/图幅经 TM.WorkshopAssets 生效）。压缩 zip 由 parseZip 明说拒收。
+      if (rawBuf.length > 3 && rawBuf[0] === 0x50 && rawBuf[1] === 0x4b && rawBuf[2] === 0x03 && rawBuf[3] === 0x04) {
+        if (rawBuf.length > 64 * 1024 * 1024) throw new Error('资产包超过网页安装上限（64MB），请用桌面版安装。');
+        if (sha256 && window.crypto && crypto.subtle) {
+          var dg = await crypto.subtle.digest('SHA-256', rawBuf);
+          var hex = Array.prototype.map.call(new Uint8Array(dg), function(b){ return ('0' + b.toString(16)).slice(-2); }).join('');
+          if (hex.toLowerCase() !== String(sha256).toLowerCase()) throw new Error('资产包 sha256 校验不符，已拒绝安装。');
+        }
+        if (!(window.TMZipStore && TMZipStore.parseZip)) throw new Error('解包模块未就绪。');
+        var zEntries = TMZipStore.parseZip(rawBuf);
+        if (zEntries.length > 500) throw new Error('资产包文件数超上限（500）。');
+        var mfEntry = zEntries.find(function(e){ return e.name === 'manifest.json'; });
+        if (!mfEntry) throw new Error('资产包缺少 manifest.json（旧版发布的包·请作者用新版重发）。');
+        var mfObj = JSON.parse(new TextDecoder('utf-8').decode(mfEntry.data));
+        var aType = String(mfObj.type || meta.type || 'mod');
+        var aId = String(meta.id || packId || mfObj.id || 'asset-pack');
+        await wsPut({ packId: aId, kind: 'asset', type: aType,
+          title: String(meta.title || mfObj.title || aId),
+          version: String(meta.version || mfObj.version || '1.0.0'),
+          manifest: mfObj,
+          files: zEntries.filter(function(e){ return e.name !== 'manifest.json'; }).map(function(e){ return { name: e.name, data: e.data }; }),
+          enabled: true, installedAt: new Date().toISOString(),
+          packageUrl: packageUrl, sha256: String(meta.sha256 || sha256 || '') });
+        await refreshWebInstalled();
+        try { if (TM.WorkshopAssets && TM.WorkshopAssets.warmup) TM.WorkshopAssets.warmup(); } catch (eW) {}
+        state.catalogMessage = '已安装' + packTypeNoun(aType) + '：' + (meta.title || mfObj.title || aId) +
+          (aType === 'music' ? '（曲目已并入声乐曲库）' : aType === 'portrait' ? '（同名人物立绘自动启用）' : aType === 'map' ? '（详情里可「在地图编辑器中打开」）' : '') + '。';
+        say('已安装工坊' + packTypeNoun(aType) + '：' + (meta.title || mfObj.title || aId));
+        render();
+        return;
+      }
+      var text = new TextDecoder('utf-8').decode(rawBuf);
       if (text.length > 16 * 1024 * 1024) throw new Error('剧本体积超过网页安装上限（16MB），请用桌面版安装。');
       var data;
       try { data = JSON.parse(text); }
-      catch (e) { throw new Error('此工坊包为打包资源（含立绘/音频等），网页版仅支持纯文本剧本，请用桌面版安装。'); }
+      catch (e) { throw new Error('此工坊包不是纯文本剧本也不是网页可装的 store 资产包，请用桌面版安装。'); }
       var pack = {
         id: String(meta.id || packId || data.id || 'workshop-pack'),
         title: String(meta.title || data.name || data.title || '工坊剧本'),
@@ -1428,7 +1462,109 @@
 
   async function refreshWebInstalled() {
     if (desktop()) return;
-    try { state.webInstalled = await wsGetAll(); } catch (e) { state.webInstalled = state.webInstalled || []; }
+    // 批Ⅴ·kind==='handoff' 是图幅交接暂存件（编辑器取走即删）·不进已装列表
+    try { state.webInstalled = (await wsGetAll()).filter(function(r){ return r && r.kind !== 'handoff'; }); } catch (e) { state.webInstalled = state.webInstalled || []; }
+  }
+
+  // ── 批Ⅴ(2026-07-22)·资产包统一取件桥 TM.WorkshopAssets ─────────────────────
+  // 桌面=已装工坊目录(tm-content:// 协议)·网页/安卓=IDB 资产记录(kind==='asset')。
+  // 音乐入轮播(tm-audio-theme)/立绘兜底(tm-renwu-*)/图幅进编辑器 三条生效链共用此口。
+  var _waUrlCache = {};      // packId/name -> objectURL（网页水化后）
+  var _waPortraitIdx = null; // 人物名(文件基名) -> url
+  function waListAssetPacks() {
+    if (desktop()) {
+      var lp = (window.tianming && window.tianming.listWorkshopPacks) ? window.tianming.listWorkshopPacks() : Promise.resolve(null);
+      return lp.then(function(res){
+        var packs = (res && res.success && Array.isArray(res.packs)) ? res.packs : [];
+        return packs.filter(function(p){ return p && p.type && p.type !== 'scenario' && p.enabled !== false; })
+          .map(function(p){ return { id: p.id, type: p.type, title: p.title, source: 'desktop' }; });
+      }).catch(function(){ return []; });
+    }
+    return wsGetAll().then(function(recs){
+      return (recs || []).filter(function(r){ return r && r.kind === 'asset' && r.enabled !== false; })
+        .map(function(r){ return { id: r.packId, type: r.type, title: r.title, manifest: r.manifest, source: 'idb' }; });
+    }).catch(function(){ return []; });
+  }
+  function waGetManifest(pk) {
+    if (pk && pk.manifest) return Promise.resolve(pk.manifest);
+    if (pk && pk.source === 'desktop') {
+      return fetch('tm-content://workshop/' + encodeURIComponent(pk.id) + '/manifest.json')
+        .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+    }
+    return Promise.resolve(null);
+  }
+  function waFileUrl(pk, name) {
+    if (!pk) return '';
+    if (pk.source === 'desktop') return 'tm-content://workshop/' + encodeURIComponent(pk.id) + '/' + encodeURIComponent(name);
+    return _waUrlCache[pk.id + '/' + name] || '';
+  }
+  function waHydrate(pk) {
+    if (!pk || pk.source !== 'idb') return Promise.resolve(pk);
+    return wsGetAll().then(function(recs){
+      var rec = (recs || []).find(function(r){ return r && r.packId === pk.id && r.kind === 'asset'; });
+      ((rec && rec.files) || []).forEach(function(f){
+        if (!f || !f.name) return;
+        var key = pk.id + '/' + f.name;
+        if (_waUrlCache[key]) return;
+        try { _waUrlCache[key] = URL.createObjectURL(new Blob([f.data])); } catch (e) {}
+      });
+      return pk;
+    }).catch(function(){ return pk; });
+  }
+  function waPortraitFor(name) {
+    if (!_waPortraitIdx || !name) return '';
+    return _waPortraitIdx[String(name).trim()] || '';
+  }
+  function waWarmup() {
+    waListAssetPacks().then(function(list){
+      var idx = {};
+      var jobs = (list || []).map(function(pk){
+        var pre = pk.source === 'idb' ? waHydrate(pk) : Promise.resolve(pk);
+        return pre.then(function(){ return waGetManifest(pk); }).then(function(mf){
+          if (pk.type !== 'portrait') return;
+          var files = (mf && Array.isArray(mf.files)) ? mf.files : [];
+          files.forEach(function(f){
+            if (!/\.(png|jpe?g|webp|bmp)$/i.test(String(f || ''))) return;
+            var base = String(f).replace(/\.[^.]+$/, '');
+            var u = waFileUrl(pk, String(f));
+            if (u && !idx[base]) idx[base] = u;
+          });
+        }).catch(function(){});
+      });
+      return Promise.all(jobs).then(function(){
+        _waPortraitIdx = idx;
+        // 音乐轮播刷新（audio 早于本桥装载时其 web 分支空转·此处回手补一遍）
+        try { if (window.AudioSystem && typeof AudioSystem.loadWorkshopTracks === 'function') AudioSystem.loadWorkshopTracks(function(){}); } catch (e) {}
+      });
+    }).catch(function(){});
+  }
+  // 图幅包进地图编辑器：取 entry JSON→IDB 交接件(__me_import)→开编辑器页（editor 就绪自取自删）
+  async function openMapPackInEditor(packId) {
+    try {
+      var list = await waListAssetPacks();
+      var pk = (list || []).find(function(p){ return p && p.id === packId && p.type === 'map'; });
+      if (!pk) { state.catalogMessage = '先安装此图幅包，再在编辑器中打开。'; render(); return; }
+      var mf = await waGetManifest(pk);
+      var entryName = (mf && mf.entry && /\.(geo)?json$/i.test(mf.entry)) ? mf.entry
+        : ((mf && Array.isArray(mf.files)) ? mf.files.find(function(f){ return /\.(geo)?json$/i.test(String(f || '')); }) : '');
+      if (!entryName) { state.catalogMessage = '包内没有可用的图幅 JSON。'; render(); return; }
+      if (pk.source === 'idb') await waHydrate(pk);
+      var url = waFileUrl(pk, String(entryName));
+      if (!url) { state.catalogMessage = '取件失败：图幅文件不可读。'; render(); return; }
+      var jsonText = await (await fetch(url)).text();
+      await wsPut({ packId: '__me_import', kind: 'handoff', title: pk.title || packId, json: jsonText, at: new Date().toISOString() });
+      window.open('map-editor.html', '_blank');
+      state.catalogMessage = '已递交图幅「' + (pk.title || packId) + '」——编辑器窗口就绪后自动载入。';
+      render();
+    } catch (e) {
+      state.catalogMessage = '打开图幅失败：' + (e && e.message || '未知错误');
+      render();
+    }
+  }
+  if (typeof window !== 'undefined') {
+    window.TM = window.TM || {};
+    TM.WorkshopAssets = { listAssetPacks: waListAssetPacks, getManifest: waGetManifest, fileUrl: waFileUrl, hydrate: waHydrate, portraitFor: waPortraitFor, warmup: waWarmup };
+    setTimeout(function(){ try { waWarmup(); } catch (e) {} }, 2500);
   }
 
   // 订阅=安装：检查已装工坊包是否有新版（作者发新版 + owner 审核通过后）。
@@ -2254,6 +2390,7 @@
     ratePack: ratePack,
     checkWorkshopUpdates: checkWorkshopUpdates,
     updateWorkshopPack: updateWorkshopPack,
+    openMapPackInEditor: openMapPackInEditor,
     updateAllWorkshop: updateAllWorkshop,
     uninstallWebPack: uninstallWebPack,
     loadAuthorPacks: loadAuthorPacks,

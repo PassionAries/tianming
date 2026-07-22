@@ -256,7 +256,7 @@
     TM.OnlineClient.joinCircle(cid, leave ? 'leave' : 'join', state.onlineApiUrl || undefined).then(function(res){
       if (res && res.success) { state.circlesLoaded = false; loadCircles(); if (state.circleOpen) openCircle(cid); }
       else { state.circleMsg = (res && res.error) || '操作失败'; render(); }
-    }).catch(function(){});
+    }).catch(function(e){ state.circleMsg = '操作失败：' + (e && e.message || '网络错误'); render(); });
   }
   function openCircle(id) {
     state.circleOpen = true; state.circleOpenId = String(id); state.circleDetailData = null; state.circleFeedData = null; state.circleMsg = '';
@@ -375,7 +375,7 @@
     TM.OnlineClient.respondRevision(rid, action, state.onlineApiUrl || undefined).then(function(res){
       if (res && res.success && state.detailPack) { state.revMsg = action === 'accept' ? '已采纳此修订。' : '已婉拒此修订。'; loadRevisions(state.detailPack.id); }
       else { state.revMsg = (res && res.error) || '操作失败'; render(); }
-    }).catch(function(){});
+    }).catch(function(e){ state.revMsg = '操作失败：' + (e && e.message || '网络错误'); render(); });
   }
   function renderRevisionSection() {
     var p = state.detailPack; if (!p) return '';
@@ -425,7 +425,7 @@
   function closeCommissionUI(id) {
     TM.OnlineClient.closeCommission(id, state.onlineApiUrl || undefined).then(function(res){
       if (res && res.success) { state.commMsg = '已关闭约稿。'; loadCommissions(); } else { render(); }
-    }).catch(function(){});
+    }).catch(function(e){ state.commMsg = '操作失败：' + (e && e.message || '网络错误'); render(); });
   }
   function renderCommissionSection() {
     if (!state.commissionsLoaded && !state.commissionsLoading) { try { setTimeout(loadCommissions, 0); } catch (e) {} }
@@ -819,20 +819,21 @@
         ? '<div class="tm-empty">通知接口不可用：' + esc(state.notifError || '读取失败') + '</div>'
         : '<div class="tm-empty">正式接口返回 0 条通知。</div>'));
     return '<section class="tm-panel" style="margin-top:.8rem;">' +
-      '<h4>通知' + (d.unread ? ' · <span class="tm-unread">' + d.unread + ' 未读</span>' : '') + '</h4>' +
+      '<h4>通知' + (d.unread ? ' · <span class="tm-unread">' + esc(String(d.unread)) + ' 未读</span>' : '') + '</h4>' +
       '<div class="tm-actions" style="margin-top:.2rem;">' +
         '<button class="tm-action primary" onclick="TMContentManager.openDmInbox()">私信</button>' +
         (d.unread ? '<button class="tm-action" onclick="TMContentManager.markAllNotif()">全部已读</button>' : '') +
         '<button class="tm-action" onclick="TMContentManager.refreshNotifs()">刷新</button>' +
       '</div>' +
+      (state.notifMsg ? '<div class="tm-empty">' + esc(state.notifMsg) + '</div>' : '') +
       '<div class="tm-notif-list">' + rows + '</div>' +
     '</section>';
   }
   function markNotif(id) {
-    TM.OnlineClient.markNotificationRead(id, state.onlineApiUrl || undefined).then(function(){ state.notifLoaded = false; loadNotifs(); }).catch(function(){});
+    TM.OnlineClient.markNotificationRead(id, state.onlineApiUrl || undefined).then(function(){ state.notifMsg = ''; state.notifLoaded = false; loadNotifs(); }).catch(function(e){ state.notifMsg = '操作失败：' + (e && e.message || '网络错误'); render(); });
   }
   function markAllNotif() {
-    TM.OnlineClient.markNotificationRead(true, state.onlineApiUrl || undefined).then(function(){ state.notifLoaded = false; loadNotifs(); }).catch(function(){});
+    TM.OnlineClient.markNotificationRead(true, state.onlineApiUrl || undefined).then(function(){ state.notifMsg = ''; state.notifLoaded = false; loadNotifs(); }).catch(function(e){ state.notifMsg = '操作失败：' + (e && e.message || '网络错误'); render(); });
   }
   function refreshNotifs() { state.notifLoaded = false; loadNotifs(); }
 
@@ -1534,6 +1535,7 @@
     state.feedLoading = true;
     state.feedStatus = 'loading'; state.feedError = '';
     TM.OnlineClient.feed(scope, 1, state.onlineApiUrl || undefined).then(function(res){
+      if ((state.feedScope || 'recommend') !== scope) return;
       if (!res || res.success === false) throw new Error((res && res.error) || '正式动态接口返回失败');
       state.feedData = Object.assign({}, res, { posts: Array.isArray(res.posts) ? res.posts : [] });
       state.feedLoaded = true; state.feedLoading = false; state.feedStatus = 'ok'; state.feedError = ''; render();

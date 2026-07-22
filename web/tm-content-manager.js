@@ -1179,6 +1179,8 @@
     var notifUnread = (state.notifData && state.notifData.unread) || 0;
     var updateCount = state.workshopUpdates ? Object.keys(state.workshopUpdates).length : 0;
     if (state.hotCheck && state.hotCheck.hasUpdate) updateCount += 1;
+    // 重渲前快照壳内正被编辑的输入框（有 id 的 input/textarea）：innerHTML 重建会清掉焦点与已敲字符，重建后按 id 找回。
+    var _snapAE = document.activeElement, _snap = (_snapAE && bg.contains(_snapAE) && /^(INPUT|TEXTAREA)$/.test(_snapAE.tagName) && _snapAE.id) ? { id: _snapAE.id, v: _snapAE.value, s: _snapAE.selectionStart, e: _snapAE.selectionEnd } : null;
     bg.innerHTML = '<main class="tm-mall tm-mall-page atelier-shell" role="main" aria-label="天命创意工坊" tabindex="-1">' +
       '<header class="topbar atelier-topbar">' +
         '<div class="brand atelier-brand"><div class="seal atelier-brand-seal">天<br>命</div><b>天命 · 创意工坊<small>百 工 谱 阁</small></b></div>' +
@@ -1207,6 +1209,8 @@
       var shell = bg.querySelector('.atelier-shell');
       try { if (shell) shell.focus({ preventScroll: true }); } catch (e0) {}
     }
+    // 恢复重渲前的输入焦点/光标（快照命中时）——重渲不再吞掉正在打的字。
+    if (_snap) { var _rel = document.getElementById(_snap.id); if (_rel) { try { if (_snap.v != null && _rel.value !== _snap.v) _rel.value = _snap.v; _rel.focus({ preventScroll: true }); if (_snap.s != null && _rel.setSelectionRange) _rel.setSelectionRange(_snap.s, _snap.e); } catch (e1) {} } }
     try { if (window.TMWorkshopCovers) window.TMWorkshopCovers.enhance(bg); } catch (e) {}
   }
 

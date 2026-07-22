@@ -1113,7 +1113,7 @@
 
   function workshopPaneCount(pane) {
     var catalog = state.catalog && Array.isArray(state.catalog.packs) ? state.catalog.packs : [];
-    if (pane === 'browse' || pane === 'ranks') return /^(ok|fallback)$/.test(state.catalogStatus) ? catalog.length : '';
+    if (pane === 'browse' || pane === 'ranks') return /^(ok|fallback|stale)$/.test(state.catalogStatus) ? catalog.length : '';
     if (pane === 'feed') return state.feedLoaded ? (((state.feedData || {}).posts || []).length) : '';
     if (pane === 'arenas') return state.arenasLoaded ? (state.arenaList || []).length : '';
     if (pane === 'topics') return state.collectionsLoaded ? (state.collectionList || []).length : '';
@@ -1149,19 +1149,22 @@
   }
 
   function workshopSourceBadge(label, status, value, title) {
-    var tone = status === 'ok' ? 'is-ok' : (status === 'fallback' ? 'is-fallback' : (status === 'loading' ? 'is-loading' : (status === 'idle' ? 'is-idle' : 'is-error')));
+    // stale=「有可用旧数据的降级态」：与 fallback 同走黄色中间态（is-fallback），绝不落 is-error 红档，
+    // 否则真源条自称「不可用」会与发现/浏览页「旧数据+过期横幅」自相矛盾。
+    var tone = status === 'ok' ? 'is-ok' : ((status === 'fallback' || status === 'stale') ? 'is-fallback' : (status === 'loading' ? 'is-loading' : (status === 'idle' ? 'is-idle' : 'is-error')));
     return '<span class="' + tone + '"' + (title ? ' title="' + esc(title) + '"' : '') + '><i></i><b>' + esc(label) + '</b><em>' + esc(value) + '</em></span>';
   }
 
   function renderWorkshopSourceStrip() {
     var packs = state.catalog && Array.isArray(state.catalog.packs) ? state.catalog.packs : [];
-    var catalogValue = state.catalogStatus === 'loading' ? '读取中' : state.catalogStatus === 'ok' ? packs.length + ' 件' : state.catalogStatus === 'fallback' ? packs.length + ' 件·仓库' : state.catalogStatus === 'idle' ? '未读取' : '不可用';
+    var catalogValue = state.catalogStatus === 'loading' ? '读取中' : state.catalogStatus === 'ok' ? packs.length + ' 件' : state.catalogStatus === 'fallback' ? packs.length + ' 件·仓库' : state.catalogStatus === 'stale' ? packs.length + ' 件·旧目录' : state.catalogStatus === 'idle' ? '未读取' : '不可用';
+    var catalogTitle = state.catalogStatus === 'stale' ? '在线目录刷新失败·当前显示旧目录：' + (state.catalogError || '未知错误') : state.catalogError;
     var featuredValue = state.featuredStatus === 'loading' ? '读取中' : state.featuredStatus === 'ok' ? (state.featuredPacks || []).length + ' 件' : state.featuredStatus === 'idle' ? '未读取' : '不可用';
     var installed = desktop() ? state.packs : state.webInstalled;
     var installedKnown = Array.isArray(installed);
     var version = currentWorkshopVersion();
     return '<div class="atelier-source-row" role="status" aria-live="polite"><div class="truth-strip">' +
-      workshopSourceBadge('正式在线目录', state.catalogStatus, catalogValue, state.catalogError) +
+      workshopSourceBadge('正式在线目录', state.catalogStatus, catalogValue, catalogTitle) +
       workshopSourceBadge('正式精选接口', state.featuredStatus, featuredValue, state.featuredError) +
       workshopSourceBadge('当前安装库', installedKnown ? 'ok' : 'error', installedKnown ? installed.length + ' 件' : '不可读', '') +
       workshopSourceBadge('仓库版本', version ? 'ok' : 'error', version ? 'v' + version : '未提供', '') +
@@ -1567,10 +1570,12 @@
         state.catalog = prevCatalog;
         state.catalogStatus = 'stale';
         state.catalogOrigin = prevOrigin;
-        state.catalogError = (e && e.message) || '未知错误';
-        state.catalogMessage = '在线目录刷新失败，暂显示上次结果：' + ((e && e.message) || '未知错误');
+        // loadBundledCatalogFallback 失败已把 catalogError 置为「在线错误；兜底错误」复合串（含兜底失败原因）——
+        // 保留它，别用单独在线错误覆盖；仅当其为空（如 harness 空跑 stub 未置串）时才退回在线 e.message。
+        if (!state.catalogError) state.catalogError = (e && e.message) || '未知错误';
+        state.catalogMessage = '在线目录刷新失败，暂显示旧目录：' + state.catalogError;
       } else {
-        state.catalogError = (e && e.message) || '未知错误';
+        if (!state.catalogError) state.catalogError = (e && e.message) || '未知错误';
       }
     }
     state.catalogLoading = false;

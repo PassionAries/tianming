@@ -254,6 +254,33 @@ assert(cm.includes('_waPortraitIdx = waMergePortraitIndex(results);'),
 assert(cm.includes('var quota = isQuotaError(e);'),
   'R4·R3: 安装 catch 须走 isQuotaError（而非内联裸 exceeded 正则）');
 
+// ── P1·真源条 stale 档接入（Codex 融合审 NO-GO 返修）：stale=「有可用旧数据的降级态」，
+//   真源条须走中间态(is-fallback)、绝不落 is-error 红档，且值含「旧目录」文案——真跑
+//   renderWorkshopSourceStrip + workshopSourceBadge 验（删 stale 分支即红）。
+(function testSourceStripStale() {
+  function esc(s) { return s == null ? '' : String(s); }
+  var badge = new Function('esc', extractFn(cm, 'function workshopSourceBadge(label, status, value, title)') + '\nreturn workshopSourceBadge;')(esc);
+  var makeStrip = new Function(
+    'state', 'workshopSourceBadge', 'desktop', 'currentWorkshopVersion', 'esc',
+    extractFn(cm, 'function renderWorkshopSourceStrip()') + '\nreturn renderWorkshopSourceStrip;'
+  );
+  function strip(status) {
+    return makeStrip(
+      { catalogStatus: status, catalog: { packs: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] },
+        catalogError: '在线目录 HTTP 500；仓库官方清单不可用', featuredStatus: 'ok', featuredPacks: [{ id: 'f' }],
+        packs: [{ id: 'x' }], webInstalled: [{ id: 'x' }] },
+      badge, function () { return true; }, function () { return '1.2.3'; }, esc
+    )();
+  }
+  var s = strip('stale');
+  assert(s.indexOf('is-error') < 0, 'P1: 真源条 stale 整条不落 is-error（目录走中间态·精选/安装/版本均 ok）');
+  assert(/is-fallback/.test(s), 'P1: 真源条 stale 目录档走中间态 is-fallback');
+  assert(s.indexOf('旧目录') >= 0, 'P1: 真源条 stale 含「旧目录」文案（有旧数据的降级态）');
+  // 反证：badge 直跑 error 档仍红、stale 档不红。
+  assert(badge('正式在线目录', 'error', '不可用', '').indexOf('is-error') >= 0, 'P1: error 档仍落 is-error（反证）');
+  assert(badge('正式在线目录', 'stale', '3 件·旧目录', '').indexOf('is-error') < 0, 'P1: stale 档 badge 不落 is-error（反证）');
+})();
+
 // ── R4·loadWorkshopCatalog 三条生命周期路径真跑（成功清错 / 失败保留 stale / 开跑清错）──
 (function testLoadCatalogLifecycle() {
   // 融合后 loadWorkshopCatalog 的 catch 先走百工谱阁 loadBundledCatalogFallback 再分层——注入其 stub

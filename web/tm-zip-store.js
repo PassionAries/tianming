@@ -14,6 +14,8 @@
 
   // entries: [{ name:String, data:Uint8Array }] → Uint8Array(zip)
   function buildZip(entries){
+    // EOCD 的条目数是 u16——>65535 会静默截断成坏 zip，宁可拒收（工坊包远不该有这么多文件）。
+    if (entries && entries.length > 65535) throw new Error('zip 条目数超上限（65535）');
     var parts = [], central = [], offset = 0;
     entries.forEach(function(e){
       var name = strBytes(e.name), data = e.data, crc = crc32(data);

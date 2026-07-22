@@ -582,6 +582,8 @@
             resolve(data);
           };
           xhr.onerror = function () { reject(new Error('上传请求失败')); };
+          xhr.ontimeout = function () { reject(new Error('上传超时')); };
+          xhr.onabort = function () { reject(new Error('上传已取消')); };
           xhr.send(bodyStr);
         });
       }

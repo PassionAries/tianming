@@ -187,7 +187,9 @@ var AudioSystem = {
               if ((self.playlist || []).some(function(t) { return t && t.id === tid; })) return;
               var src = WA.fileUrl(p, String(f));
               if (!src) return;
-              var label = (assets[i] && assets[i].name) || String(f).replace(/\.[^.]+$/, '');
+              // 曲名按 file 路径匹配 assets 取 label（不按过滤后下标 i：assets 含非音频项时 i 会错位）。
+              var _fa = null; for (var _ai = 0; _ai < assets.length; _ai++) { if (assets[_ai] && String(assets[_ai].file) === String(f)) { _fa = assets[_ai]; break; } }
+              var label = (_fa && _fa.name) || String(f).replace(/\.[^.]+$/, '');
               if (!Array.isArray(self.playlist)) self.playlist = [];
               self.playlist.push({
                 id: tid,

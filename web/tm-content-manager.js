@@ -911,12 +911,12 @@
               '</div>' +
               '<div class="dacts" style="margin-top:8px;">' +
                 '<button class="btn sm' + (isFavorite(p.id) ? ' primary' : '') + '" onclick="TMContentManager.toggleFavorite(' + jsArg(p.id || '') + ')">' + (isFavorite(p.id) ? '★ 已收藏' : '☆ 收藏') + '</button>' +
-                (loggedIn ? '<button class="btn sm' + (state.detailEndorsed ? ' primary' : '') + '" onclick="TMContentManager.endorsePack()">✦ ' + (state.detailEndorsed ? '已推荐' : '推荐') + (p.endorsements ? ' ' + p.endorsements : '') + '</button>' : '') +
+                (loggedIn ? '<button class="btn sm' + (state.detailEndorsed ? ' primary' : '') + '" onclick="TMContentManager.endorsePack()">✦ ' + (state.detailEndorsed ? '已推荐' : '推荐') + (p.endorsements ? ' ' + esc(String(p.endorsements)) : '') + '</button>' : '') +
                 (function(){
                   var df = state.detailFollow, su = (state.accountSession && state.accountSession.user);
                   var isSelf = su && su.id != null && String(su.id) === String(p.authorId);
                   if (!loggedIn || p.authorId == null || p.authorId === '' || isSelf) return '';
-                  return '<button class="btn sm' + (df && df.isFollowing ? ' primary' : '') + '" onclick="TMContentManager.toggleFollow(' + jsArg(p.authorId) + ')">' + (df && df.isFollowing ? '✓ 已关注作者' : '＋ 关注作者') + (df && df.followers ? ' ' + df.followers : '') + '</button>';
+                  return '<button class="btn sm' + (df && df.isFollowing ? ' primary' : '') + '" onclick="TMContentManager.toggleFollow(' + jsArg(p.authorId) + ')">' + (df && df.isFollowing ? '✓ 已关注作者' : '＋ 关注作者') + (df && df.followers ? ' ' + esc(String(df.followers)) : '') + '</button>';
                 })() +
                 '<button class="btn sm" onclick="TMContentManager.loadLineage()">世界线</button>' +
                 (loggedIn ? '<button class="btn sm" onclick="TMContentManager.openCollectionPicker(' + jsArg(p.id || '') + ')">收入合集</button>' : '') +
@@ -932,7 +932,7 @@
           renderDetailTypeBody(p) +
           renderLineageTree() +
           '<div class="dsec-h">作者</div><div><span style="color:var(--gold);cursor:pointer;text-decoration:underline;" onclick="TMContentManager.loadAuthorPacks(' + jsArg(p.authorId != null ? p.authorId : '') + ',' + jsArg(p.author || '') + ')">' + esc(p.author || '未署名') + '</span>' + (official ? ' <span class="pill good">官方认证</span>' : '') + '</div>' +
-          '<div class="dsec-h">玩家评论' + (state.detailCommentsStatus === 'ok' ? ' · ' + state.detailCommentCount : '') + '</div>' +
+          '<div class="dsec-h">玩家评论' + (state.detailCommentsStatus === 'ok' ? ' · ' + esc(String(state.detailCommentCount)) : '') + '</div>' +
           (loggedIn
             ? '<div class="field"><textarea id="tm-detail-comment" class="input" rows="2" placeholder="说说你的开局体验、攻略或建议…"></textarea></div><div style="margin:8px 0;"><button class="btn primary sm" onclick="TMContentManager.postPackComment()">发表评论</button></div>'
             : '<div class="dcopy">登录后可发表评论。</div>') +

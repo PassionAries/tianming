@@ -91,7 +91,7 @@
     else {
       var a = d.arena, board = d.leaderboard || [];
       var rows = board.length ? board.map(function(e){
-        return '<div class="rk"><div class="n' + (e.rank <= 3 ? ' top' : '') + '">' + e.rank + '</div>' +
+        return '<div class="rk"><div class="n' + (e.rank <= 3 ? ' top' : '') + '">' + esc(String(e.rank)) + '</div>' +
           '<div class="t"><b>' + esc(e.userNick) + (e.outcome ? ' · ' + esc(e.outcome) : '') + '</b>' + (e.summary ? '<small>' + esc(e.summary) + '</small>' : '') + '</div>' +
           '<div style="font-family:var(--serif);color:#f2d487;font-size:15px;">' + esc(String(e.score)) + '</div></div>';
       }).join('') : '<div class="empty"><div class="glyph">擂</div><div class="t">虚位以待</div><div>来交第一份战绩</div></div>';
@@ -913,7 +913,7 @@
     } else {
       var list = (state.dmInbox || []).length ? state.dmInbox.map(function(c){
         return '<div class="dm-c" onclick="TMContentManager.openDm(' + Number(c.userId) + ', ' + jsArg(c.nickname || '') + ')">' + av(c.nickname) +
-          '<div><b>' + esc(c.nickname) + (c.unread ? ' <span class="tag">' + c.unread + '</span>' : '') + '</b><small>' + (c.fromMe ? '我：' : '') + esc(c.lastText || '') + '</small></div></div>';
+          '<div><b>' + esc(c.nickname) + (c.unread ? ' <span class="tag">' + esc(String(c.unread)) + '</span>' : '') + '</b><small>' + (c.fromMe ? '我：' : '') + esc(c.lastText || '') + '</small></div></div>';
       }).join('') : (state.dmLoadStatus === 'error'
         ? truthEmpty('信', '私信接口不可用', state.dmLoadError || '无法读取正式私信。')
         : (state.dmLoadStatus === 'loading'

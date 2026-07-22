@@ -746,8 +746,8 @@
     loadDetailFollow(p.authorId);
     loadRevisions(id);
     try {
-      // 官方/残局包目录已完整·跳过 packMeta 富化避免 404 噪声（下方 id 前缀判定）：
-      if (String(id).indexOf('tianming-official-') !== 0 && String(id).indexOf('resume-') !== 0 && window.TM && TM.OnlineClient && TM.OnlineClient.packMeta) {
+      // F3·跳过 packMeta 富化避免官方/残局包 404 噪声：按目录行语义(isResumePack(p)·p 恒为头部命中的目录行)判定·无目录行才回落 id 前缀兜底·避免英文标题 slug 出 resume- 的真实用户包漏富化。
+      if (!(String(id).indexOf('tianming-official-') === 0 || (p ? isResumePack(p) : String(id).indexOf('resume-') === 0)) && window.TM && TM.OnlineClient && TM.OnlineClient.packMeta) {
         TM.OnlineClient.packMeta(id, state.onlineApiUrl || undefined).then(function(res){
           if (res && res.success && res.pack && state.detailOpen && state.detailPack && String(state.detailPack.id) === String(id)) {
             state.detailPack = Object.assign({}, state.detailPack, res.pack);

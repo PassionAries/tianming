@@ -5,7 +5,9 @@
 //   E-a feed scope 竞态守卫（先发后至不覆盖·真跑 loadFeed 源）· 输入快照恢复（真跑 render 快照/恢复段）
 //   E-b 安装 404 归因文案（源位断言：throw 在 PK 魔数判定之前）· 官方/残局包 packMeta 跳过（谓词真跑）
 //   C  网页下载进度（readBytesWithProgress 真跑：分块累计 + onProgress）· 复用批B 节流纯函数
-//   突变自检 ≥3 枚：scope 守卫删掉→红（真跑）/ 404 throw 删掉→红（源位）/ 条目数闸删掉→红（真跑）
+//   返修（对抗审三修）：F1 DM 发送即失焦（sendDm blur→重渲快照不命中→已发文本不盖回·真跑）·
+//     F2 loadFeed .then/.catch 两出口都有 scope 守卫· F3 packMeta 跳过谓词改按目录行语义(isResumePack(p))防英文 slug 误伤。
+//   突变自检 ≥4 枚：scope 守卫删掉→红（真跑）/ 404 throw 删掉→红（源位）/ 条目数闸删掉→红（pipeline-b）/ blur 删掉→红（真跑）
 //     ——各在内存副本上真跑验红，全程 fresh-read 证真源未被污染。
 // 风格沿袭 smoke-workshop-pipeline-a/b：读运行时源码 + extractFn 抽纯函数真跑。
 
@@ -46,6 +48,9 @@ function tick() { return new Promise(function (r) { setTimeout(r, 0); }); }
 var loadFeedSrc = extractFn(communitySrc, 'function loadFeed()');
 assert(loadFeedSrc.includes("if ((state.feedScope || 'recommend') !== scope) return;"),
   'E-a①: loadFeed 源含 scope 守卫行');
+// F2（返修）：scope 守卫须在 .then 与 .catch 两个异步出口都有——旧 scope 请求网络层 reject 晚到不得把错误态盖到当前页。
+assert((loadFeedSrc.match(/!== scope\) return;/g) || []).length >= 2,
+  'F2: loadFeed .then 与 .catch 两处异步出口都含 scope 守卫');
 
 // 用注入的 window/TM/state/render 真跑抽出的 loadFeed 源（只引用这四个自由名）。
 function buildLoadFeed(src) {
@@ -98,6 +103,41 @@ assert(/INPUT\|TEXTAREA/.test(snapLine), 'E-a②: 快照段限 input/textarea');
 })();
 
 // ════════════════════════════════════════════════════════════════════════
+//  F1（返修·阻断项）：DM 发送即失焦——sendDm 起异步前 blur，重渲快照不命中该框→已发文本不被盖回（清空保留）
+// ════════════════════════════════════════════════════════════════════════
+var sendDmSrc = extractFn(communitySrc, 'function sendDm()');
+assert(/if \(el && el\.blur\) el\.blur\(\);/.test(sendDmSrc), 'F1: sendDm 起异步前对 #tm-dm-input 调 blur()');
+// 真跑 sendDm 源（注入 document/state/TM/loadConversation/render）：验其同步 blur 令输入框失焦。
+function runSendDm(src) {
+  var body = { tagName: 'BODY' };
+  var input = { tagName: 'INPUT', id: 'tm-dm-input', value: '你好，同志', selectionStart: 5, selectionEnd: 5,
+    blur: function () { document.activeElement = body; } };
+  var document = { activeElement: input, getElementById: function (id) { return id === 'tm-dm-input' ? input : null; } };
+  var sent = null;
+  var TM = { OnlineClient: { sendMessage: function (to, text) { sent = { to: to, text: text }; return { then: function () { return { catch: function () {} }; } }; } } };
+  var state = { dmPeer: { id: 7 }, onlineApiUrl: '' };
+  var sendDm = new Function('document', 'state', 'TM', 'loadConversation', 'render', src + '\nreturn sendDm;')(document, state, TM, function () {}, function () {});
+  sendDm();
+  return { document: document, body: body, input: input, sent: sent };
+}
+function renderKeepsBoxEmpty(activeEl, box, hostEl) {
+  // 跑 render() 的快照/恢复两行源：activeElement 非壳内输入框时快照必为 null，重建的空框保持为空。
+  var bg = { contains: function (el) { return el === hostEl; } };
+  var doc2 = { activeElement: activeEl, getElementById: function (id) { return id === 'tm-dm-input' ? box : null; } };
+  var snap = new Function('document', 'bg', snapLine + '\n' + restoreLine + '\nreturn _snap;')(doc2, bg);
+  return snap;
+}
+(function () {
+  var r = runSendDm(sendDmSrc);
+  assert(r.sent && r.sent.text === '你好，同志', 'F1: 私信内容已提交发送');
+  assert.strictEqual(r.document.activeElement, r.body, 'F1: sendDm 已令输入框失焦（activeElement 落回 body）');
+  var fresh = { id: 'tm-dm-input', value: '', focus: function () {}, setSelectionRange: function () {} };
+  var snap = renderKeepsBoxEmpty(r.document.activeElement, fresh, r.input);   // 失焦后 activeElement 不在壳内
+  assert.strictEqual(snap, null, 'F1: 发送失焦后重渲快照为 null（不进回填）');
+  assert.strictEqual(fresh.value, '', 'F1: 重渲后 #tm-dm-input 为空——已发文本不被盖回（清空保留·不误重发）');
+})();
+
+// ════════════════════════════════════════════════════════════════════════
 //  E-b-①：安装 404 归因文案——throw 在 PK 魔数判定之前（源位断言）
 // ════════════════════════════════════════════════════════════════════════
 var installWebSrc = extractFn(cmSrc, 'async function installCatalogPackWeb(');
@@ -112,13 +152,23 @@ assert(okBeforePk(installWebSrc), 'E-b①: resp.ok 404 归因 throw 在 PK 魔�
 //  E-b-②：官方/残局包 packMeta 跳过——跳过谓词真跑
 // ════════════════════════════════════════════════════════════════════════
 var openDetailSrc = extractFn(cmSrc, 'function openPackDetail(');
-assert(/String\(id\)\.indexOf\('tianming-official-'\) !== 0 && String\(id\)\.indexOf\('resume-'\) !== 0/.test(openDetailSrc),
-  'E-b②: openPackDetail 用 id 前缀谓词门住 packMeta 富化');
-// 真跑谓词：官方/残局 id → 跳过（谓词为 false）；普通 id → 富化（谓词为 true）。
-var metaGate = function (id) { return String(id).indexOf('tianming-official-') !== 0 && String(id).indexOf('resume-') !== 0; };
-assert.strictEqual(metaGate('tianming-official-mingmo'), false, 'E-b②: 官方包跳过 packMeta');
-assert.strictEqual(metaGate('resume-tumu-1449'), false, 'E-b②: 残局包跳过 packMeta');
-assert.strictEqual(metaGate('player-pack-42'), true, 'E-b②: 普通玩家包照常富化');
+// F3（返修）：跳过谓词改按目录行语义（isResumePack(p)）——不再单凭 id 前缀，英文标题 slug 出 resume- 的真实用户包不再漏富化。
+assert(/p \? isResumePack\(p\) :/.test(openDetailSrc) && /indexOf\('tianming-official-'\) === 0/.test(openDetailSrc),
+  'E-b②: openPackDetail packMeta 跳过谓词按目录行语义（official 前缀 || isResumePack(p)·锁三元式非注释）');
+// 真跑真源 isResumePack + 目录行语义门（p=目录行恒非空；null 兜底走 id 前缀）。
+var isResumePack = new Function(extractFn(cmSrc, 'function isResumePack(') + '\nreturn isResumePack;')();
+var metaSkip = function (id, row) {
+  return row
+    ? (String(id).indexOf('tianming-official-') === 0 || isResumePack(row))
+    : (String(id).indexOf('tianming-official-') === 0 || String(id).indexOf('resume-') === 0);
+};
+assert.strictEqual(metaSkip('tianming-official-mingmo', { id: 'tianming-official-mingmo' }), true, 'E-b②: 官方包跳过 packMeta');
+assert.strictEqual(metaSkip('resume-tianqi7-t42-x', { tags: ['天启', '残局'] }), true, 'E-b②: 残局包(tags 含「残局」)跳过 packMeta');
+assert.strictEqual(metaSkip('resume-tianqi7-t42-x', { packageKind: 'resume' }), true, 'E-b②: 残局包(packageKind=resume)跳过 packMeta');
+assert.strictEqual(metaSkip('player-pack-42', { tags: [] }), false, 'E-b②: 普通玩家包照常富化');
+assert.strictEqual(metaSkip('resume-adventure', { title: 'Resume Adventure', tags: [], packageKind: 'store-zip' }), false,
+  'E-b②·F3: 英文标题 slug 出 resume- 的真实用户包(非残局行)不再漏富化');
+assert.strictEqual(metaSkip('resume-x', null), true, 'E-b②·F3: 无目录行时回落 id 前缀兜底仍跳过');
 
 // ════════════════════════════════════════════════════════════════════════
 //  C-①：网页下载进度——readBytesWithProgress 真跑（分块累计 + onProgress + 回落）
@@ -171,12 +221,31 @@ var pMut1 = (function () {
   assert.strictEqual(okBeforePk(mutSrc), false, '突变2: 删 404 throw 后 okBeforePk=false（源位断言据此变红）');
 })();
 // 突变3（条目数闸删掉→红）：见 smoke-workshop-pipeline-b（buildZip 条目数闸真跑 + 突变），此处不重复。
+// 突变4（F1·删 blur→红）：sendDm 源删掉 blur 行 → 发送后输入框仍聚焦 → 重渲快照命中→已发文本被盖回（F1 断言据此变红）。
+(function () {
+  var mutSrc = sendDmSrc.replace(/ *if \(el && el\.blur\) el\.blur\(\);[^\n]*\r?\n/, '');
+  assert(mutSrc !== sendDmSrc, '突变4: blur 行确实被删');
+  var r = runSendDm(mutSrc);
+  assert.strictEqual(r.document.activeElement, r.input, '突变4: 删 blur 后输入框仍聚焦');
+  var fresh = { id: 'tm-dm-input', value: '', focus: function () {}, setSelectionRange: function () {} };
+  // 快照命中（activeElement 仍是壳内输入框）→ 恢复把已发文本盖回空框——这正是 F1 防的回归。
+  new Function('document', 'bg', snapLine + '\n' + restoreLine + '\n')(
+    { activeElement: r.input, getElementById: function (id) { return id === 'tm-dm-input' ? fresh : null; } },
+    { contains: function (el) { return el === r.input; } });
+  assert.strictEqual(fresh.value, '你好，同志', '突变4: 删 blur→已发文本被盖回（证 F1 断言有效·据此变红）');
+})();
 
 // 突变自检未污染真源（fresh-read 证真源标记原样）。
 assert(read('tm-content-manager-community.js').includes("if ((state.feedScope || 'recommend') !== scope) return;"),
   '收尾: community scope 守卫原样（未被突变污染）');
 assert(read('tm-content-manager.js').includes("if (!resp.ok) throw new Error('下载失败：HTTP ' + resp.status);"),
   '收尾: 404 归因文案原样');
+assert(read('tm-content-manager-community.js').includes('if (el && el.blur) el.blur();'),
+  '收尾: sendDm blur 行原样（F1·未被突变污染）');
+assert((read('tm-content-manager-community.js').match(/!== scope\) return;/g) || []).length >= 2,
+  '收尾: loadFeed .then/.catch 两处 scope 守卫原样（F2）');
+assert(read('tm-content-manager.js').includes('p ? isResumePack(p) :'),
+  '收尾: packMeta 跳过谓词按目录行语义原样（F3·锁 gate 三元式非注释）');
 
 // 全部同步断言过 + 异步真跑收敛后打 PASS（任一 reject → 非零退出）。
 Promise.all([pRace, pProg, pMut1]).then(function () {

@@ -886,6 +886,7 @@
     var el = document.getElementById('tm-dm-input');
     var text = el ? el.value.trim() : '';
     if (!text || !state.dmPeer) return;
+    if (el && el.blur) el.blur();   // F1·发送即失焦：sendDm 后经两跳异步才 render·失焦令重渲快照不命中该框→已发文本不被回填盖回（清空保留·不再误重发）。
     state.dmMsg = '';
     TM.OnlineClient.sendMessage(state.dmPeer.id, text, state.onlineApiUrl || undefined).then(function(res){
       if (res && res.success) { loadConversation(state.dmPeer.id); }
@@ -1540,6 +1541,7 @@
       state.feedData = Object.assign({}, res, { posts: Array.isArray(res.posts) ? res.posts : [] });
       state.feedLoaded = true; state.feedLoading = false; state.feedStatus = 'ok'; state.feedError = ''; render();
     }).catch(function(e){
+      if ((state.feedScope || 'recommend') !== scope) return;   // F2·与 .then 同守卫：旧 scope 请求网络层 reject 晚到不再把错误态盖到当前页。
       state.feedData = { posts: [] }; state.feedLoaded = true; state.feedLoading = false;
       state.feedStatus = 'error'; state.feedError = (e && e.message) || '正式动态接口不可用';
       state.feedMsg = '动态载入失败：' + state.feedError; render();

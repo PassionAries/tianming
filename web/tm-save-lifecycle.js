@@ -32,6 +32,27 @@ function _safeClone(obj) {
 }
 
 // 确保 GM 所有字段存在默认值（存档前/读档后统一调用）
+// F2 势力活世界总闸·翻默认 ON 迁移 + 启动竞态自愈的【单一真源】规则(normalizer 与 tm:p-restored 自愈两处同调·避免逻辑分叉·Codex 二轮 B)。
+//   带用户意图戳(_factionLivingWorldSetByUser) → 尊重存档值(仅异常值兜底 ON)；
+//   无戳(含旧档旧 normalizer 写死的自动 false·或启动时完整 P 迟到、镜像尚未到) → 取跨局默认镜像 P.conf.factionLivingWorldDefault(是 boolean 才认)否则翻默认 ON。
+function _tmReconcileFactionLivingWorld(gm, p) {
+  if (!gm) return;
+  if (gm._factionLivingWorldSetByUser) {
+    if (typeof gm._factionLivingWorld !== 'boolean') gm._factionLivingWorld = true;   // 带戳·尊重存档值(仅异常值兜底 ON)
+    return;
+  }
+  gm._factionLivingWorld = (p && p.conf && typeof p.conf.factionLivingWorldDefault === 'boolean') ? p.conf.factionLivingWorldDefault : true;   // 无戳→取跨局镜像·否则翻默认 ON
+}
+// 启动竞态自愈：桌面端每 5 次自动存档曾把 lite 覆写成无 conf(现已在 saveP/autoSave 两处补 conf)——历史 lite 仍可能无镜像。
+//   完整 P 异步恢复晚到时 tm-utils 派 tm:p-restored·此处按同一真源用刚恢复的 P.conf.factionLivingWorldDefault 重算 GM._factionLivingWorld·
+//   消除「无戳 + 启动时 GM=true 而迟到镜像=false」的永久矛盾(用户显式关闭被翻 ON)。用户本会话显式设过(带戳)则不动。
+try {
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('tm:p-restored', function () {
+      try { if (typeof GM !== 'undefined' && GM && !GM._factionLivingWorldSetByUser) _tmReconcileFactionLivingWorld(GM, (typeof P !== 'undefined') ? P : null); } catch (_e) {}
+    });
+  }
+} catch (_e) {}
 function _ensureGMDefaults() {
   if (!GM.shijiHistory) GM.shijiHistory = [];
   if (!GM.allCharacters) GM.allCharacters = [];
@@ -78,7 +99,8 @@ function _ensureGMDefaults() {
   if (!GM._factionHistory) GM._factionHistory = [];
   if (!GM._factionUndercurrents) GM._factionUndercurrents = [];
   if (!GM._factionUndercurrentsHistory) GM._factionUndercurrentsHistory = [];
-  if (typeof GM._factionLivingWorld !== 'boolean') GM._factionLivingWorld = false;   // F2 势力活世界总闸·默认 OFF·随存档(whole-GM 自动序列化·此处仅补默认防旧档 undefined)
+  // F2 势力活世界总闸·翻默认 ON 迁移(单一真源 _tmReconcileFactionLivingWorld·启动竞态自愈两处同调·规则见函数注释)
+  _tmReconcileFactionLivingWorld(GM, (typeof P !== 'undefined') ? P : null);
   if (!GM._courtRecords) GM._courtRecords = [];
   // Phase 4 基建·sc28 world_snapshot 跨回合 mirror·sc1 prep 注入需要
   if (!GM._lastSc28Snapshot) GM._lastSc28Snapshot = null;
@@ -1459,7 +1481,7 @@ if(_tmHasNativeFs()){
       _autoSaveLiteTick++;
       if(_autoSaveLiteTick>=5){
         _autoSaveLiteTick=0;
-        try{localStorage.removeItem("tm_P");localStorage.setItem("tm_P_lite",JSON.stringify(_tmStripAiKeyView({scenarios:(P.scenarios||[]).map(function(s){return{id:s.id,name:s.name,era:s.era,role:s.role};}),ai:P.ai,_hasFullData:true})));}catch(e2){}
+        try{localStorage.removeItem("tm_P");localStorage.setItem("tm_P_lite",JSON.stringify(_tmStripAiKeyView({scenarios:(P.scenarios||[]).map(function(s){return{id:s.id,name:s.name,era:s.era,role:s.role};}),ai:P.ai,conf:_tmLiteSafeConf(P.conf),_hasFullData:true})));}catch(e2){}
       }
     }catch(e){ console.warn("[catch] 静默异常:", e.message || e); }
     finally{ _autoSaveInFlight=false; }

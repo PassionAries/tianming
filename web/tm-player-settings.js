@@ -311,6 +311,10 @@ function _togglePConf(confKey, on) {
     P.conf[confKey] = !!on;
   }
   if (typeof saveP === 'function') saveP();
+  // 个体活世界组件切换后·即时同步「活世界演绎·总纲」勾选态(幂等·仅读状态设 checkbox·不递归)
+  if (confKey === 'revoltEntityEnabled' || confKey === 'borderInvasionEnabled' || confKey === 'worldReactorBattleEnabled') {
+    try { if (typeof _tmSyncLivingWorldMaster === 'function') _tmSyncLivingWorldMaster(); } catch (_e) {}
+  }
   var labels = {
     recallGateEnabled: { on: '已启用召回节流·常规回合跳过 SC_RECALL 节省 API', off: '已关闭召回节流·每回合都全跑 5 源召回' },
     consolidationEnabled: { on: '已启用后台记忆固化', off: '已关闭后台记忆固化·sc_consolidate 不再调用' },
@@ -322,6 +326,8 @@ function _togglePConf(confKey, on) {
     agentAdaptiveDeepen: { on: '已启用自适应深化·收尾只深化本回合有动静的维度（省调用·去填充·地板维度始终深化）', off: '已关闭自适应深化·每维度都深化（深度纯粹优先·更耗调用）' },
     talentCohortEnabled: { on: '已启用人才范式渗透（实验）·新式学校→多瓶颈漏斗→渐渗+双向阻力·兴造弹窗见「人才与风气」', off: '已关闭人才范式渗透·学校不再注入人才引擎（零回归）' },
     worldReactorBattleEnabled: { on: '已启用兵败牵动天下·战败方确定性折损实力', off: '已关闭·战败只走 AI 裁量·不自动折损实力' },
+    revoltEntityEnabled: { on: '已启用民变实体化·民变闹大交 AI 演绎(起旗号/立渠帅/攻守招抚)', off: '已关闭·民变维持原五级抽象台账' },
+    borderInvasionEnabled: { on: '已启用边患真入侵·持续高压时敌对势力真出兵', off: '已关闭·边患仅停留在数值与文案' },
     populationBottomUpEnabled: { on: '已启用人口自下而上·按叶级政区分别核算', off: '已关闭·走全局粗粒度人口增长' },
     cognitionFeedbackEnabled: { on: '已启用认知反馈·知遇/贬谪落到忠诚数值', off: '已关闭·忠诚不因升降迁谪自动漂移' },
     useNewKejuScandal: { on: '已启用科场弊案·科举可能爆舞弊/科场案', off: '已关闭科场弊案链' },
@@ -331,6 +337,42 @@ function _togglePConf(confKey, on) {
   var l = labels[confKey] || { on: '已启用 ' + confKey, off: '已关闭 ' + confKey };
   if (typeof toast === 'function') toast('✅ ' + (on ? l.on : l.off));
 }
+
+// 活世界演绎·总纲(2026-07-22)：一键设/清四组件·个体开关仍独立可调(下方细粒度保留)。
+//   revolt/border/worldReactor 走 P.conf(随游戏设置)；势力活世界走既有存档级唯一写口(pill 同口·尊重御驾亲征式语义)。
+function _tmToggleLivingWorldMaster(on) {
+  on = !!on;
+  if (!P.conf) P.conf = {};   // arch-ok: 设置面板 setter 惯例初始化(同 _setAiSubcallConcurrency)
+  P.conf.revoltEntityEnabled = on;        // arch-ok: 活世界总纲·设置面板 setter(同 _togglePConf 范式·玩家设置项)
+  P.conf.borderInvasionEnabled = on;      // arch-ok: 同上
+  P.conf.worldReactorBattleEnabled = on;  // arch-ok: 同上
+  try {
+    if (typeof _tmSetFactionLivingWorld === 'function') _tmSetFactionLivingWorld(on);
+    else if (typeof window !== 'undefined' && typeof window._tmSetFactionLivingWorld === 'function') window._tmSetFactionLivingWorld(on);
+  } catch (_e) {}
+  if (typeof saveP === 'function') saveP();
+  if (typeof toast === 'function') toast(on
+    ? '✅ 活世界演绎·总纲已开启（民变实体化 / 边患真入侵 / 兵败牵动天下 / 势力活世界 四项全开）'
+    : '✅ 活世界演绎·总纲已关闭（四项全关·回到纯数值与文案）');
+  try { closeSettings(); openSettings(); } catch (_) {}
+}
+if (typeof window !== 'undefined') { try { window._tmToggleLivingWorldMaster = _tmToggleLivingWorldMaster; } catch (_e) {} }
+
+// 个体开关(或势力活世界 setter)变动后·同步「活世界演绎·总纲」勾选态(四项全开才勾)·幂等 DOM 赋值·只读状态不写值故不触发任何 setter(无递归风暴)。
+function _tmSyncLivingWorldMaster() {
+  try {
+    if (typeof document === 'undefined' || !document.getElementById) return;
+    var el = document.getElementById('s-livingworld-master');
+    if (!el) return;
+    var c = (typeof P !== 'undefined' && P && P.conf) ? P.conf : {};
+    var re = !(c.revoltEntityEnabled === false);
+    var bi = !(c.borderInvasionEnabled === false);
+    var wr = !(c.worldReactorBattleEnabled === false);
+    var flw = (typeof GM !== 'undefined' && GM && typeof GM._factionLivingWorld === 'boolean') ? (GM._factionLivingWorld !== false) : !(c.factionLivingWorldDefault === false);
+    el.checked = !!(re && bi && wr && flw);
+  } catch (_e) {}
+}
+if (typeof window !== 'undefined') { try { window._tmSyncLivingWorldMaster = _tmSyncLivingWorldMaster; } catch (_e) {} }
 
 // 记忆深度(agent 长记忆窗口·回合·按模型能力)·近 N 回合喂细·更早压缩为脉络(仍可调取)·#4+#5
 function _setAgentMemoryDepth(v) {

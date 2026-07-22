@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // scripts/smoke-faction-living-world.js — 刀F2·势力活世界
-//   OFF 矩阵：总闸 GM._factionLivingWorld 默认关 → 全线零行为变更(prompt 无新增段·新动作类型不收·appliers no-op)
+//   OFF 矩阵：总闸 GM._factionLivingWorld=false（2026-07-22 已翻默认 ON·OFF 路径须显式设 false）→ 全线零行为变更(prompt 无新增段·新动作类型不收·appliers no-op)
 //   ON  矩阵：declare_war/join_war 经 CasusBelliSystem 落 activeWars·重复开战被拒·对玩家宣战门槛·(S2)目标修剪·(S3)事件化
 'use strict';
 const fs = require('fs');
@@ -60,7 +60,7 @@ function baseGM(ctx, opts) {
     _facIndex: { '甲势力': { chars: [], parties: {}, metrics: {} }, '乙势力': { chars: [], parties: {}, metrics: {} } },
     activeWars: [], factionRelations: []
   };
-  if (opts.livingWorld) ctx.GM._factionLivingWorld = true;
+  ctx.GM._factionLivingWorld = opts.livingWorld ? true : false;   // 翻默认 ON 后·OFF 矩阵须显式关(否则默认=ON)
 }
 
 function mkDecision(actions) { return { rationale: '测·因果·Phase 1·X (cause: y)。', memorials: [], edict: null, chaoyi: null, office: [], actions: actions }; }
@@ -73,7 +73,7 @@ function offZeroChangeTest() {
   const eng = ctx.TM.FactionActionEngine;
   const fld = ctx.TM.FactionNpcLlmDecision;
 
-  assert(eng.livingWorldOn() === false, 'living world defaults OFF');
+  assert(eng.livingWorldOn() === false, 'living world OFF when _factionLivingWorld=false (2026-07-22 已翻默认 ON·显式关才 OFF)');
   assert(ctx.agentFlagOn('factionAgentEnabled') === false, 'OFF: factionAgentEnabled not brought on');
   assert(ctx.agentFlagOn('factionGoalStackEnabled') === false, 'OFF: factionGoalStackEnabled not brought on');
 
@@ -198,7 +198,7 @@ function goalGM(ctx, facObj, opts) {
     _facIndex: { '甲势力': { chars: [], parties: {}, metrics: {} } },
     _provinceToFaction: { '已占省': '甲势力' }, activeWars: []
   };
-  if (opts.livingWorld) ctx.GM._factionLivingWorld = true;
+  ctx.GM._factionLivingWorld = opts.livingWorld ? true : false;   // 翻默认 ON 后·OFF 矩阵须显式关
 }
 
 function goalLifecycleOffTest() {
@@ -465,9 +465,9 @@ function b4MigrationTest() {
   const ctx = buildContext(); installCasusBelli(ctx);
   const fac = { name: '甲势力', treasury: { money: 100000 } };
   ctx.P = { playerInfo: { factionName: '玩家朝廷' }, conf: { npcAiPrecision: true }, ai: { key: 'fake' } };
-  ctx.GM = { turn: 5, facs: [fac, { name: '乙势力' }, { name: '玩家朝廷', isPlayer: true }], _facIndex: { '甲势力': { chars: [], parties: {}, metrics: {} } }, activeWars: [], factionRelations: [] };
+  ctx.GM = { turn: 5, _factionLivingWorld: false, facs: [fac, { name: '乙势力' }, { name: '玩家朝廷', isPlayer: true }], _facIndex: { '甲势力': { chars: [], parties: {}, metrics: {} } }, activeWars: [], factionRelations: [] };
   const eng = ctx.TM.FactionActionEngine;
-  eng.ensureStrategy(fac, { rationale: 'x' }, [{ type: 'diplomacy', payload: { targetFaction: '乙势力', relationDelta: -10 } }]);   // OFF
+  eng.ensureStrategy(fac, { rationale: 'x' }, [{ type: 'diplomacy', payload: { targetFaction: '乙势力', relationDelta: -10 } }]);   // OFF (显式 _factionLivingWorld=false)
   assert(fac.aiStrategy.goals.some(function(g){ return typeof g === 'string'; }), 'B4 setup: OFF produced legacy string goals');
   ctx.GM._factionLivingWorld = true;
   ctx.TM.FactionGoalStack.addGoal(fac, { desc: '真目标', horizon: 'short' }, 5);   // 此刻 goals 混合(字符串+对象)

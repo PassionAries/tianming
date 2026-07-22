@@ -16,7 +16,7 @@
 
   function _gm() { return (typeof GM !== 'undefined' && GM) ? GM : null; }
   function _conf() { return (typeof P !== 'undefined' && P && P.conf) ? P.conf : {}; }
-  function _battleOn() { return _conf().worldReactorBattleEnabled === true; }   // 默认 false·安全
+  function _battleOn() { return _conf().worldReactorBattleEnabled !== false; }   // 2026-07-22 翻默认 ON·可关(显式 false 才关)
   // 注：财政→民心/阶层 reactor（W2b）不在本模块——它走已活的 scanRuntimePressures（tm-social-political-signals.js）
   //   新增 treasury-strain emitter，复用其去重/applyPending/inferClassImpacts 通路。军事→势力走本模块因其无活路径。
 

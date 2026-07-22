@@ -22,7 +22,7 @@
   var STRENGTH_BY_LEVEL = { 3: 40, 4: 60, 5: 85 };
 
   function enabled() {
-    try { return !!(global.P && global.P.conf && global.P.conf.revoltEntityEnabled === true); }
+    try { return !(global.P && global.P.conf && global.P.conf.revoltEntityEnabled === false); }
     catch (_) { return false; }
   }
 

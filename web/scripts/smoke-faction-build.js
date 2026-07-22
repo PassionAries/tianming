@@ -16,7 +16,7 @@ function setup(switchOn) {
   var leafBorder = { name: '宁远', borderRisk: 80, officeVacancy: 0, economyBase: { farmland: 0 }, buildings: [] };
   var leafVac = { name: '沈阳', borderRisk: 10, officeVacancy: 3, economyBase: { farmland: 0 }, buildings: [] };
   var leafFarm = { name: '辽阳', borderRisk: 5, officeVacancy: 0, economyBase: { farmland: 120000 }, buildings: [] };
-  global.GM = { turn: 3, facs: [{ name: '后金' }], adminHierarchy: { '后金': { factionName: '后金', divisions: [leafBorder, leafVac, leafFarm] } } };
+  global.GM = { turn: 3, _factionLivingWorld: false, facs: [{ name: '后金' }], adminHierarchy: { '后金': { factionName: '后金', divisions: [leafBorder, leafVac, leafFarm] } } };   // 势力活世界已翻默认 ON(2026-07-22)·此处显式关·令 factionAgentEnabled 只由 switchOn 决定(否则默认总闸会带亮子闸·污染开关关的零回归断言)
   global.P = { conf: { factionAgentEnabled: !!switchOn } };
   return { leafBorder: leafBorder, leafVac: leafVac, leafFarm: leafFarm };
 }

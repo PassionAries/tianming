@@ -41,3 +41,7 @@ web/tm-endturn-apply.js whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr
 web/scripts/smoke-ai-change-applier-baseline.js whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 # 刀C返工三轮(2026-07-19·Codex复审)·派生缓存入存档 SKIP 黑名单·此文件亦历史 CRLF(同上契约)。
 web/tm-save-lifecycle.js whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+# 批甲「开闸醒世界」(2026-07-22)触及的历史 CRLF 文件：势力活世界总闸唯一写口 + _livingWorldOn 镜像随翻默认扩改·同上契约(检查真行尾空格·不把 CR 误报为 trailing)。
+web/tm-faction-action-engine.js whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+# 批甲「开闸醒世界」(2026-07-22·Codex 三轮 A)触及的历史 CRLF(mixed) 文件：新增 lite conf 净化器 _tmLiteSafeConf + 两 lite 写口接线·同上契约(检查真行尾空格·不把 CR 误报为 trailing)。
+web/tm-utils.js whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

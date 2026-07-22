@@ -52,7 +52,7 @@ async function main() {
 
   // ② driver _isEnabled:agent 模式活世界绕过"势力精算"gate(精算关也能跑·只要 agent 模式+活世界+key)
   ctx.P = { playerInfo: { factionName: '明朝廷' }, conf: { agentModeEnabled: true, agentLiveWorldEnabled: true, npcAiPrecision: false, npcInTurnMaxPerTurn: 8 }, ai: { key: 'fake' } };
-  ctx.GM = { turn: 7, facs: [ { name: '明朝廷', derivedStrength: { value: 99 } }, { name: '后金', derivedStrength: { value: 80 } }, { name: '察哈尔', derivedStrength: { value: 20 } } ], qijuHistory: [] };
+  ctx.GM = { turn: 7, _factionLivingWorld: false, facs: [ { name: '明朝廷', derivedStrength: { value: 99 } }, { name: '后金', derivedStrength: { value: 80 } }, { name: '察哈尔', derivedStrength: { value: 20 } } ], qijuHistory: [] };   // 势力活世界已翻默认 ON(2026-07-22)·此处显式关·令 LLM 模式对照(r3)不被默认总闸带亮 factionAgentEnabled
   ctx.TM.FactionNpcLlmDecision = { calls: [], hasRunThisTurn: function () { return false; }, decideFor: async function (name) { this.calls.push(name); return { applied: true, rationale: name + ' 自主措置' }; } };
   ctx.TM.FactionNpcNewsBridge = {};
   assert(ctx.TM.FactionNpcSettings.isAiPrecisionEnabled() === false, '前提:势力精算关闭(npcAiPrecision=false)');

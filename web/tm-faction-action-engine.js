@@ -811,7 +811,7 @@
 
   // ── 【F2·势力活世界】总闸读口 + 真战争接线(declare_war/join_war 走 CasusBelliSystem·绝不自写 activeWars) ──
   function _livingWorldOn() {
-    if (!global.GM || global.GM._factionLivingWorld !== true) return false;
+    if (!global.GM || global.GM._factionLivingWorld === false) return false;   // 2026-07-22 翻默认 ON·可关(显式 false 才关)
     if (typeof global.agentModeOn === 'function' && global.agentModeOn()) return false;   // B8·agent 模式(mode-b·平行回合引擎)下总闸不生效·功能不可达·与 agent-flags「子 flag 不点亮」同一语义
     return true;
   }
@@ -914,8 +914,10 @@
   // 设置面板「势力活世界·实验」开关处理器(tm-patches.js 设置渲染调·切 GM._factionLivingWorld·本局存档生效·御驾亲征式 pill 类切换)
   function setFactionLivingWorld(on, btn) {
     on = !!on;
-    try { if (global.GM) global.GM._factionLivingWorld = on; } catch (e) {}   // arch-ok: F2 势力活世界总闸·本局存档·御驾亲征式设置开关(唯一写口)
+    try { if (global.GM) { global.GM._factionLivingWorld = on; global.GM._factionLivingWorldSetByUser = true; } } catch (e) {}   // arch-ok: F2 势力活世界总闸 + 用户意图戳·本局存档·御驾亲征式设置开关(唯一写口)
+    try { if (global.P) { global.P.conf = global.P.conf || {}; global.P.conf.factionLivingWorldDefault = on; } } catch (e) {}   // arch-ok: 跨局默认镜像·发车前(临时 GM 会被 tm-patches-start 重建)靠此存活到新局·normalizer 无戳时读它
     try { if (btn && btn.parentNode) { var bs = btn.parentNode.querySelectorAll('button[data-slhs]'); for (var i = 0; i < bs.length; i++) { var want = bs[i].getAttribute('data-slhs') === '1'; bs[i].className = 'bt ' + (want === on ? 'bp' : 'bs') + ' bsm'; } } } catch (e) {}
+    try { if (typeof global._tmSyncLivingWorldMaster === 'function') global._tmSyncLivingWorldMaster(); } catch (e) {}   // 个体切换后同步「活世界演绎·总纲」勾选态(幂等·不递归)
     try { if (typeof global.toast === 'function') global.toast(on ? '势力活世界已开启 · 列国将真宣战/结盟/立志/兴事(本局存档生效)' : '势力活世界已关闭 · 列国维持现状'); } catch (e) {}
   }
 

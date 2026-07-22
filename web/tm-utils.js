@@ -1722,7 +1722,7 @@ function saveP(){
       // conf 镜像入轻量骨架——这是同步存储·随 saveP 一并写·用于在启动同步层即恢复用户设置(生成字数/推演深度/记忆容量等)
       // 修 2026-06-11·剧本 register() 在 DOMContentLoaded 早于异步 IndexedDB restore 跑·会用默认 conf 覆盖玩家保存的设置
       // 让 conf 经同步骨架抢先在 register 之前落到内存·register 的 saveP 便持久化正确 conf·竞态消除
-      conf: P.conf,
+      conf: _tmLiteSafeConf(P.conf),
       _hasFullData: true // 标记：完整数据在IndexedDB
     };
     localStorage.setItem('tm_P_lite', JSON.stringify(lite));
@@ -2011,7 +2011,23 @@ function _tmStripAiKeyView(o){ // 用于直接序列化运行时 P：返回浅�
   if(ai.secondary&&typeof ai.secondary==='object'){ var s={},k2; for(k2 in ai.secondary) if(Object.prototype.hasOwnProperty.call(ai.secondary,k2)) s[k2]=ai.secondary[k2]; delete s.key; ai.secondary=s; }
   v.ai=ai; return v;
 }
-if(typeof window!=='undefined'){ window._tmStripAiKeyInPlace=_tmStripAiKeyInPlace; window._tmStripAiKeyView=_tmStripAiKeyView; }
+// lite 骨架专用 conf 净化器(纯函数·零副作用·Codex 三轮 A)：tm_P_lite 走同步 localStorage·须防两类污染——
+//   ① 敏感值(apiKey/aiKey·对齐 tm-resume-point.js _stripKey 清单)明文进 localStorage；
+//   ② 配额炸(conf.refText 可存数 MB 史料·见 tm-office-editor·或任何异常超长串)触发 QuotaExceededError 被空 catch 静默吞。
+// saveP 与桌面 autoSave 两个 lite 写口共用。
+function _tmLiteSafeConf(conf){
+  if(!conf || typeof conf!=='object') return conf;
+  var out={}, k;
+  for(k in conf){
+    if(!Object.prototype.hasOwnProperty.call(conf,k)) continue;
+    if(k==='apiKey'||k==='aiKey'||k==='refText') continue;   // 敏感值 + 已知大字段整键剔除
+    var v=conf[k];
+    if(typeof v==='string' && v.length>20000) continue;    // 通用配额守卫：>~20KB 字符串一律剔除(lite 仅快启动骨架·大串走 IDB 完整档)
+    out[k]=v;
+  }
+  return out;
+}
+if(typeof window!=='undefined'){ window._tmStripAiKeyInPlace=_tmStripAiKeyInPlace; window._tmStripAiKeyView=_tmStripAiKeyView; window._tmLiteSafeConf=_tmLiteSafeConf; }
 
 // ── P.scenario 接线（2026-07-04 审查定罪）────────────────────────────────
 // 全库约 40 处读 P.scenario(单数·科举朝代范式/宋特奏名/恩科名额/朝议/策命/称谓语言包)·

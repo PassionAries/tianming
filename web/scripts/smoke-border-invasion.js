@@ -44,10 +44,11 @@ vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-border-invasion.js'), 'utf8'
 var GM = sandbox.GM;
 var BI = sandbox.TM.BorderInvasion;
 
-console.log('① flag OFF（默认）→ 零行为');
+console.log('① flag 显式 OFF → 零行为（2026-07-22 已翻默认 ON·显式 false 才回老轨）');
+sandbox.P.conf.borderInvasionEnabled = false;
 BI.tick(GM); BI.tick(GM); BI.tick(GM); BI.tick(GM);
-assert(GM.armies.length === 0, 'flag 关 → 永不出兵');
-assert(!leaves[0]._invRiskStreak, 'flag 关 → 连 streak 都不记');
+assert(GM.armies.length === 0, 'flag 显式关 → 永不出兵');
+assert(!leaves[0]._invRiskStreak, 'flag 显式关 → 连 streak 都不记');
 
 console.log('② 高压三回合 → 最强敌对势力出兵（义军被排除）');
 sandbox.P.conf.borderInvasionEnabled = true;

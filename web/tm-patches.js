@@ -601,10 +601,11 @@ openSettings=function(){
     })()+
     // 势力活世界·实验(F2·开关 GM._factionLivingWorld·本局存档生效·总闸 OFF=零行为变更)
     (function(){
-      var on = false; try { on = !!(typeof GM!=='undefined' && GM && GM._factionLivingWorld); } catch(_){}
+      // 勾选态推导(2026-07-22 翻默认+迁移)：GM 有 boolean 字段→!==false;无字段(如发车前临时 GM)→读跨局默认镜像 P.conf.factionLivingWorldDefault(默认 ON)
+      var on = true; try { on = (typeof GM!=='undefined' && GM && typeof GM._factionLivingWorld==='boolean') ? (GM._factionLivingWorld !== false) : !(typeof P!=='undefined' && P && P.conf && P.conf.factionLivingWorldDefault === false); } catch(_){}
       function pill(want, label){ return '<button class="bt '+((on===want)?'bp':'bs')+' bsm" data-slhs="'+(want?1:0)+'" onclick="_tmSetFactionLivingWorld('+want+',this)" style="flex:1;">'+label+'</button>'; }
       return '<div class="settings-section"><h4>势力活世界 · 实验</h4>'
-        + '<div style="font-size:0.78rem;color:var(--txt-d);margin:-0.2rem 0 0.4rem;">开启后，列国势力不再只作壁上观：可<b>真宣战/参战</b>（走正当法理·非乱咬）、<b>结盟背刺</b>结出真外交后果、跨回合<b>立志兴事</b>，重大动向<b>入御案时政</b>待陛下应对。默认关（零行为变更），本局存档生效。</div>'
+        + '<div style="font-size:0.78rem;color:var(--txt-d);margin:-0.2rem 0 0.4rem;">开启后，列国势力不再只作壁上观：可<b>真宣战/参战</b>（走正当法理·非乱咬）、<b>结盟背刺</b>结出真外交后果、跨回合<b>立志兴事</b>，重大动向<b>入御案时政</b>待陛下应对。默认启用（2026-07-22 翻默认·可关），本局存档生效。</div>'
         + '<div style="display:flex;gap:0.3rem;">' + pill(true,'开启 · 活世界') + pill(false,'关闭 · 现状') + '</div>'
         + '</div>';
     })()+
@@ -730,19 +731,34 @@ openSettings=function(){
             '</div>' +
           '</label>';
         })() +
+          // 活世界演绎·总纲(2026-07-22 翻默认)：一键设/清四组件(民变实体化/边患真入侵/兵败牵动天下/势力活世界)·个体开关仍在下方逐项细调
           (function(){
-            var _revEntOn = !!(P.conf && P.conf.revoltEntityEnabled === true);
+            var _re = !(P.conf && P.conf.revoltEntityEnabled === false);
+            var _bi = !(P.conf && P.conf.borderInvasionEnabled === false);
+            var _wr = !(P.conf && P.conf.worldReactorBattleEnabled === false);
+            var _flw = true; try { _flw = (typeof GM!=='undefined' && GM && typeof GM._factionLivingWorld==='boolean') ? (GM._factionLivingWorld !== false) : !(typeof P!=='undefined' && P && P.conf && P.conf.factionLivingWorldDefault === false); } catch(_){}
+            var _lwAll = _re && _bi && _wr && _flw;
+            return '<label style="display:flex;align-items:flex-start;gap:0.5rem;padding:0.4rem 0;border-bottom:1px dotted var(--bdr);cursor:pointer;">' +
+              '<input type="checkbox" id="s-livingworld-master" ' + (_lwAll?'checked ':'') + 'onchange="_tmToggleLivingWorldMaster(this.checked)" style="margin-top:0.15rem;flex-shrink:0;">' +
+              '<div style="flex:1;">' +
+                '<div style="font-size:0.82rem;color:var(--gold);font-weight:600;">🌏 活世界演绎·总纲（默认启用）</div>' +
+                '<div style="font-size:0.7rem;color:var(--txt-d);line-height:1.55;margin-top:0.15rem;">一键开合下列四项「活世界」：<b>民变实体化</b>、<b>边患真入侵</b>、<b>兵败牵动天下</b>、<b>势力活世界</b>——让民变、外患、列国不再只是数字与文案，而交 AI 真演绎。可在下方逐项细调；勾选表示四项全开。势力活世界随本局存档，其余随游戏设置。</div>' +
+              '</div>' +
+            '</label>';
+          })() +
+          (function(){
+            var _revEntOn = !(P.conf && P.conf.revoltEntityEnabled === false);
             return '<label style="display:flex;align-items:flex-start;gap:0.5rem;padding:0.4rem 0;border-bottom:1px dotted var(--bdr);cursor:pointer;">' +
               '<input type="checkbox" id="s-revolt-entity" ' + (_revEntOn?'checked ':'') + 'onchange="_togglePConf(\'revoltEntityEnabled\',this.checked)" style="margin-top:0.15rem;flex-shrink:0;">' +
               '<div style="flex:1;">' +
-                '<div style="font-size:0.82rem;color:var(--gold);font-weight:600;">民变实体化（默认关闭·实验）</div>' +
+                '<div style="font-size:0.82rem;color:var(--gold);font-weight:600;">民变实体化（默认启用·实验）</div>' +
                 '<div style="font-size:0.7rem;color:var(--txt-d);line-height:1.55;margin-top:0.15rem;">民变闹到「暴动」及以上时具象化为<b>真实体</b>并交 <b>AI 演绎</b>：起真旗号·立有名有姓的渠帅·定纲领；此后每回合由 AI 决断攻守/裹挟/分裂合流/僭号建国·并按你的招抚旨意<b>真谈判</b>（讨价/诈许/真降皆有可能·银子真扣）。占据的府县真易手。被剿/瓦解则军散档除；打到顶级=<b>兵临京师三拍</b>（有储君则继统续玩残局）。无 AI 时落确定性兜底。每回合约多 1-2 次轻量调用（走次要 API）。关闭时维持原五级抽象台账。</div>' +
               '</div>' +
             '</label>' +
             '<label style="display:flex;align-items:flex-start;gap:0.5rem;padding:0.4rem 0;border-bottom:1px dotted var(--bdr);cursor:pointer;">' +
-              '<input type="checkbox" id="s-border-invasion" ' + ((P.conf && P.conf.borderInvasionEnabled === true)?'checked ':'') + 'onchange="_togglePConf(\'borderInvasionEnabled\',this.checked)" style="margin-top:0.15rem;flex-shrink:0;">' +
+              '<input type="checkbox" id="s-border-invasion" ' + ((!(P.conf && P.conf.borderInvasionEnabled === false))?'checked ':'') + 'onchange="_togglePConf(\'borderInvasionEnabled\',this.checked)" style="margin-top:0.15rem;flex-shrink:0;">' +
               '<div style="flex:1;">' +
-                '<div style="font-size:0.82rem;color:var(--gold);font-weight:600;">边患·真实入侵（默认关闭·实验）</div>' +
+                '<div style="font-size:0.82rem;color:var(--gold);font-weight:600;">边患·真实入侵（默认启用·实验）</div>' +
                 '<div style="font-size:0.7rem;color:var(--txt-d);line-height:1.55;margin-top:0.15rem;">边境风险持续高压（边军空虚+强敌在侧连续三回合）时·敌对势力<b>真的出兵</b>：一支入侵军出现在最危急的州府·军事系统照常接战；风险回落或击破则退兵（六回合内不再犯）。关闭时边患仅停留在数值与文案。</div>' +
               '</div>' +
             '</label>' +
@@ -1118,7 +1134,7 @@ openSettings=function(){
     // ── 玩法机制·深化 (opt-in·默认关·2026-07-01·补设置开关·此前仅 console 可开·确定性玩法非 AI) ──
     (function(){
       var _mechs = [
-        ['worldReactorBattleEnabled','⚔️ 兵败牵动天下（默认关）','开启后，一方在会战中大败，其军事实力确定性受损，并联动编年记述天下反应；关闭则战败只走 AI 自由裁量，不自动折损实力。'],
+        ['worldReactorBattleEnabled','⚔️ 兵败牵动天下（默认启用）','开启后（默认），一方在会战中大败，其军事实力确定性受损，并联动编年记述天下反应；关闭则战败只走 AI 自由裁量，不自动折损实力。'],
         ['populationBottomUpEnabled','👥 人口自下而上（默认关）','开启后，人口增长发生在各叶级政区、按当地民心与承载力分别核算并写入地方户口；关闭则走全局粗粒度增长。'],
         ['cognitionFeedbackEnabled','🎭 认知反馈·忠诚（默认关·未充分实测）','开启后，臣子被贬则渐离心、受知遇则渐效忠——把「知遇/贬谪」从叙事落到忠诚数值动平衡；关闭则忠诚不因升降迁谪自动漂移。此项动平衡幅度未充分验证，酌情开启。'],
         ['agencyWatchEnabled','🕵 密探常侦（默认关）','开启后，常设的直属天子密探机构（治理面板可诏设，依机构独立性识别，台谏不算）逐回合暗中侦缉，确定性推高在酿阴谋的败露进度；衙门够力时，朝中百官暗动亦入耳目，以「密探风闻」呈御案（只报风闻类别，真相须下诏穷治）。机构腐败、缺员则侦缉效力打折，特务坐大另有反噬制衡。关闭则查案只靠陛下亲自下诏。'],
@@ -1138,7 +1154,8 @@ openSettings=function(){
         '<div style="font-size:0.7rem;color:var(--txt-d);margin:0 0 0.2rem;line-height:1.5;">确定性玩法深化，不依赖 AI；默认关以保持零回归，逐项 opt-in。</div>';
       for (var _mi = 0; _mi < _mechs.length; _mi++) {
         var _m = _mechs[_mi];
-        var _mon = !!(P && P.conf && P.conf[_m[0]]);
+        // worldReactorBattleEnabled 已翻默认 ON(2026-07-22)·显式 false 才关·勾选态须反映新默认;其余机制仍默认 OFF
+        var _mon = (_m[0] === 'worldReactorBattleEnabled') ? !(P && P.conf && P.conf[_m[0]] === false) : !!(P && P.conf && P.conf[_m[0]]);
         _mh += '<label style="display:flex;align-items:flex-start;gap:0.5rem;padding:0.4rem 0;cursor:pointer;border-top:1px dotted var(--bdr);">' +
           '<input type="checkbox" ' + (_mon?'checked ':'') + 'onchange="_togglePConf(\'' + _m[0] + '\',this.checked)" style="margin-top:0.15rem;flex-shrink:0;">' +
           '<div style="flex:1;"><div style="font-size:0.82rem;color:var(--gold);font-weight:600;">' + _m[1] + '</div>' +

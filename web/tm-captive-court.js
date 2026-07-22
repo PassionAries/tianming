@@ -22,7 +22,7 @@
   var CRACKDOWN_COOLDOWN = 4;        // 谋泄后 N 回合内不再断夺门
 
   function enabled() {
-    try { return !!(global.P && global.P.conf && global.P.conf.revoltEntityEnabled === true); }
+    try { return !(global.P && global.P.conf && global.P.conf.revoltEntityEnabled === false); }
     catch (_) { return false; }
   }
   function _aiOn() {

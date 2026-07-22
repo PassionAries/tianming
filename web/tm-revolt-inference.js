@@ -36,7 +36,7 @@
     try { return typeof global.callAI === 'function'; } catch (_) { return false; }
   }
   function enabled() {
-    try { return !!(global.P && global.P.conf && global.P.conf.revoltEntityEnabled === true); }
+    try { return !(global.P && global.P.conf && global.P.conf.revoltEntityEnabled === false); }
     catch (_) { return false; }
   }
   function _fuzzyDiv(G, name) {

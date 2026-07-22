@@ -20,7 +20,7 @@
   var BASE_SOLDIERS = 20000, PER_STRENGTH = 800;  // 兵额 = 20000 + strength×800
 
   function enabled() {
-    try { return !!(global.P && global.P.conf && global.P.conf.borderInvasionEnabled === true); }
+    try { return !(global.P && global.P.conf && global.P.conf.borderInvasionEnabled === false); }
     catch (_) { return false; }
   }
 

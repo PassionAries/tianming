@@ -307,6 +307,7 @@ function actionEnginePreflightStrategyNewsTest() {
   var general = { name: 'NorthGeneral', faction: 'NorthCourt', role: 'general', loyalty: 70, alive: true };
   ctx.GM = {
     turn: 12,
+    _factionLivingWorld: false,   // 势力活世界已翻默认 ON(2026-07-22)·本测验的是 OFF 轨的策略记忆(claims 只记不修剪)·显式关免被目标栈修剪已履行 claim
     facs: [fac, target, player],
     chars: [ruler, general],
     armies: [{ name: 'FrontArmy', faction: 'NorthCourt', commander: 'OldGeneral', soldiers: 12000 }],

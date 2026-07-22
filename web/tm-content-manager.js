@@ -1196,8 +1196,11 @@
       (state.arenaOpen ? renderArenaLayer() : '') + (state.collectionOpen ? renderCollectionLayer() : '') + (state.colPickOpen ? renderCollectionPicker() : '') +
       (state.circleOpen ? renderCircleLayer() : '') +
     '</main>';
+    // 仅在壳由隐藏→显示（首开/重开工坊）时自动聚焦一次；此后的重渲（搜索、切页签等）不再抢焦，
+    // 否则每次 render 重建 innerHTML 都会把整壳 focus 抢回来，打断用户正在输入框里的打字。
+    var wasHidden = bg.style.display !== 'flex';
     bg.style.display = 'flex';
-    if (!bg.contains(document.activeElement)) {
+    if (wasHidden && !bg.contains(document.activeElement)) {
       var shell = bg.querySelector('.atelier-shell');
       try { if (shell) shell.focus({ preventScroll: true }); } catch (e0) {}
     }

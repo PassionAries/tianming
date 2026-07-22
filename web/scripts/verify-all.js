@@ -96,6 +96,7 @@ const checks = [
   { name: 'back-to-launch-formal-exit', file: 'smoke-back-to-launch-formal-exit.js', estSec: 1, expectExit: 0 },
   { name: 'css-resource-retry', file: 'smoke-css-resource-retry.js', estSec: 1, expectExit: 0 },
   { name: 'content-manager-workshop-fullpage', file: 'smoke-content-manager-workshop-fullpage.js', estSec: 1, expectExit: 0 },
+  { name: 'workshop-runtime-truth-ui', file: 'smoke-workshop-runtime-truth-ui.js', estSec: 1, expectExit: 0 },
   { name: 'content-manager-workshop-publish-flow', file: 'smoke-content-manager-workshop-publish-flow.js', estSec: 1, expectExit: 0 },
   { name: 'social-nav-promote', file: 'smoke-social-nav-promote.js', estSec: 1, expectExit: 0 },
   { name: 'playhistory', file: 'smoke-playhistory.js', estSec: 1, expectExit: 0 },

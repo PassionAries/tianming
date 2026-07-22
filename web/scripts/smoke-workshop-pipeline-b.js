@@ -61,6 +61,21 @@ function loadZipStoreFrom(src) {
   // buildZip 须置 UTF-8 文件名旗标(bit11) 于本地头 general-purpose flag（偏移 6-7）。
   var flagZip = TMZipStore.buildZip([{ name: '甲', data: u8([1]) }]);
   assert.strictEqual(flagZip[6] | (flagZip[7] << 8), 0x0800, 'B1①: 本地头须置 UTF-8 文件名旗标(bit11)');
+  // 中央目录同样须置 bit11：读 EOCD（无注释时末 22 字节）定位中央目录 offset，验其 general-purpose flag（中央目录头 +8）。
+  (function () {
+    var eo = flagZip.length - 22;
+    assert.strictEqual(flagZip[eo] | (flagZip[eo + 1] << 8) | (flagZip[eo + 2] << 16) | (flagZip[eo + 3] * 0x1000000), 0x06054b50, 'B1①: EOCD 签名');
+    var cdOff = flagZip[eo + 16] | (flagZip[eo + 17] << 8) | (flagZip[eo + 18] << 16) | (flagZip[eo + 19] * 0x1000000);
+    assert.strictEqual(flagZip[cdOff] | (flagZip[cdOff + 1] << 8) | (flagZip[cdOff + 2] << 16) | (flagZip[cdOff + 3] * 0x1000000), 0x02014b50, 'B1①: 中央目录头签名');
+    assert.strictEqual(flagZip[cdOff + 8] | (flagZip[cdOff + 9] << 8), 0x0800, 'B1①: 中央目录须置 UTF-8 文件名旗标(bit11·中央目录头偏移 +8)');
+  })();
+})();
+
+// ── B1-⑤：buildZip 条目数 >65535 抛错（EOCD 条目数为 u16·拒静默截断成坏 zip）──
+(function () {
+  assert.throws(function () { TMZipStore.buildZip({ length: 65536, forEach: function () {} }); }, /65535|条目数/, 'B1⑤: 条目数 >65535 → buildZip 抛错');
+  var ok = TMZipStore.buildZip([{ name: 'x', data: u8([1]) }]);
+  assert(ok && ok.length > 0, 'B1⑤: 边界内正常条目数照常打包');
 })();
 
 // ── B1-②：坏 CRC 篡改一字节 → parseZip 必拒 ──
@@ -219,6 +234,15 @@ assert(/bytes\.length > 30 \* 1024 \* 1024/.test(cmSrc), 'B2: >30MB 阈值判定
   var Mut = loadZipStoreFrom(mutSrc);
   var mf = Mut.buildZip([{ name: '甲', data: u8([1]) }]);
   assert.strictEqual(mf[6] | (mf[7] << 8), 0, '突变2: 去旗标后本地头旗标=0（bit11 断言据此变红）');
+  var eo2 = mf.length - 22, cdOff2 = mf[eo2 + 16] | (mf[eo2 + 17] << 8) | (mf[eo2 + 18] << 16) | (mf[eo2 + 19] * 0x1000000);
+  assert.strictEqual(mf[cdOff2 + 8] | (mf[cdOff2 + 9] << 8), 0, '突变2: 去旗标后中央目录旗标=0（中央目录 bit11 断言据此变红）');
+})();
+// 突变4：条目数闸删掉 → buildZip 不再拒 >65535（B1⑤ 断言据此变红）。
+(function () {
+  var mutSrc = zipSrc.replace(/ *if \(entries && entries\.length > 65535\) throw new Error\('zip 条目数超上限（65535）'\);\r?\n/, '');
+  assert(mutSrc !== zipSrc, '突变4: 条目数闸行确实被删');
+  var Mut = loadZipStoreFrom(mutSrc);
+  assert.doesNotThrow(function () { Mut.buildZip({ length: 65536, forEach: function () {} }); }, '突变4: 删闸后不再拒 >65535（B1⑤ 据此变红）');
 })();
 // 突变3：节流条件反转（≥ → <）→ 原本该重渲的输入现不渲（B2③ 断言据此变红）。
 (function () {
@@ -232,6 +256,7 @@ assert(/bytes\.length > 30 \* 1024 \* 1024/.test(cmSrc), 'B2: >30MB 阈值判定
 // 突变自检未污染真源（fresh-read 证真源标记原样·工作树对这几文件保持干净）。
 assert(read('tm-zip-store.js').includes('0xEDB88320'), '收尾: tm-zip-store CRC 多项式原样（未被突变污染）');
 assert(read('tm-zip-store.js').includes('u16(0x0800)'), '收尾: tm-zip-store UTF-8 旗标原样');
+assert(read('tm-zip-store.js').includes('entries.length > 65535'), '收尾: tm-zip-store 条目数闸原样');
 assert(read('tm-content-manager.js').includes('sinceMs >= 500 || Math.abs(pct - lastPct) >= 5'), '收尾: 节流条件原样');
 try {
   const cp = require('child_process');

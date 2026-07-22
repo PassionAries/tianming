@@ -1382,12 +1382,13 @@
 
   // A4·配额判定（纯函数）：只认真配额错误，勿把 "Maximum call stack size exceeded" 之类误报成空间不足。
   //   命中条件 = QuotaExceededError / NS_ERROR_DOM_QUOTA_REACHED(Firefox) 名 / message 含 quota /
-  //   含「存储空间」 / （storage 且 exceed|full|不足|maximum size 组合，覆盖 FF「maximum size reached」）。
+  //   含「存储空间」 / （storage 且 exceed|full|不足|maximum size reached|exceeded 组合，覆盖 FF「maximum
+  //   size reached」·但排除「maximum size setting is malformed」等非到达语义误配）。
   function isQuotaError(e) {
     if (!e) return false;
     if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') return true;
     var msg = String(e.message || '');
-    return /quota/i.test(msg) || /存储空间/.test(msg) || (/storage/i.test(msg) && /exceed|full|不足|maximum size/i.test(msg));
+    return /quota/i.test(msg) || /存储空间/.test(msg) || (/storage/i.test(msg) && /exceed|full|不足|maximum size (reached|exceeded)/i.test(msg));
   }
 
   // 网页安装：把工坊剧本的 JSON 直接下载并入剧本库（IndexedDB），无需本地落盘。

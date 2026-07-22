@@ -155,6 +155,58 @@ function extractFn(src, header) {
   });
 })();
 
+// P1(三轮)·真跑渲染验输出（字符串共现到头：突变 `false && vs === 'error'` 字符串仍在会静默 PASS）：
+// extractFn 抽 renderDiscover / renderBrowsePane 源文，new Function 参数化注入受控 catalogViewState +
+// 哨兵 error-card('<<ERRCARD>>')/stale-banner('<<STALEBANNER>>')，其余闭包依赖给最小 stub
+// （html helper 一律回 ''·esc 原样·state 按场景构造）。缺谁补谁·不 try/catch 吞错——抽取失配或运行抛错都必须红。
+(function testPaneRenderOutput() {
+  var ERR = '<<ERRCARD>>', STALE = '<<STALEBANNER>>';
+  function esc(s) { return s == null ? '' : String(s); }
+  function nil() { return ''; }
+  function jsArg(s) { return "'" + esc(s) + "'"; }
+  var covers = { tone: function () { return 'zhu'; }, sceneSVG: nil };
+  var PACK_TYPES = [{ v: '', label: '全部' }, { v: 'scenario', label: '剧本' }, { v: 'portrait', label: '立绘' }];
+  // 形参表（须与下方 TAIL 顺序一一对应；state / catalogViewState 每场景单独在 run() 里给）。
+  var PARAMS = ['state', 'catalogViewState', 'catalogErrorCardHtml', 'catalogStaleBannerHtml',
+    'mallSkeleton', 'mallGlyph', 'window', 'TMWorkshopCovers', 'jsArg', 'esc', 'mallStars',
+    'mallCover', 'mallCard', 'mallTypeChips', 'PACK_TYPES', 'mallFopt', 'packTypeLabel'];
+  var TAIL = [
+    function () { return ERR; },   // catalogErrorCardHtml → 哨兵
+    function () { return STALE; },  // catalogStaleBannerHtml → 哨兵
+    nil,                            // mallSkeleton
+    nil,                            // mallGlyph
+    { TMWorkshopCovers: covers },   // window
+    covers,                         // TMWorkshopCovers
+    jsArg, esc, nil,                // jsArg / esc / mallStars
+    nil, nil, nil,                  // mallCover / mallCard / mallTypeChips
+    PACK_TYPES, nil, nil            // PACK_TYPES / mallFopt / packTypeLabel
+  ];
+  function build(name) {
+    return new Function(PARAMS.join(','), extractFn(community, 'function ' + name + '()') + '\nreturn ' + name + ';');
+  }
+  var discoverFactory = build('renderDiscover'), browseFactory = build('renderBrowsePane');
+  function run(factory, state, vs) {
+    return factory.apply(null, [state, function () { return vs; }].concat(TAIL))();
+  }
+  var pk = [{ id: 'a', type: 'scenario' }];
+  // ① vs='error' 且无 packs → 两函数真输出各含错误卡哨兵。
+  var s1 = { catalog: { packs: [] }, catalogError: 'HTTP 500', catalogLoading: false, catalogType: '', featuredOn: false };
+  assert(run(discoverFactory, s1, 'error').indexOf(ERR) >= 0, 'P1·真跑: renderDiscover(error,无packs) 输出须含错误卡');
+  assert(run(browseFactory, s1, 'error').indexOf(ERR) >= 0, 'P1·真跑: renderBrowsePane(error,无packs) 输出须含错误卡');
+  // ② vs='stale' 且有 packs → 两函数真输出各含 stale banner 哨兵（列表照常渲染·不遮内容）。
+  var s2 = { catalog: { packs: pk }, catalogError: 'HTTP 500', catalogLoading: false, catalogType: '', featuredOn: false };
+  assert(run(discoverFactory, s2, 'stale').indexOf(STALE) >= 0, 'P1·真跑: renderDiscover(stale,有packs) 输出须含 stale banner');
+  assert(run(browseFactory, s2, 'stale').indexOf(STALE) >= 0, 'P1·真跑: renderBrowsePane(stale,有packs) 输出须含 stale banner');
+  // ③ vs='list' → 两哨兵都不出现。
+  var d3 = run(discoverFactory, { catalog: { packs: pk }, catalogError: null, catalogLoading: false, catalogType: '', featuredOn: false }, 'list');
+  var b3 = run(browseFactory, { catalog: { packs: pk }, catalogError: null, catalogLoading: false, catalogType: '', featuredOn: false }, 'list');
+  assert(d3.indexOf(ERR) < 0 && d3.indexOf(STALE) < 0, 'P1·真跑: renderDiscover(list) 输出不得含错误卡/stale banner');
+  assert(b3.indexOf(ERR) < 0 && b3.indexOf(STALE) < 0, 'P1·真跑: renderBrowsePane(list) 输出不得含错误卡/stale banner');
+  // ④ browse 在 catalogLoading 时须 skeleton 优先·不出错误卡（即便 vs='error'）。
+  var s4 = { catalog: { packs: [] }, catalogError: 'HTTP 500', catalogLoading: true, catalogType: '', featuredOn: false };
+  assert(run(browseFactory, s4, 'error').indexOf(ERR) < 0, 'P1·真跑: renderBrowsePane(catalogLoading) 须 skeleton 优先·不出错误卡');
+})();
+
 // ── R4·R2：立绘归并顺序纯 helper 真跑（确定可复述·portrait 恒优先 mod·同类型按 order）──
 (function testMergeOrder() {
   var waMergePortraitIndex = new Function(extractFn(cm, 'function waMergePortraitIndex(items)') + '\nreturn waMergePortraitIndex;')();
@@ -178,7 +230,9 @@ assert(cm.includes('_waPortraitIdx = waMergePortraitIndex(results);'),
   assert(isQuotaError({ name: 'QuotaExceededError' }) === true, 'R4·R3: QuotaExceededError 名 → true');
   assert(isQuotaError({ name: 'NS_ERROR_DOM_QUOTA_REACHED' }) === true, 'R4·R3: Firefox NS_ERROR_DOM_QUOTA_REACHED 名 → true');
   assert(isQuotaError(new Error('Persistent storage maximum size reached')) === true,
-    'R4·R3: Firefox「Persistent storage maximum size reached」(storage+maximum size) → true');
+    'R4·R3: Firefox「Persistent storage maximum size reached」(storage+maximum size reached) → true');
+  assert(isQuotaError(new Error('storage maximum size setting is malformed')) === false,
+    'R4·R3: 「maximum size setting is malformed」非到达语义·不得误判为配额（maximum size 须配 reached|exceeded）');
   assert(isQuotaError(new Error('quota exceeded')) === true, 'R4·R3: message 含 quota → true');
   assert(isQuotaError(new Error('存储空间不足')) === true, 'R4·R3: 含「存储空间」→ true');
   assert(isQuotaError(new Error('storage is full')) === true, 'R4·R3: storage+full 组合 → true');

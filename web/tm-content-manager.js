@@ -746,7 +746,8 @@
     loadDetailFollow(p.authorId);
     loadRevisions(id);
     try {
-      if (window.TM && TM.OnlineClient && TM.OnlineClient.packMeta) {
+      // 官方/残局包目录已完整·跳过 packMeta 富化避免 404 噪声（下方 id 前缀判定）：
+      if (String(id).indexOf('tianming-official-') !== 0 && String(id).indexOf('resume-') !== 0 && window.TM && TM.OnlineClient && TM.OnlineClient.packMeta) {
         TM.OnlineClient.packMeta(id, state.onlineApiUrl || undefined).then(function(res){
           if (res && res.success && res.pack && state.detailOpen && state.detailPack && String(state.detailPack.id) === String(id)) {
             state.detailPack = Object.assign({}, state.detailPack, res.pack);

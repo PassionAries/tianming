@@ -1735,6 +1735,7 @@
     var fork = (state.forkSource && state.forkSource.id) ? '<div class="status">改编自「' + esc(state.forkSource.title || state.forkSource.id) + '」，发布后记入它的世界线。 <span style="cursor:pointer;color:var(--gold);text-decoration:underline;" onclick="TMContentManager.clearFork()">取消改编</span></div>' : '';
     return '<div class="sec-h"><h3>创作中心 · 发布申请</h3><span class="more">资源包 + 商店信息齐备后进入审核</span></div>' +
       fork +
+      (desktop() ? '' : '<div class="status" style="margin:0 0 10px;">网页版可浏览与安装；发布投稿请使用桌面版。</div>') +
       '<div class="pub-flow">' +
         '<div class="pub-steps">' +
           publishStep('投稿资源包', publishPackageReady()) +

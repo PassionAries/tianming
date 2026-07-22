@@ -1454,7 +1454,9 @@
       } catch (e2) {}
       render();
     } catch (e) {
-      state.catalogMessage = '网页安装失败：' + (e && e.message || '未知错误');
+      // A4：设备存储配额耗尽（IDB 写满 / 安卓 WebView 配额）给专门文案，其余保持现文案。
+      var quota = e && (e.name === 'QuotaExceededError' || /quota|存储空间|exceeded/i.test(String(e.message || '')));
+      state.catalogMessage = quota ? '设备存储空间不足：请清理空间或卸载不用的工坊包后重试。' : ('网页安装失败：' + (e && e.message || '未知错误'));
       render();
     }
   }

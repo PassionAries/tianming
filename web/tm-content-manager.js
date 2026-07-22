@@ -1482,7 +1482,9 @@
           author: '天命官方',
           type: 'scenario',
           version: String(version || ''),
-          description: String(entry.background || [entry.era, entry.role].filter(Boolean).join(' · ')),
+          // background 若非字符串（数组/对象/数字）则不直接 String() 以免得到 "[object Object]"/"a,b"，
+          // 退回 era·role 拼串；仅非空字符串 background 采用。
+          description: String((typeof entry.background === 'string' && entry.background) || [entry.era, entry.role].filter(Boolean).join(' · ')),
           tags: [entry.era, entry.role, '官方'].filter(Boolean),
           size: Number(entry.bytes) || null,
           sha256: String(entry.sha256 || ''),

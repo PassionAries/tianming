@@ -786,7 +786,11 @@
       }).join('') : '<div class="empty"><div class="t">曲目清单待服务器支持</div></div>';
       return '<div class="dsec-h">曲目' + (assets.length ? ' · ' + assets.length + ' 首' : '') + '</div><div class="tracklist">' + rows + '</div>';
     }
-    if ((t === 'map' || t === 'mod') && assets.length) {
+    if (t === 'mod') {
+      var listHtml = assets.length ? '<div class="dsec-h">资源清单 · ' + assets.length + '</div><div class="dcopy">' + assets.map(function(a){ return esc(a.name || ''); }).join(' · ') + '</div>' : '';
+      return '<div class="dsec-h">组合包</div><div class="dcopy">混合资产组合包：安装后包内立绘按同名自动启用、音乐并入声乐轮播，无需单独装载。</div>' + listHtml;
+    }
+    if (t === 'map' && assets.length) {
       return '<div class="dsec-h">资源清单 · ' + assets.length + '</div><div class="dcopy">' + assets.map(function(a){ return esc(a.name || ''); }).join(' · ') + '</div>';
     }
     return '';
@@ -1418,7 +1422,7 @@
         await refreshWebInstalled();
         try { if (TM.WorkshopAssets && TM.WorkshopAssets.warmup) TM.WorkshopAssets.warmup(); } catch (eW) {}
         state.catalogMessage = '已安装' + packTypeNoun(aType) + '：' + (meta.title || mfObj.title || aId) +
-          (aType === 'music' ? '（曲目已并入声乐曲库）' : aType === 'portrait' ? '（同名人物立绘自动启用）' : aType === 'map' ? '（详情里可「在地图编辑器中打开」）' : '') + '。';
+          (aType === 'music' ? '（曲目已并入声乐曲库）' : aType === 'portrait' ? '（同名人物立绘自动启用）' : aType === 'map' ? '（详情里可「在地图编辑器中打开」）' : aType === 'mod' ? '（组合包已装载：包内立绘 / 音乐将自动生效）' : '') + '。';
         say('已安装工坊' + packTypeNoun(aType) + '：' + (meta.title || mfObj.title || aId));
         render();
         return;
@@ -1523,12 +1527,26 @@
       var jobs = (list || []).map(function(pk){
         var pre = pk.source === 'idb' ? waHydrate(pk) : Promise.resolve(pk);
         return pre.then(function(){ return waGetManifest(pk); }).then(function(mf){
-          if (pk.type !== 'portrait') return;
+          // 批A·A3：立绘包全扫；mod=混合资产组合包·仅扫其中被识别为立绘的图片。
+          var isPortraitPack = pk.type === 'portrait';
+          var isModPack = pk.type === 'mod';
+          if (!isPortraitPack && !isModPack) return;
+          // 残局借 mod 壳（tags 含「残局」/packageKind='resume'）：不当资产扫（不影响其接演链）。
+          if (isModPack && isResumePack(mf)) return;
           var files = (mf && Array.isArray(mf.files)) ? mf.files : [];
+          var typed = (mf && Array.isArray(mf.assets)) ? mf.assets : [];
           files.forEach(function(f){
-            if (!/\.(png|jpe?g|webp|bmp)$/i.test(String(f || ''))) return;
-            var base = String(f).replace(/\.[^.]+$/, '');
-            var u = waFileUrl(pk, String(f));
+            var name = String(f || '');
+            if (!/\.(png|jpe?g|webp|bmp)$/i.test(name)) return;
+            var base = name.replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '');
+            if (isModPack) {
+              // mod 立绘识别：优先 manifest 类型化声明·兜底 portraits/ 子目录约定；排除封面/截图/预览基名（勿把封面误当立绘）。
+              if (/^(cover|shot|preview|screenshot)/i.test(base)) return;
+              var declared = typed.some(function(a){ return a && String(a.file || a.name || '') === name && /portrait|立绘/i.test(String(a.type || a.kind || '')); });
+              var inPortraitDir = /(^|[\/\\])portraits?[\/\\]/i.test(name);
+              if (!declared && !inPortraitDir) return;
+            }
+            var u = waFileUrl(pk, name);
             if (u && !idx[base]) idx[base] = u;
           });
         }).catch(function(){});

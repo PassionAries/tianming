@@ -168,7 +168,8 @@ var AudioSystem = {
     var WA = window.TM && TM.WorkshopAssets;
     if (!WA || typeof WA.listAssetPacks !== 'function') { if (done) done(0); return; }
     WA.listAssetPacks().then(function(list) {
-      var musicPacks = (list || []).filter(function(p) { return p && p.type === 'music'; });
+      // 批A·A3：音乐包全取；mod=混合资产组合包·包内音频（音频扩展名）也入 BGM 轮播。
+      var musicPacks = (list || []).filter(function(p) { return p && (p.type === 'music' || p.type === 'mod'); });
       if (!musicPacks.length) { if (done) done(0); return; }
       var pending = musicPacks.length, added = 0;
       var finish = function() { if (--pending <= 0 && done) done(added); };
@@ -176,6 +177,8 @@ var AudioSystem = {
         var pre = (p.source === 'idb' && WA.hydrate) ? WA.hydrate(p) : Promise.resolve(p);
         pre.then(function() { return WA.getManifest(p); })
           .then(function(mf) {
+            // 残局借 mod 壳（tags 含「残局」/packageKind='resume'）：不当曲库扫（不影响其接演链）。
+            if (p.type === 'mod' && mf && ((Array.isArray(mf.tags) && mf.tags.indexOf('残局') >= 0) || mf.packageKind === 'resume')) { finish(); return; }
             var files = (mf && Array.isArray(mf.files)) ? mf.files : [];
             var audio = files.filter(function(f) { return /\.(mp3|ogg|wav)$/i.test(String(f || '')); });
             var assets = (mf && Array.isArray(mf.assets)) ? mf.assets : [];

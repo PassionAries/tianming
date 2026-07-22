@@ -49,3 +49,5 @@ web/tm-utils.js whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 web/tm-three-systems-ext.js whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 # 批辛「NPC 交互活动丰富」(2026-07-22)触及的历史 CRLF 文件：sc1b 文事鸿雁人际专项 prompt·关系网/囚者至交/前瞻注入 + 新交互型路由提示·同上契约(检查真行尾空格·不把 CR 误报为 trailing)。
 web/tm-endturn-ai.js whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+# 批己「谈判多轮状态机」(2026-07-22)触及的历史 CRLF(mixed·2610CRLF+59LF) 文件：使节回价钮 + _wdSettleNegotiation/_wdEnvoyCounter + _negotiationId 接线·新增行随邻行 CRLF·同上契约(检查真行尾空格·不把 CR 误报为 trailing)。
+web/tm-wendui.js whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

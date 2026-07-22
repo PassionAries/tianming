@@ -50,6 +50,85 @@
     _eb('「' + (army.name || '犯边之师') + '」' + (why === 'destroyed' ? '全军覆没·边尘暂息' : '饱掠而归·出塞而去') + (left > 0 && why !== 'destroyed' ? '' : ''));
   }
 
+  // ═══ 批己·议和接线（治「demand terms 只落事件簿·与 endWar 两线不连·议和名存实亡」）═══
+  function _playerFacName(G) {
+    return (global.P && (global.P.playerFactionName || (global.P.playerInfo && global.P.playerInfo.factionName)))
+      || (G && (G.playerFactionName || G.playerFaction)) || '本朝';
+  }
+  // demand 银额派生：AI 报的结构化 silver 优先(clamp 0-300000·含明确 0=纯撤军白和)；
+  //   无结构化银额但 terms 含贡银语义(币/银/贡/岁/金帛/赂)→派生默认=strength*600 夹 8000-120000(照 _wdEnvoyDecision:838 岁币先例)；
+  //   纯撤军/白和无贡银语义→0(合法白和)。
+  function _deriveDemandSilver(fac, rawSilver, terms) {
+    if (rawSilver != null && rawSilver !== '' && isFinite(Number(rawSilver))) {
+      return Math.max(0, Math.min(300000, Math.round(Number(rawSilver))));
+    }
+    if (/[币银贡岁金帛赂]/.test(String(terms || ''))) {
+      var str = Math.max(20, Math.min(200, Number(fac.strength) || 50));
+      return Math.round(Math.max(8000, Math.min(120000, str * 600)));
+    }
+    return 0;
+  }
+  // 帑廪支出余额闸（镜像 revolt _spendSilver·balance 直扣 + money.stock 同步·不足=false·绝不记欠）
+  function _spendGuoku(G, amount, label) {
+    amount = Math.max(0, Math.round(Number(amount) || 0));
+    if (!amount) return true;   // 白和无贡银·视为已付
+    try { if (typeof global.GuokuEngine !== 'undefined' && typeof global.GuokuEngine.ensureModel === 'function') global.GuokuEngine.ensureModel(); } catch (_) {}
+    var g = G.guoku;
+    if (!g || (Number(g.balance) || 0) < amount) return false;
+    g.balance -= amount;
+    try { if (g.ledgers && g.ledgers.money) g.ledgers.money.stock = g.balance; } catch (_) {}
+    return true;
+  }
+  // demand 时开/续议和会话+使节求见（玩家可回价·flag OFF 内部空转→旧行为字节级等价）
+  function _openPeaceNegotiation(G, fac, terms, turn, silver) {
+    try {
+      var N = global.TM && global.TM.Negotiation;
+      if (!N || typeof N.open !== 'function' || !N.enabled()) return;
+      var ng = N.open({
+        topic: 'peace', initiator: fac.name,
+        sourceRef: { kind: 'invasion', refId: fac.name },
+        offer: { by: 'them', terms: String(terms || '').slice(0, 80), silver: Math.max(0, Math.round(Number(silver) || 0)) },
+        turn: turn
+      });
+      if (ng && typeof N.surfaceEnvoy === 'function') {
+        N.surfaceEnvoy({ fromName: fac.name, reason: '议和：' + String(terms || '').slice(0, 50), negotiationId: ng.id, turn: turn, interactionType: 'sue_for_peace' });
+      }
+    } catch (_) {}
+  }
+  // 玩家在问对对议和使节「准奏」→ 结算：先支付预检(余额闸)后落一切·不足则不停战不退兵不改邦交(会话保持 open)
+  function settlePeace(G, facName, opts) {
+    G = G || global.GM; opts = opts || {};
+    if (!G || !facName) return { ok: false };
+    var playerFac = opts.playerFac || _playerFacName(G);
+    var silver = Math.max(0, Math.round(Number(opts.silver) || 0));
+    // ① 支付预检（先于一切·余额不足→原子拒绝·不产生任何副作用·会话由 wendui 保持 open）
+    if (silver > 0 && !_spendGuoku(G, silver, '议和贡银·' + facName)) {
+      return { ok: false, reason: '国库不敷', need: silver };
+    }
+    var res = { ok: true, endedWar: false, withdrew: false, tribute: silver };
+    // ② 已足额真扣（或白和无需扣）→ 依次 endWar / 退兵 / 邦交
+    try {
+      if (typeof global.CasusBelliSystem !== 'undefined' && global.CasusBelliSystem.endWar) {
+        var war = (G.activeWars || []).find(function (w) {
+          return w && ((w.attacker === playerFac && w.defender === facName) || (w.attacker === facName && w.defender === playerFac));
+        });
+        if (war) { global.CasusBelliSystem.endWar(war.id); res.endedWar = true; }
+      }
+    } catch (_) {}
+    var a = _activeInvasionOf(G, facName);
+    if (a && !a.disbanded) { _withdraw(G, a, 'retreat'); res.withdrew = true; }
+    try {
+      var delta = (opts.relDelta != null) ? Number(opts.relDelta) : 28;   // 照 _WD_ENVOY_EFFECTS sue_for_peace 语义·rel+28
+      if (typeof global.setFactionRelation === 'function') global.setFactionRelation(playerFac, facName, { delta: delta, desc: '议和罢兵' }, { mirror: true });
+    } catch (_) {}
+    _eb('★与「' + facName + '」议和罢兵' + (res.withdrew ? '·犯边之师退去' : '') + (silver ? '·岁贡 ' + silver + ' 两出帑' : ''));
+    try {
+      if (!Array.isArray(G._chronicle)) G._chronicle = [];
+      G._chronicle.push({ turn: G.turn || 0, date: G._gameDate || '', type: '边患', text: '朝廷与「' + facName + '」议和·' + (silver ? '岁贡' + silver + '两·' : '') + '边尘暂息', tags: ['边患', '议和'] });
+    } catch (_) {}
+    return res;
+  }
+
   function tick(G) {
     if (!enabled()) return;
     G = G || global.GM;
@@ -205,6 +284,7 @@
               if (!Array.isArray(G._chronicle)) G._chronicle = [];
               G._chronicle.push({ turn: turn, date: G._gameDate || '', type: '边患', text: '「' + fac.name + '」要挟：' + String(mv.terms || '').slice(0, 60), tags: ['边患', 'AI演绎'] });
             } catch (_eC) {}
+            _openPeaceNegotiation(G, fac, mv.terms, turn, _deriveDemandSilver(fac, mv.silver, mv.terms));   // 批己·议和接线(结构化贡银入 offer·玩家准奏走 settlePeace 余额闸·flag OFF 内部空转)
             applied++; return;
           }
           default: blocked++;
@@ -232,9 +312,20 @@
     lines.push('【边地虚实】' + (hot.length ? hot.map(function (l) { return l.name + '(警' + l.borderRisk + ')'; }).join('·') : '边备尚固'));
     var eds = _relevantEdicts(G, hostiles);
     if (eds.length) lines.push('【朝廷近旨(涉边/涉和议·可据以定和战)】' + eds.join('｜'));
-    lines.push('【可用动作】invade(fac/target=边警之府/soldiers/pretext=名义)·press(fac/target=深入之府)·withdraw(fac/reason)·demand(fac/terms=要挟条款)。');
-    lines.push('【铁则】边备无警不得凭空入寇(引擎验)·兵额有顶·一国同时一军·师老无功或朝廷许以厚利可退可挟。');
-    lines.push('只返回 JSON：{"moves":[{"type":"...","fac":"","target":"","soldiers":0,"pretext":"","reason":"","terms":""}]}');
+    // 批己·议和续演：本国先前所遣议和使遭朝廷驳回/逾期→提示可再图或转攻(据 status 续演)
+    try {
+      var N = global.TM && global.TM.Negotiation;
+      if (N && typeof N.get === 'function' && N.enabled() && Array.isArray(G._negotiations)) {
+        var spurned = G._negotiations.filter(function (ng) {
+          return ng && ng.topic === 'peace' && (ng.status === 'rejected' || ng.status === 'lapsed')
+            && hostiles.some(function (f) { return ng.sourceRef && ng.sourceRef.refId === f.name; });
+        }).slice(-3).map(function (ng) { return ng.parties.initiator + '之和议' + (ng.status === 'rejected' ? '遭拒' : '逾期未决'); });
+        if (spurned.length) lines.push('【和议续演】' + spurned.join('·') + '——可再遣使或转以兵锋相逼。');
+      }
+    } catch (_eN) {}
+    lines.push('【可用动作】invade(fac/target=边警之府/soldiers/pretext=名义)·press(fac/target=深入之府)·withdraw(fac/reason)·demand(fac/terms=要挟条款/silver=索岁币两数·0=纯撤军白和)。');
+    lines.push('【铁则】边备无警不得凭空入寇(引擎验)·兵额有顶·一国同时一军·师老无功或朝廷许以厚利可退可挟；索贡须报 silver 数(引擎 clamp 0-30万)。');
+    lines.push('只返回 JSON：{"moves":[{"type":"...","fac":"","target":"","soldiers":0,"pretext":"","reason":"","terms":"","silver":0}]}');
     try {
       var resp = await global.callAI(lines.join('\n'), 900, null, (typeof global._useSecondaryTier === 'function' && global._useSecondaryTier()) ? 'secondary' : undefined, { id: 'border-invasion-ai' });
       var text = (resp && typeof resp === 'object') ? (resp.text || resp.content || '') : String(resp || '');
@@ -243,7 +334,7 @@
     } catch (_eT2) { return null; }
   }
 
-  var API = { tick: tick, tickAI: tickAI, _applyInvasionActions: _applyInvasionActions, enabled: enabled, RISK_HIGH: RISK_HIGH, STREAK_NEED: STREAK_NEED, RISK_LOW: RISK_LOW, COOLDOWN_TURNS: COOLDOWN_TURNS };
+  var API = { tick: tick, tickAI: tickAI, _applyInvasionActions: _applyInvasionActions, settlePeace: settlePeace, enabled: enabled, RISK_HIGH: RISK_HIGH, STREAK_NEED: STREAK_NEED, RISK_LOW: RISK_LOW, COOLDOWN_TURNS: COOLDOWN_TURNS };
   global.TM = global.TM || {};
   global.TM.BorderInvasion = API;
   if (typeof module !== 'undefined' && module.exports) module.exports = API;

@@ -424,6 +424,15 @@ function openWenduiModal(name, mode, prefillMsg) {
                   _wenduiMode === 'cedui' ? '改革策对' :
                   '朝堂问对';
 
+  // 批己·回价钮可见性：仅当该使节挂谈判会话且会话 open 且 round<上限
+  var _ngCounterable = false;
+  try {
+    if (ch && ch._negotiationId && typeof window !== 'undefined' && window.TM && window.TM.Negotiation && window.TM.Negotiation.get) {
+      var _cs = window.TM.Negotiation.get(ch._negotiationId);
+      _ngCounterable = !!(_cs && _cs.status === 'open' && _cs.round < window.TM.Negotiation.MAX_ROUND);
+    }
+  } catch (_) {}
+
   // 创建全屏弹窗
   var modal = document.createElement('div');
   modal.className = 'modal-bg show';
@@ -443,7 +452,8 @@ function openWenduiModal(name, mode, prefillMsg) {
     + ((ch && !ch._envoy && !ch.fromFaction) ? '<button class="bt bsm" style="color:var(--gold-400);" onclick="_wdAdoptCounsel()" title="\u5609\u7EB3\u5176\u8A00\u00B7\u660E\u541B\u7EB3\u8C0F\uFF08\u7687\u5A01+\u00B7\u8FDB\u8A00\u8005\u77E5\u9047\u00B7\u5165\u8D77\u5C45\u6CE8\u5F85\u529E\uFF09">\u7EB3\u8C0F</button>' : '')
     + ((ch && (ch._envoy || ch.fromFaction)) ? ('<button class="bt bsm" style="color:var(--gold-400);" onclick="_wdEnvoyDecision(\'accept\')" title="\u51C6\u5176\u6240\u8BF7\u00B7\u6539\u5584\u90A6\u4EA4\uFF08\u6309\u4F7F\u547D\u5B9A\u6548\u679C\u00B7\u548C\u4EB2/\u8BF7\u548C/\u7ED3\u76DF/\u7EB3\u8D21\uFF09">\u51C6\u594F</button>'
         + '<button class="bt bsm" style="color:var(--vermillion-400);" onclick="_wdEnvoyDecision(\'reject\')" title="\u9A73\u5176\u6240\u8BF7\u00B7\u90A6\u4EA4\u8F6C\u51B7\u6216\u751F\u8FB9\u8845\uFF08\u7D22\u8D21\u53EF\u65A5\u9000\u7ACB\u5A01\uFF09">\u9A73\u56DE</button>'
-        + '<button class="bt bsm" onclick="_wdEnvoyDecision(\'temporize\')" title="\u7F81\u7E3B\u6577\u884D\u00B7\u4E0D\u5373\u5B9A\u593A\u00B7\u5C0F\u635F\u90A6\u4EA4\u4EE5\u6362\u65F6\u95F4">\u7F81\u7E3B</button>') : '')
+        + '<button class="bt bsm" onclick="_wdEnvoyDecision(\'temporize\')" title="\u7F81\u7E3B\u6577\u884D\u00B7\u4E0D\u5373\u5B9A\u593A\u00B7\u5C0F\u635F\u90A6\u4EA4\u4EE5\u6362\u65F6\u95F4">\u7F81\u7E3B</button>'
+        + (_ngCounterable ? '<button class="bt bsm" style="color:var(--celadon-400);" onclick="_wdEnvoyCounter()" title="\u56DE\u4EF7\u7EED\u8C08\u00B7\u9012\u8FD8\u4EF7\u6761\u6B3E\uFF08\u53EF\u9009\u52A0\u94F6\uFF09\u00B7\u4FDF\u5176\u56DE\u97F3">\u56DE\u4EF7</button>' : '')) : '')
     + '</div>'
     + '<div class="wd-modal-header-center">'
     + '<div class="wd-modal-char-name">' + escHtml(name) + '</div>'
@@ -824,6 +834,9 @@ function _wdEnvoyDecision(kind) {
   var itype = ch.interactionType || '';
   var playerFac = (typeof P !== 'undefined' && (P.playerFactionName || (P.playerInfo && P.playerInfo.factionName))) || GM.playerFactionName || GM.playerFaction || '本朝';
   var L = ({ accept: '准奏', reject: '驳回', temporize: '羁縻' })[kind] || kind;
+  // 批己·谈判会话专线：招抚(pacify)/议和(peace)据当前台面 offer 走各自子系统结算·不走下方通用邦交效果表
+  var _ng = (ch._negotiationId != null && typeof window !== 'undefined' && window.TM && window.TM.Negotiation && window.TM.Negotiation.get) ? window.TM.Negotiation.get(ch._negotiationId) : null;
+  if (_ng && (_ng.topic === 'pacify' || _ng.topic === 'peace')) { _wdSettleNegotiation(kind, ch, fac, _ng, playerFac); return; }
   var _km = _WD_ENVOY_EFFECTS[kind] || _WD_ENVOY_EFFECTS.temporize;
   var _eff = _km[itype] || _km._default;
   var relDelta = _eff.rel || 0;
@@ -853,6 +866,10 @@ function _wdEnvoyDecision(kind) {
   if (ch._factionProposalId && typeof window !== 'undefined' && window.TM && window.TM.FactionDiplomacy && typeof window.TM.FactionDiplomacy.recordPlayerResponse === 'function') {
     try { window.TM.FactionDiplomacy.recordPlayerResponse(fac, { id: ch._factionProposalId, type: ch._diplomacyType, terms: String(ch.envoyMission || '').replace(/^【[^】]*】/, ''), outcome: (kind === 'accept' ? 'accepted' : (kind === 'reject' ? 'rejected' : 'temporized')), turn: (typeof GM !== 'undefined' && GM) ? GM.turn : 0 }); } catch (_) {}
   }
+  // 批己·势力外交提议会话同步终局（准奏→accepted·驳回→rejected·羁縻留 open）
+  if (ch._negotiationId != null && window.TM && window.TM.Negotiation && typeof window.TM.Negotiation.resolve === 'function' && kind !== 'temporize') {
+    try { window.TM.Negotiation.resolve(ch._negotiationId, kind === 'accept' ? 'accepted' : 'rejected'); } catch (_) {}
+  }
   ch._pendingEnvoyDisposition = kind;  // 供 closeWenduiModal 留痕带上处置
   if (typeof addEB === 'function') addEB('外交·' + L, fac + '使节之请——' + desc + '（邦交' + (relDelta >= 0 ? '+' : '') + relDelta + '）');
   var chatEl = _$('wd-modal-chat');
@@ -860,6 +877,85 @@ function _wdEnvoyDecision(kind) {
   if (typeof toast === 'function') toast(L + '·' + fac + '邦交' + (relDelta >= 0 ? '+' : '') + relDelta);
   if (typeof closeWenduiModal === 'function') setTimeout(closeWenduiModal, 600);
 }
+// 批己·招抚(pacify)/议和(peace)据当前台面 offer 走各自子系统结算（专线·不走通用邦交效果表）
+function _wdSettleNegotiation(kind, ch, fac, ng, playerFac) {
+  var N = (typeof window !== 'undefined' && window.TM && window.TM.Negotiation) ? window.TM.Negotiation : null;
+  // 玩家刚回价、对方未回（台面末条=玩家）→禁准奏·须待对方回应形成新 them-offer（根治零成本受抚）
+  var curr = (N && N.currentOffer) ? N.currentOffer(ng) : null;
+  if (kind === 'accept' && curr && curr.by === 'player') {
+    if (typeof toast === 'function') toast('已递回价·俟其回音');
+    return;   // 不结算·不关窗·台面待对方回价
+  }
+  // 结算台面=最后一条 by:'them' 的 offer（贡银/官职据之·非玩家回价）
+  var offer = (N && N.settleableOffer) ? N.settleableOffer(ng) : null;
+  var silver = (offer && Number(offer.silver)) || 0;
+  var office = (offer && offer.office) || '';
+  var msg = '', keepOpen = false;
+  if (kind === 'temporize') {
+    msg = '羁縻敷衍·' + fac + '之议未即定夺';   // 会话留 open(不 resolve)·关窗后仍可再议/回价
+  } else if (ng.topic === 'pacify') {
+    var rid = ng.sourceRef && ng.sourceRef.refId;
+    var RI = window.TM && window.TM.RevoltInference;
+    if (kind === 'accept') {
+      // 银额由 playerResolvePacify 从 settleableOffer 权威取（缺失回落 level*100000·绝不落 0）
+      var r1 = (RI && RI.playerResolvePacify) ? RI.playerResolvePacify(GM, rid, { accept: true, officeTitle: office }) : { ok: false, reason: '演绎层缺失' };
+      if (r1 && r1.ok) { if (N) N.resolve(ng.id, 'accepted'); msg = '准「' + fac + '」受抚罢兵' + (r1.silver ? '·抚银' + r1.silver + '两' : '') + (office ? '·授' + office : ''); }
+      else { keepOpen = true; msg = '抚局未成·' + ((r1 && r1.reason) || '帑廪不给'); }
+    } else {
+      if (RI && RI.playerResolvePacify) RI.playerResolvePacify(GM, rid, { accept: false });
+      if (N) N.resolve(ng.id, 'rejected'); msg = '驳「' + fac + '」讨价·抚议中辍';
+    }
+  } else if (ng.topic === 'peace') {
+    var BI = window.TM && window.TM.BorderInvasion;
+    if (kind === 'accept') {
+      var r2 = (BI && BI.settlePeace) ? BI.settlePeace(GM, fac, { silver: silver, playerFac: playerFac }) : { ok: false, reason: '边患层缺失' };
+      if (r2 && r2.ok) { if (N) N.resolve(ng.id, 'accepted'); msg = '准「' + fac + '」议和罢兵' + (r2.tribute ? '·岁贡' + r2.tribute + '两' : ''); }
+      else { keepOpen = true; msg = '和议未成·' + ((r2 && r2.reason) || '国库不敷'); }   // 余额闸拒→留 open·战事未止
+    } else {
+      if (N) N.resolve(ng.id, 'rejected'); msg = '驳「' + fac + '」和议·战事未休';
+      if (typeof addEB === 'function') addEB('边患·驳和', fac + '之和议遭拒·兵锋恐再起');
+    }
+  }
+  var chatEl = _$('wd-modal-chat');
+  if (chatEl) { var d = document.createElement('div'); d.style.cssText = 'text-align:center;font-size:0.72rem;color:var(--gold-400);padding:4px;'; d.textContent = '（' + msg + '）'; chatEl.appendChild(d); chatEl.scrollTop = chatEl.scrollHeight; }
+  if (typeof toast === 'function') toast(msg);
+  if (keepOpen) return;   // 抚局未成/羁縻→不关窗·可续议或回价
+  ch._pendingEnvoyDisposition = kind;
+  if (typeof closeWenduiModal === 'function') setTimeout(closeWenduiModal, 600);
+}
+// 批己·回价续谈：递还价条款(+可选加银)→playerCounter·势力提议另回写「还价」供其 decideFor 续演
+function _wdEnvoyCounter() {
+  var name = GM.wenduiTarget; if (!name) return;
+  var ch = (typeof findCharByName === 'function') ? findCharByName(name) : null;
+  if (!ch || ch._negotiationId == null) { if (typeof toast === 'function') toast('此使无可续谈之议'); return; }
+  var N = (typeof window !== 'undefined' && window.TM && window.TM.Negotiation) ? window.TM.Negotiation : null;
+  var ng = (N && N.get) ? N.get(ch._negotiationId) : null;
+  if (!ng || ng.status !== 'open' || ng.round >= N.MAX_ROUND) { if (typeof toast === 'function') toast('此议已无回价余地'); return; }
+  var _from = String(ch.fromFaction || ch.faction || '外藩');
+  var body = '<div style="display:flex;flex-direction:column;gap:8px;">'
+    + '<div style="font-size:0.75rem;color:var(--txt-d);">向「' + escHtml(_from) + '」提出还价条款（对方将据此续演）</div>'
+    + '<textarea id="wd-ng-counter-terms" rows="3" maxlength="80" placeholder="还价条款（≤80字）" style="width:100%;"></textarea>'
+    + '<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:0.75rem;color:var(--txt-d);">加银(可选)</span><input type="number" id="wd-ng-counter-silver" min="0" placeholder="两" style="width:120px;"></div>'
+    + '</div>';
+  openGenericModal('回价·续谈', body, function () {
+    var tEl = _$('wd-ng-counter-terms'), sEl = _$('wd-ng-counter-silver');
+    var terms = (tEl && tEl.value || '').trim();
+    var silver = Number(sEl && sEl.value) || 0;
+    if (!terms && !silver) { if (typeof toast === 'function') toast('请填还价条款或加银'); return; }
+    var counterTerms = terms || ('加银' + silver + '两');
+    var res = N.playerCounter(ch._negotiationId, counterTerms, silver);
+    if (typeof closeGenericModal === 'function') closeGenericModal();
+    if (!res) { if (typeof toast === 'function') toast('回价未成（逾期或轮次已满）'); return; }
+    // 势力外交提议：回写「还价」供发起势力 decideFor 续演(INCOMING/OUTCOMES 通道)
+    if (ch._factionProposalId && window.TM && window.TM.FactionDiplomacy && window.TM.FactionDiplomacy.recordPlayerResponse) {
+      try { window.TM.FactionDiplomacy.recordPlayerResponse(ch.fromFaction || ch.faction, { id: ch._factionProposalId, type: ch._diplomacyType, terms: counterTerms, outcome: 'countered', turn: GM.turn }); } catch (_) {}
+    }
+    if (typeof addEB === 'function') addEB('外交·回价', _from + '之议·朝廷还价：' + counterTerms);
+    if (typeof toast === 'function') toast('回价已递·俟其回音');
+    if (typeof closeWenduiModal === 'function') closeWenduiModal();   // 该使退下待见队列(closeWenduiModal 按名清洗)
+  });
+}
+if (typeof window !== 'undefined') { window._wdEnvoyCounter = _wdEnvoyCounter; }
 function _wdSummonConfronter() {
   // L4\u00B7f1\u00B7cedui mode \u5141\u53EC\u4EBA\u5BF9\u8D28\u00B7multi-advisor \u534F\u5546\u00B7confronter \u72EC\u7ACB archetype\u00B7\u5173\u540E\u8DD1 merge LLM
   // (RX\u00B7C3 \u4E34\u7981\u89E3\u9664)
@@ -1417,6 +1513,7 @@ function _wdOpenAudienceQueue(ref) {
       fromFaction: q.fromFaction,
       interactionType: q.interactionType,
       _factionProposalId: q._factionProposalId, _diplomacyType: q._diplomacyType,  // 【S3】带提议 id·供准奏/驳回回写发起势力持久记忆
+      _negotiationId: q._negotiationId,  // 批己·带谈判会话 id·供回价钮+按台面 offer 结算
       envoyMission: q.reason || '',
       location: (typeof _getPlayerLocation === 'function' ? _getPlayerLocation() : null) || GM._capital || '京城',  // 2026-06-26 使节所在地随玩家实际所在地(非固定 GM._capital/京城)·否则玩家不在都城(如绍宋在应天府)时使节被判"远在京城·不能召见"
       isTemp: true,
@@ -1451,6 +1548,7 @@ function _wdOpenAudienceQueue(ref) {
     ch.fromFaction = q.fromFaction;
     ch.interactionType = q.interactionType;
     ch._factionProposalId = q._factionProposalId; ch._diplomacyType = q._diplomacyType;  // 【S3】同步提议 id(重复求见也能回写)
+    ch._negotiationId = q._negotiationId;  // 批己·同步谈判会话 id(重复求见也带回价钮)
     ch.envoyMission = q.reason || ch.envoyMission || '';
     ch.position = ch.position || '使节';
     ch.officialTitle = ch.officialTitle || '使节';

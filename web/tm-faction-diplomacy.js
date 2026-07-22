@@ -48,10 +48,19 @@
     var _dedup = function (a) { return !(a && a._factionProposalId && a._diplomacyType === item.type && _norm(a.fromFaction) === _norm(fromName)); };
     if (typeof _wdCleansePendingAudiences === 'function' && typeof GM !== 'undefined' && G === GM) _wdCleansePendingAudiences(_dedup);   // 唯一清洗写口(按谓词)
     else G._pendingAudiences = G._pendingAudiences.filter(_dedup);
+    // 批己·势力提议也挂谈判会话·玩家可回价续谈(flag OFF→ngId 保持 null·旧行为不变)
+    var _ngId = null;
+    try {
+      var _N = global.TM && global.TM.Negotiation;
+      if (_N && typeof _N.open === 'function' && _N.enabled()) {
+        var _ng = _N.open({ topic: 'diplomacy', initiator: fromName, sourceRef: { kind: 'proposal', refId: item.id }, offer: { by: 'them', terms: item.terms || (TYPE_CN[item.type] || item.type) }, turn: item.turn });
+        _ngId = _ng && _ng.id;
+      }
+    } catch (_e) {}
     G._pendingAudiences.push({
       name: fromName + '使节', reason: '【' + (TYPE_CN[item.type] || item.type) + '】' + (item.terms || '') + (item.rationale ? '（' + item.rationale + '）' : ''),
       turn: item.turn, isEnvoy: true, fromFaction: fromName, interactionType: (_DIP2ENVOY[item.type] || 'faction_proposal'),
-      _factionProposalId: item.id, _diplomacyType: item.type
+      _factionProposalId: item.id, _diplomacyType: item.type, _negotiationId: _ngId
     });
     if (typeof _wdCapPendingAudiences === 'function' && typeof GM !== 'undefined' && G === GM) _wdCapPendingAudiences(20);   // 唯一去顶写口
     else if (G._pendingAudiences.length > 20) G._pendingAudiences = G._pendingAudiences.slice(-20);
@@ -218,7 +227,7 @@
   }
 
   // ── ⑦【S3】感知：发起势力决策时·格式化「君上对我提议的近期答复」(PLAYER_PROPOSAL_OUTCOMES 段) ──
-  var _OUTCOME_CN = { accepted: '已纳', rejected: '见拒', temporized: '羁縻未决' };
+  var _OUTCOME_CN = { accepted: '已纳', rejected: '见拒', temporized: '羁縻未决', countered: '君上还价' };
   function formatPlayerProposalOutcomes(fac, turn) {
     if (!fac || !fac.aiStrategy) return [];
     var arr = (fac.aiStrategy.playerProposalOutcomes || []).filter(function (o) { return o && (turn == null || (turn - (o.turn || 0)) <= 8); }); // 仅近 8 回合

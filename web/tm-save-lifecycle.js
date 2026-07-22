@@ -107,6 +107,9 @@ function _ensureGMDefaults() {
   // Phase 7 准备·成本面板 history·最近 20 回合
   if (!Array.isArray(GM._costHistory)) GM._costHistory = [];
   if (!GM.activeSchemes) GM.activeSchemes = [];
+  // 批己·谈判多轮会话（招抚/议和/势力外交共用状态机·不加 mirror 跨存档丢）
+  if (!Array.isArray(GM._negotiations)) GM._negotiations = [];
+  if (GM._negotiationSeq === undefined) GM._negotiationSeq = 0;
   // 方案新增字段
   if (!GM._edictTracker) GM._edictTracker = [];
   if (!GM._plotThreads) GM._plotThreads = [];
@@ -394,6 +397,9 @@ function _prepareGMForSave() {
   if (GM.enYuanRecords) GM._savedEnYuanRecords = _safeClone(GM.enYuanRecords);
   if (GM.patronNetwork) GM._savedPatronNetwork = _safeClone(GM.patronNetwork);
   if (GM.activeSchemes) GM._savedActiveSchemes = _safeClone(GM.activeSchemes);
+  // 批己·谈判会话 mirror
+  if (GM._negotiations) GM._savedNegotiations = _safeClone(GM._negotiations);
+  if (GM._negotiationSeq !== undefined) GM._savedNegotiationSeq = GM._negotiationSeq;
   if (GM.yearlyChronicles) GM._savedYearlyChronicles = _safeClone(GM.yearlyChronicles);
   if (GM.monthlyChronicles) GM._savedMonthlyChronicles = _safeClone(GM.monthlyChronicles);
   if (GM._aiMemorySummaries) GM._savedAiMemorySummaries = _safeClone(GM._aiMemorySummaries);
@@ -675,6 +681,9 @@ function _restoreSavedFields() {
   if (GM._savedEnYuanRecords) { GM.enYuanRecords = GM._savedEnYuanRecords; delete GM._savedEnYuanRecords; }
   if (GM._savedPatronNetwork) { GM.patronNetwork = GM._savedPatronNetwork; delete GM._savedPatronNetwork; }
   if (GM._savedActiveSchemes) { GM.activeSchemes = GM._savedActiveSchemes; delete GM._savedActiveSchemes; }
+  // 批己·谈判会话恢复
+  if (GM._savedNegotiations) { GM._negotiations = GM._savedNegotiations; delete GM._savedNegotiations; }
+  if (GM._savedNegotiationSeq !== undefined) { GM._negotiationSeq = GM._savedNegotiationSeq; delete GM._savedNegotiationSeq; }
   if (GM._savedYearlyChronicles) { GM.yearlyChronicles = GM._savedYearlyChronicles; delete GM._savedYearlyChronicles; }
   if (GM._savedMonthlyChronicles) { GM.monthlyChronicles = GM._savedMonthlyChronicles; delete GM._savedMonthlyChronicles; }
   if (GM._savedAiMemorySummaries) { GM._aiMemorySummaries = GM._savedAiMemorySummaries; delete GM._savedAiMemorySummaries; }

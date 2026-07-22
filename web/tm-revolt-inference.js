@@ -125,6 +125,85 @@
     return null;
   }
 
+  // ── 批己·招抚接谈判会话（讨价开/续会话+使节求见·玩家可回价续谈·flag guard 内部）───────────
+  function _facForRevolt(G, rid) {
+    return (G.facs || []).find(function (f) { return f && f._revoltEntity && f.sourceRevoltId === rid; }) || null;
+  }
+  function _revoltName(G, r) {
+    var fac = _facForRevolt(G, r.id);
+    return (fac && fac.name) || (r._identity && r._identity.banner) || ((r.region || '') + '义军');
+  }
+  function _openPacifyNegotiation(G, s, act, turn) {
+    try {
+      var N = global.TM && global.TM.Negotiation;
+      if (!N || typeof N.open !== 'function' || !N.enabled()) return;
+      var banner = s.fac.name;
+      var silver = Math.max(0, Math.round(Number(act.silverDemand) || 0));
+      var office = String(act.officeTitle || '').slice(0, 16);
+      var termsTxt = '受抚索银' + silver + '两' + (office ? '·求授' + office : '');
+      var ng = N.open({
+        topic: 'pacify', initiator: banner,
+        sourceRef: { kind: 'revolt', refId: s.r.id },
+        offer: { by: 'them', terms: termsTxt, silver: silver, office: office },
+        turn: turn
+      });
+      if (ng && typeof N.surfaceEnvoy === 'function') {
+        N.surfaceEnvoy({ fromName: banner, reason: '讨价：' + termsTxt, negotiationId: ng.id, turn: turn });
+      }
+    } catch (_) {}
+  }
+  // 逐回合演绎 prompt 注入「待续谈判」小段（该股 open 会话末 2 offer·玩家已回价的须回应）
+  function _negotiationLines(G, revoltId) {
+    try {
+      var N = global.TM && global.TM.Negotiation;
+      if (!N || typeof N.findOpenByRef !== 'function' || !N.enabled() || revoltId == null) return [];
+      var ng = N.findOpenByRef('revolt', revoltId);
+      if (!ng || !Array.isArray(ng.offers) || !ng.offers.length) return [];
+      var last2 = ng.offers.slice(-2).map(function (o) {
+        return (o.by === 'player' ? '朝廷' : '我方') + '「' + (o.terms || '') + '」';
+      });
+      var playerCountered = ng.offers.some(function (o) { return o.by === 'player'; });
+      return ['  ↳与朝廷续谈中(轮' + ng.round + ')：' + last2.join(' ↔ ')
+        + (playerCountered ? '·朝廷已还价·你须回应(pacify_accept 依台面成局/pacify_refuse 破裂/pacify_counter 再还价)' : '·候朝廷回音')];
+    } catch (_) { return []; }
+  }
+  // 玩家在问对对招抚使节「准奏/驳回」→ 按当前台面 offer 走既有 pacify_accept 同款结算(_spendSilver 闸照旧)
+  function playerResolvePacify(G, refId, opts) {
+    G = G || global.GM; opts = opts || {};
+    if (!G) return { ok: false, reason: 'no-game' };
+    var revolts = (G.minxin && G.minxin.revolts) || [];
+    var r = null;
+    for (var i = 0; i < revolts.length; i++) { if (revolts[i] && revolts[i].id === refId) { r = revolts[i]; break; } }
+    if (!r || r.status !== 'ongoing') return { ok: false, reason: '该股已不在续谈' };
+    var name = _revoltName(G, r);
+    if (opts.accept) {
+      var N = global.TM && global.TM.Negotiation;
+      var ng = (N && typeof N.findOpenByRef === 'function') ? N.findOpenByRef('revolt', refId) : null;
+      // 玩家刚回价·对方(义军)未回→不得直接结算(须待其下回合形成新 them-offer·根治「零成本受抚」)
+      if (ng && typeof N.currentOffer === 'function') {
+        var cur = N.currentOffer(ng);
+        if (cur && cur.by === 'player') return { ok: false, reason: '已递回价·俟其回音' };
+      }
+      // 结算台面=最后一条 by:'them' 的 offer·银额取之·缺失/非法回落 level*100000(与 AI 侧 act.silverDemand||level*100000 同式·绝不落 0)
+      var setOffer = (N && typeof N.settleableOffer === 'function') ? N.settleableOffer(ng) : null;
+      var lvl = Math.max(1, Number(r.level) || 3);
+      var ask = Math.max(0, Math.round((setOffer && Number(setOffer.silver) > 0) ? Number(setOffer.silver) : lvl * 100000));
+      var office = String((setOffer && setOffer.office) || opts.officeTitle || '').slice(0, 16);
+      if (ask > 0 && !_spendSilver(G, ask, '招抚「' + name + '」')) {
+        _eb('「' + name + '」许抚而帑廪不给·抚局遂败·其众复叛');
+        return { ok: false, reason: '帑廪不给' };
+      }
+      r.status = 'pacified';
+      r._pacified = { turn: G.turn || 0, silver: ask, officeTitle: office };
+      _eb('★「' + name + '」受抚罢兵' + (ask ? '·得银 ' + ask + ' 两' : '') + (office ? '·渠帅得授' + office : '') + '（君上亲允）');
+      _chron(G, '「' + name + '」受抚·' + (r.region || '') + '兵息（君上亲允招抚）');
+      return { ok: true, pacified: true, silver: ask };
+    }
+    _eb('「' + name + '」讨价遭朝廷驳回·抚局破裂·其众复叛');
+    _chron(G, '朝廷驳「' + name + '」之请·抚议中辍');
+    return { ok: true, rejected: true };
+  }
+
   // ── subcall A·起号立领袖（具象化时一次·owner 拍板①）────────────────────────
   async function forgeIdentity(G, r) {
     if (!_aiOn()) return null;
@@ -171,6 +250,8 @@
         + '·已据：' + occ + '·声势级「' + (s.r ? (s.r.level || '?') : '?') + '」');
       var eds = _recentPacifyEdicts(G, s);
       if (eds.length) lines.push('  ↳朝廷近旨(与本股相关·据 stance/agenda 决定受抚/拒抚/讨价·亦可诈许)：' + eds.join('｜'));
+      var ngls = _negotiationLines(G, s.r && s.r.id);   // 批己·待续谈判(该股与朝廷的多轮回价台面)
+      if (ngls.length) lines.push.apply(lines, ngls);
       // 批五·挟君在营：赎驾博弈段（北狩残局）
       if (_capturedPlayerOf(G, s.fac.name)) {
         lines.push('  ↳★本股挟被俘君上在营——奇货可居：可 ransom_demand 索赎要挟·朝廷下赎驾旨且银足可 release_captive 放还·亦可继续奇货自重。');
@@ -286,7 +367,9 @@
             }
             case 'pacify_counter': {
               if (!_recentPacifyEdicts(G, s).length) { blocked++; return; }
-              _eb('「' + s.fac.name + '」讨价：索银 ' + (Number(act.silverDemand) || 0) + ' 两' + (act.officeTitle ? '·求授' + act.officeTitle : '') + '·抚局未定'); applied++;
+              _eb('「' + s.fac.name + '」讨价：索银 ' + (Number(act.silverDemand) || 0) + ' 两' + (act.officeTitle ? '·求授' + act.officeTitle : '') + '·抚局未定');
+              _openPacifyNegotiation(G, s, act, turn);   // 批己·开/续谈判会话+使节求见(玩家可回价·flag OFF 内部空转)
+              applied++;
               return;
             }
             case 'ransom_demand': {
@@ -401,7 +484,7 @@
   }
   function aiOn() { return _aiOn(); }
 
-  var API = { schedule: schedule, forgeIdentity: forgeIdentity, tickInference: tickInference, breachScene: breachScene, scheduleBreachScene: scheduleBreachScene, aiOn: aiOn, _applyActions: _applyActions, _recentPacifyEdicts: _recentPacifyEdicts, _spendSilver: _spendSilver, enabled: enabled, MAX_STOCKS: MAX_STOCKS };
+  var API = { schedule: schedule, forgeIdentity: forgeIdentity, tickInference: tickInference, breachScene: breachScene, scheduleBreachScene: scheduleBreachScene, aiOn: aiOn, _applyActions: _applyActions, _recentPacifyEdicts: _recentPacifyEdicts, _spendSilver: _spendSilver, playerResolvePacify: playerResolvePacify, _negotiationLines: _negotiationLines, enabled: enabled, MAX_STOCKS: MAX_STOCKS };
   global.TM = global.TM || {};
   global.TM.RevoltInference = API;
   if (typeof module !== 'undefined' && module.exports) module.exports = API;

@@ -281,6 +281,21 @@ assert(cm.includes('var quota = isQuotaError(e);'),
   assert(badge('正式在线目录', 'stale', '3 件·旧目录', '').indexOf('is-error') < 0, 'P1: stale 档 badge 不落 is-error（反证）');
 })();
 
+// ── P1·侧栏 browse/ranks 计数须纳入 stale（有旧数据即显示数量）：真跑 workshopPaneCount 验，
+//   「改回 ^(ok|fallback)$」的突变会让 stale 计数消失即红。
+(function testWorkshopPaneCountStale() {
+  var makeCount = new Function('state', extractFn(cm, 'function workshopPaneCount(pane)') + '\nreturn workshopPaneCount;');
+  function count(status, pane, packs) {
+    return makeCount({ catalogStatus: status, catalog: { packs: packs } })(pane);
+  }
+  assert(count('stale', 'browse', [{ id: 'a' }, { id: 'b' }]) === 2, 'P1: workshopPaneCount(browse) stale 须显示数量(2)');
+  assert(count('stale', 'ranks', [{ id: 'a' }]) === 1, 'P1: workshopPaneCount(ranks) stale 须显示数量(1)');
+  assert(count('ok', 'browse', [{ id: 'a' }]) === 1, 'P1: ok 仍显示计数（反证）');
+  assert(count('fallback', 'ranks', [{ id: 'a' }]) === 1, 'P1: fallback 仍显示计数（反证）');
+  assert(count('idle', 'browse', [{ id: 'a' }]) === '', 'P1: idle 隐藏计数（反证）');
+  assert(count('error', 'ranks', [{ id: 'a' }]) === '', 'P1: error 隐藏计数（反证）');
+})();
+
 // ── R4·loadWorkshopCatalog 三条生命周期路径真跑（成功清错 / 失败保留 stale / 开跑清错）──
 (function testLoadCatalogLifecycle() {
   // 融合后 loadWorkshopCatalog 的 catch 先走百工谱阁 loadBundledCatalogFallback 再分层——注入其 stub
@@ -289,7 +304,7 @@ assert(cm.includes('var quota = isQuotaError(e);'),
     'state', 'render', 'desktop', 'document', 'window', 'TM', 'catalogUrlWithParams', 'saveCatalogUrl', 'loadBundledCatalogFallback',
     extractFn(cm, 'async function loadWorkshopCatalog()') + '\nreturn loadWorkshopCatalog;'
   );
-  function runLWC(state, catalogFn) {
+  function runLWC(state, catalogFn, fallbackFn) {
     var lwc = makeLWC(
       state,
       function render() {},
@@ -299,7 +314,7 @@ assert(cm.includes('var quota = isQuotaError(e);'),
       { OnlineClient: { catalog: catalogFn } },
       function catalogUrlWithParams() { return state.catalogUrl || ''; },
       function saveCatalogUrl() {},
-      async function loadBundledCatalogFallback() { return false; }
+      fallbackFn || async function loadBundledCatalogFallback() { return false; }
     );
     return lwc();
   }
@@ -321,6 +336,28 @@ assert(cm.includes('var quota = isQuotaError(e);'),
     var s3 = { catalogUrl: 'u', defaultCatalogUrl: 'u', catalog: null, catalogError: '上一次的旧错误' };
     await runLWC(s3, async function () { return { packs: [{ id: 'z' }] }; });
     assert(s3.catalogError === null, 'R4·LWC③: 开跑清错→成功后 catalogError 为 null');
+
+    // ④ P2 复合串保全（stale·有旧数据）：兜底 stub 主动把 catalogError 置为「在线；兜底」复合串并返 false
+    //    → catch 的 if(!state.catalogError) 须保全该复合串，绝不被单在线 e.message 覆盖。
+    //    （空兜底 stub 分不清「保全」与「无条件覆盖」·此路径专锁 P2 不回归。）
+    var s4 = { catalogUrl: 'u', defaultCatalogUrl: 'u', catalog: { type: 't', packs: [{ id: 'keep' }] }, catalogError: null };
+    await runLWC(s4, async function () { throw new Error('在线目录 HTTP 500'); }, async function () {
+      s4.catalogError = '在线目录 HTTP 500；仓库清单 fetch 失败';
+      return false;
+    });
+    assert(s4.catalogError === '在线目录 HTTP 500；仓库清单 fetch 失败',
+      'R4·LWC④: 兜底复合错误须保全(stale)·不被单在线错误覆盖（含兜底失败原因）');
+    assert(s4.catalogStatus === 'stale' && s4.catalog && s4.catalog.packs[0] && s4.catalog.packs[0].id === 'keep',
+      'R4·LWC④: stale 保留旧数据且状态为 stale');
+
+    // ⑤ P2 复合串保全（error·无旧数据）：同上但无旧目录 → catch 另一条 if(!state.catalogError) 也须保全复合串。
+    var s5 = { catalogUrl: 'u', defaultCatalogUrl: 'u', catalog: null, catalogError: null };
+    await runLWC(s5, async function () { throw new Error('在线目录 HTTP 500'); }, async function () {
+      s5.catalogError = '在线目录 HTTP 500；仓库清单 fetch 失败';
+      return false;
+    });
+    assert(s5.catalogError === '在线目录 HTTP 500；仓库清单 fetch 失败',
+      'R4·LWC⑤: 兜底复合错误须保全(error·无数据)·不被单在线错误覆盖');
   })();
 })().then(function () {
 // 收尾行保持原样(列 0)：全部路径通过后打印 PASS。

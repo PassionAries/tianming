@@ -1454,7 +1454,38 @@
     'body.tm-phase8-formal #topbar .tb-fdeco.tb-br{bottom:3.5px!important;right:3.5px!important;transform:scale(-1,-1)!important;}',
     'body.tm-phase8-formal #topbar .tb-crest{position:absolute!important;top:-3px!important;left:50%!important;transform:translateX(-50%)!important;width:32px!important;height:12px!important;line-height:0!important;opacity:.9!important;pointer-events:none!important;z-index:4!important;}',
     'body.tm-phase8-formal #topbar .tb-crest svg{width:100%!important;height:100%!important;display:block!important;}',
-    'body.tm-phase8-formal #topbar .tb-chip .tb-fdeco{width:10px!important;height:10px!important;}'
+    'body.tm-phase8-formal #topbar .tb-chip .tb-fdeco{width:10px!important;height:10px!important;}',
+    /* ═══ 窄舞台自适应紧凑（JS fitTopbar 按需加 .tm-tb-fit1/2·media-query-free）═══
+       固定虚拟舞台(tm-fixed-fit) normalizeStage 会删掉所有 max-width 媒体查询、且 @media 看的是设备宽而非舞台 VW，
+       故顶栏溢出只能靠 JS 读 #topbar scrollWidth vs clientWidth 分级收缩：
+       fit1=收 padding/gap + 隐增减小字(信息仍在「全部变量」与钉住悬浮)·不缩正文字号；
+       fit2=再降字号/印记尺寸。宽舞台(1600/1920)两 class 皆不加→原设计零退化。 */
+    'body.tm-phase8-formal #topbar.tm-tb-fit1{gap:6px!important;padding:0 8px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit1 .tb-left{padding:4px 10px!important;gap:7px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit1 .tb-vars{padding:0 3px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit1 .tb-var{padding:0 6px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit1 .tb-var.wide{padding:5px 7px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit1 .tb-var.wide .tb-vsubs{gap:6px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit1 .tb-var.wide .sv .sd{display:none!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit1 .tb-var:not(.wide){min-width:46px!important;padding:4px 5px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit1 .tb-var.tb-seal-idx{min-width:38px!important;padding:0 4px!important;margin:0 1px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit1 .tb-vars .tb-gsep{margin:0 5px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit1 .tb-chip{padding:0 9px!important;min-width:auto!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit2 .tb-left{padding:4px 8px!important;gap:6px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit2 .tb-dyn{font-size:19px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit2 .tb-time-main{font-size:16px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit2 .tb-ruler{max-width:88px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit2 .tb-var.wide .sv b{font-size:12.5px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit2 .tb-var.wide .tb-vn{font-size:9.5px!important;letter-spacing:.04em!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit2 .tb-var.wide .icn,body.tm-phase8-formal #topbar.tm-tb-fit2 .tb-var.wide .tb-stk-svg{width:13px!important;height:13px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit2 .tb-var.wide .tb-vsubs{gap:4px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit2 .tb-var:not(.wide) .tb-vv{font-size:12px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit2 .tb-var:not(.wide) .tb-vn{font-size:10px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit2 .tb-var.tb-seal-idx{min-width:33px!important;padding:0 3px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit2 .tb-seal-idx .tsi-ch{font-size:15px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit2 .tb-seal-idx .tsi-val{font-size:9px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit2 .tb-seal-idx .tsi-bar{width:22px!important;}',
+    'body.tm-phase8-formal #topbar.tm-tb-fit2 .tb-vars .tb-gsep{margin:0 3px!important;}'
   ];
   function installTopbarRedesignStyle(){
     if (document.getElementById('tm-topbar-redesign')) return;
@@ -1468,6 +1499,27 @@
     st.id = 'tm-topbar-redesign';
     st.textContent = TOPBAR_REDESIGN_CSS.join('\n');
     document.head.appendChild(st);
+  }
+  // 顶栏窄舞台自适应：读真实内容宽(scrollWidth) vs 舞台宽(clientWidth)·分级加 fit1/fit2 收缩。
+  // media-query-free（fixed-fit 会删 max-width @media·且 @media 看设备宽非舞台 VW）→ 唯一可靠信号是真实布局宽。
+  // 读 scrollWidth 会强制同步 reflow·故加 class 后即刻复量能拿到新宽·逐级判定。
+  var _tbFitRaf = 0;
+  function fitTopbar(){
+    var top = document.getElementById('topbar');
+    if (!top || !top.clientWidth) return;
+    top.classList.remove('tm-tb-fit1', 'tm-tb-fit2');       // 先卸紧凑·按满设计量真实需求
+    // 严格比较(不留 +1 容差)：内容拟合时 scrollWidth 会被 clamp 到 clientWidth→测不出余量·只能测真溢出；
+    // +1 容差会漏掉亚像素级溢出(实测大额值 1281.3px 溢出被当放得下)→改严格 > 才触发紧凑。
+    if (top.scrollWidth <= top.clientWidth) return;          // 宽舞台放得下→原设计零退化
+    top.classList.add('tm-tb-fit1');                         // 收 padding/gap + 隐增减小字
+    if (top.scrollWidth <= top.clientWidth) return;
+    top.classList.add('tm-tb-fit2');                         // 再降字号/印记尺寸
+    // 仍溢出（极窄）→ 已尽力·保留 fit2（绝不出横向滚动·不砍官印/全部变量）
+  }
+  function scheduleFitTopbar(){
+    if (_tbFitRaf) return;
+    var raf = window.requestAnimationFrame || function(cb){ return setTimeout(cb, 16); };
+    _tbFitRaf = raf(function(){ _tbFitRaf = 0; try { fitTopbar(); } catch(_) {} });
   }
   function _tbPanelDeco(withCrest){
     var corner = '<svg viewBox="0 0 16 16" fill="none" stroke="#d6b66c" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"><path d="M2 14 V5 Q2 2 5 2 H14"/><path d="M6 14 V9 Q6 8 7 8 H11"/><circle cx="2" cy="14" r="1" fill="#d6b66c" stroke="none"/><circle cx="14" cy="2" r="1" fill="#d6b66c" stroke="none"/></svg>';
@@ -1497,6 +1549,12 @@
       top.querySelector('.tb-chip').onclick = function(){
         if (window.TM && TM.UI && TM.UI.topbar && typeof TM.UI.topbar.openAllVarsModal === 'function') TM.UI.topbar.openAllVarsModal();
       };
+      // 窄舞台自适应：窗口/舞台变化 + 字体沉降后重算顶栏紧凑级（只绑一次）
+      if (!window.__tmTopbarFitBound) {
+        window.__tmTopbarFitBound = true;
+        try { window.addEventListener('resize', scheduleFitTopbar); } catch(_) {}
+        try { if (document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleFitTopbar); } catch(_) {}
+      }
     }
     var vars = document.getElementById('tmf-tb-vars');
     if (vars && !vars.__phase8TopbarVarBound) {
@@ -1575,6 +1633,7 @@
     if (main) main.textContent = textById('bar-time-main', textById('bar-date', ''));
     if (sub) sub.textContent = [((_jieqi && _jieqi !== '节候') ? _jieqi : ''), _sub0].filter(Boolean).join(' · ');
     ensureTopbarBanner();
+    scheduleFitTopbar();   // 值/文案更新后按舞台宽重算紧凑级（每回合值变宽→可能跨阈值）
   }
 
   function topbarBannerText(){

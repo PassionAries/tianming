@@ -1210,6 +1210,8 @@
     if (/武将|立绘|portrait/.test(text)) return 'assets/ui/workshop/cover-general.webp';
     return 'assets/ui/workshop/cover-yanmen.webp';
   }
+  // actionHtml 是唯一不经 esc() 的原始 HTML 注入口（sink）：只允许传入静态字面量（如固定的重试按钮），
+  // 严禁把用户/接口数据拼进来——glyph/title/copy 走 esc() 转义，actionHtml 由调用方自负其为可信静态串。
   function truthEmpty(glyph, title, copy, actionHtml) {
     return '<div class="empty truth-empty"><div class="glyph">' + esc(glyph) + '</div><div><div class="t">' + esc(title) + '</div><p>' + esc(copy) + '</p>' + (actionHtml || '') + '</div></div>';
   }

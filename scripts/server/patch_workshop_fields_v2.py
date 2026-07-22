@@ -29,19 +29,28 @@ MIGRATIONS = (
     "ALTER TABLE workshop_packs ADD COLUMN gallery_names TEXT DEFAULT '[]'",
 )
 
-# 软段·类型感知校验（线上若已类型感知则锚不合·跳过即可）
+# 软段·类型感知校验（线上若已类型感知则锚不合·跳过即可）。
+# v2.2：缩进自适应——现场量取 scan 行的真实缩进重排注入块（v2.1 硬编 16 格在线上折于
+# 「else: invalid syntax」·线上该行嵌得更深·而 v1 捕获块 20/24 格能过编译=只有 scan 行例外）。
 SCAN_OLD = "ok_scan, scan_reason, scan_flags = scan_scenario(raw)"
-SCAN_NEW = '''_v2ptype = str(data.get("type") or "scenario")[:32]  # %s
-                if _v2ptype == "scenario":
-                    ok_scan, scan_reason, scan_flags = scan_scenario(raw)
-                elif _v2ptype in ("portrait", "music", "map", "mod"):
-                    _is_zip = raw[:4] == b"PK\\x03\\x04"
-                    _is_json = _v2ptype in ("map", "mod") and raw[:1] in (b"{", b"[")
-                    ok_scan = _is_zip or _is_json
-                    scan_reason = "" if ok_scan else "\\u8d44\\u4ea7\\u5305\\u987b\\u4e3a zip \\u6253\\u5305\\uff08map/mod \\u4ea6\\u5bb9 JSON \\u6587\\u672c\\uff09"
-                    scan_flags = ["asset-pack:" + _v2ptype]
-                else:
-                    ok_scan, scan_reason, scan_flags = False, "\\u672a\\u77e5\\u7c7b\\u578b\\uff1a" + _v2ptype, []''' % MARK
+
+
+def build_scan_block(ind):
+    i4 = ind + "    "
+    lines = [
+        ind + '_v2ptype = str(data.get("type") or "scenario")[:32]  # ' + MARK,
+        ind + 'if _v2ptype == "scenario":',
+        i4 + 'ok_scan, scan_reason, scan_flags = scan_scenario(raw)',
+        ind + 'elif _v2ptype in ("portrait", "music", "map", "mod"):',
+        i4 + '_is_zip = raw[:4] == b"PK\\x03\\x04"',
+        i4 + '_is_json = _v2ptype in ("map", "mod") and raw[:1] in (b"{", b"[")',
+        i4 + 'ok_scan = _is_zip or _is_json',
+        i4 + 'scan_reason = "" if ok_scan else "\\u8d44\\u4ea7\\u5305\\u987b\\u4e3a zip \\u6253\\u5305\\uff08map/mod \\u4ea6\\u5bb9 JSON \\u6587\\u672c\\uff09"',
+        i4 + 'scan_flags = ["asset-pack:" + _v2ptype]',
+        ind + 'else:',
+        i4 + 'ok_scan, scan_reason, scan_flags = False, "\\u672a\\u77e5\\u7c7b\\u578b\\uff1a" + _v2ptype, []',
+    ]
+    return "\n".join(lines)
 
 # 硬段·packageKind/画廊捕获（插在 v1.1 封面捕获块之后·锚=v1.1 注入产物·确定形状）
 CAP_ANCHOR = '''                            with open(os.path.join(pack_dir, cover_name), "wb") as _cf:
@@ -217,10 +226,11 @@ def patch_file(fn):
             say("  ✗ %s：锚点命中 %d 次（期望 1）" % (label, n))
             ok = False
 
-    # 软段：类型感知校验（线上或已自带·不合只报不废）
-    if src.count(SCAN_OLD) == 1:
-        src = src.replace(SCAN_OLD, SCAN_NEW)
-        say("  ✓ 类型感知校验（scenario 才跑剧本扫描·资产包验 zip/JSON）")
+    # 软段：类型感知校验（线上或已自带·不合只报不废）·v2.2 缩进自适应（整行含缩进替换）
+    _scan_m = re.search(r"^([ \t]+)" + re.escape(SCAN_OLD) + r"[ \t]*$", src, re.M)
+    if _scan_m and src.count(SCAN_OLD) == 1:
+        src = src.replace(_scan_m.group(0), build_scan_block(_scan_m.group(1)))
+        say("  ✓ 类型感知校验（scenario 才跑剧本扫描·资产包验 zip/JSON·实测缩进 %d 格）" % len(_scan_m.group(1).replace("\t", "    ")))
     else:
         say("  ○ 类型感知校验段锚不合（线上可能已类型感知）·跳过——zip 上传若仍被拒再贴 scan 段来对")
 

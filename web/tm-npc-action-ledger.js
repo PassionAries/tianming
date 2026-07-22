@@ -101,9 +101,9 @@
     if (Array.isArray(raw.uiRoutes)) return raw.uiRoutes.slice();
     if (kind === 'npc_interaction') {
       var t = raw.type || raw.behaviorType || '';
-      if (/impeach|slander|frame_up|expose_secret|recommend|guarantee|petition/.test(t)) return ['relations', 'memorials', 'memory'];
-      if (/private_visit|invite_banquet|duel_poetry/.test(t)) return ['relations', 'audience', 'memory'];
-      if (/gift_present|correspond_secret|share_intelligence/.test(t)) return ['relations', 'letters', 'memory'];
+      if (/impeach|slander|frame_up|expose_secret|recommend|guarantee|petition|express_gratitude|intercede/.test(t)) return ['relations', 'memorials', 'memory'];
+      if (/private_visit|invite_banquet|duel_poetry|condole|celebrate_birthday|farewell_feast|welcome_feast|seek_instruction|entrust_orphan|propose_match/.test(t)) return ['relations', 'audience', 'memory'];
+      if (/gift_present|correspond_secret|share_intelligence|gift_medicine/.test(t)) return ['relations', 'letters', 'memory'];
       return ['relations', 'memory'];
     }
     if (kind === 'npc_letter') return ['letters', 'memory'];

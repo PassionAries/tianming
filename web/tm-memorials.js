@@ -1089,6 +1089,25 @@ function _commitMemorialDecisions() {
     if (m.turn != null && m.turn > GM.turn) return;
     var status = m.status;
     if (status !== 'approved' && status !== 'rejected' && status !== 'annotated' && status !== 'referred' && status !== 'court_debate') return;
+    // 批辛·乞休疏批红接线（先于通用批复后果·因乞休「驳=挽留」语义与通用「驳=挫面」相反·独立处理并 return）。
+    //   批红语义确定性可判：status 是引擎显式字段(approved/rejected)·非解析朱批关键词。
+    //   准→致仕落定+饯行忆；留→挽留忆(喜·imp6)+忠诚+3。AI 直接置 _retired 的既有路径(tm-ai-change-applier.js)不动·此为奏疏富路径增量。
+    if (m.type === '乞休' && m.from && (status === 'approved' || status === 'rejected')) {
+      var _retCh = (typeof findCharByName === 'function') ? findCharByName(m.from) : null;
+      if (_retCh && _retCh.alive !== false && !_retCh.isPlayer) {
+        if (status === 'approved') {
+          if (!_retCh._retired) { _retCh._retired = true; _retCh.retired = true; _retCh._retireTurn = GM.turn || 0; }
+          try { if (typeof NpcMemorySystem !== 'undefined' && NpcMemorySystem.remember) NpcMemorySystem.remember(m.from, '乞休获准·陛下赐宴饯行还乡·君臣有始有终', '喜', 6); } catch(e){}
+          try { if (typeof addEB === 'function') addEB('人物', m.from + ' 乞休获准·致仕还乡'); } catch(e){}
+        } else {
+          try { if (typeof NpcMemorySystem !== 'undefined' && NpcMemorySystem.remember) NpcMemorySystem.remember(m.from, '乞休不准·陛下温言慰留·命续任如故', '喜', 6); } catch(e){}
+          try { if (typeof adjustCharacterLoyalty === 'function') adjustCharacterLoyalty(_retCh, 3, '乞休获留·君恩挽留', { source: 'memorial-retire-retain' }); } catch(e){}
+        }
+      }
+      try { if (typeof _memorialSendReply === 'function') _memorialSendReply(m, status === 'approved' ? '准其致仕' : '温谕慰留'); } catch(e){}
+      m._commitApplied = true;
+      return;
+    }
     // 批复差异化后果（施于上奏者·经各自闸门）：准奏抚慰、驳回挫面、批示嘉纳、转交平淡、发廷议受瞩
     var fx = ({ approved:{loyalty:3,face:6,stress:-3,emo:'慰'}, rejected:{loyalty:-3,face:-8,stress:5,emo:'沮'}, annotated:{loyalty:1,face:2,stress:-1,emo:'敬'}, referred:{loyalty:0,face:0,stress:1,emo:'平'}, court_debate:{loyalty:1,face:0,stress:3,emo:'凛'} })[status] || { loyalty:0, face:0, stress:0, emo:'平' };
     var actionLbl = status === 'approved' ? '所奏准奏'

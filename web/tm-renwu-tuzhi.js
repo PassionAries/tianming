@@ -488,6 +488,19 @@ function adaptRels(c){
   return Object.keys(map).map(function(k){return map[k];}).sort(function(a,b){return Math.abs(b.strength)-Math.abs(a.strength);}).slice(0,8);
 }
 function adaptImpr(c){var out=[];if(c._impressions){Object.keys(c._impressions).forEach(function(on){var iv=c._impressions[on]||{};if(Math.abs(iv.favor||0)>=2)out.push({name:on,favor:Math.round(iv.favor),label:imprWord(iv.favor)});});}return out.sort(function(a,b){return Math.abs(b.favor)-Math.abs(a.favor);}).slice(0,12);}
+/* 批辛·观感五维(char.relations 亲/信/敬/畏/敌·此前 AI 看得见、玩家看不见)→图志只读展示·取偏离基线最大 top4 */
+function adaptWuweiRels(c){
+  if(!c||!c.relations||typeof c.relations!=='object')return [];
+  var out=[];
+  Object.keys(c.relations).forEach(function(on){
+    var r=c.relations[on];if(!r||typeof r!=='object')return;
+    var af=(r.affinity==null?50:r.affinity),tr=(r.trust==null?50:r.trust),re=(r.respect==null?50:r.respect),fe=(r.fear||0),ho=(r.hostility||0);
+    var dev=Math.abs(af-50)+Math.abs(tr-50)+Math.abs(re-50)+Math.abs(fe)+Math.abs(ho);
+    if(dev<8)return;   /* 近中性者不展示·免噪声 */
+    out.push({name:on,affinity:Math.round(af),trust:Math.round(tr),respect:Math.round(re),fear:Math.round(fe),hostility:Math.round(ho),dev:dev});
+  });
+  return out.sort(function(a,b){return b.dev-a.dev;}).slice(0,4);
+}
 function adaptMemory(c){var GM=_g(),full=[];if(Array.isArray(GM._memoryArchiveFull))full=GM._memoryArchiveFull.filter(function(m){return m&&m.char===c.name;});if(!full.length&&Array.isArray(c._memory))full=c._memory.slice();return full.map(function(m){return {turn:m.turn,emotion:m.emotion||'平',event:m.event||m.summary||'',who:m.who||''};});}
 /* 角色弧线 type 英文枚举→中文显示(原 dismissal/betrayal/arc_archive 等英文直显于人物图志/纪传卷·display-only 不改原始 type) */
 var ARC_TYPE_CN={appointment:'就任',dismissal:'罢免',death:'身故',inheritance:'承袭',promotion:'擢升',demotion:'降黜',transfer:'调任',retirement:'致仕',autonomous:'自主行止',title_grant:'册封',title_revoke:'褫夺',title_promote:'加衔',reward:'受赏',achievement:'功绩',event:'纪事',arc_archive:'早年事迹',war:'兵事',betrayal:'背弃',alliance:'结盟',marriage:'联姻'};
@@ -540,7 +553,7 @@ function adaptChar(c){
     wuchang:_wuchangOf(c), traits:adaptTraits(c),
     _mood:c._mood, location:c.location, _travelTo:c._travelTo, _imprisoned:c._imprisoned||c.imprisoned, _imprisonedTurn:c._imprisonedTurn, _imprisonReason:c._imprisonReason, _exiled:c._exiled||c.exiled, _exileReason:c._exileReason, _fled:c._fled||c._missing, _mourning:c._mourning, _retired:c._retired, _scheming:c._scheming,
     children:(c.children||[]).slice(), spouse:c.spouse, spouseRank:c.spouseRank, motherClan:c.motherClan,
-    bloodRelatives:adaptBlood(c), relationships:adaptRels(c), impressions:adaptImpr(c),
+    bloodRelatives:adaptBlood(c), relationships:adaptRels(c), impressions:adaptImpr(c), wuweiRels:adaptWuweiRels(c),
     memory:adaptMemory(c), memArchive:c._memArchive||[], arcs:adaptArcs(c), lifeExp:c._lifeExp||[],
     works:adaptWorks(c), career:adaptCareer(c)
   };
@@ -770,6 +783,12 @@ function tabRelations(p){
   if(!p.isPlayer){var _susp=((((_g()||{})._wdSuspicions)||[]).filter(function(s){return s&&s.who===p.name;})).slice().sort(function(a,b){return (b.turn||0)-(a.turn||0);});if(_susp.length){var _nowS=_g().turn||0;html+='<section class="sec full"><div class="sec-t">君 上 之 疑 <small>问对识破 · 君臣嫌隙</small></div><div class="opinion" style="border-left-color:#7a1f1a;background:linear-gradient(180deg,rgba(122,31,26,0.05),transparent)">'+_susp.map(function(s){var lab=(s.turn===_nowS?'本回合':(s.turn===_nowS-1?'上回合':'第'+(s.turn||0)+'回'));return '<div class="brk" style="margin:3px 0;color:var(--ink-soft)"><b style="color:#7a1f1a">'+esc(lab)+'</b> 君上'+(s.caught?'当面识破':'隐隐觉出')+'其有所隐瞒'+(s.hiding?'：所隐者“'+esc(s.hiding)+'”':'')+'</div>';}).join('')+'</div></section>';}}
   html+='<section class="sec full"><div class="sec-t">人 际 关 系 图 谱 <small>AffinityMap · 点节点可跳转</small></div><div class="egonet">'+egoNetwork(p)+'</div><div class="egolegend"><span><i style="border-color:#557f6f"></i>亲善</span><span><i style="border-color:#a83228"></i>嫌隙</span><span><i style="border-color:#9c8b6b"></i>泛交</span><span>线粗 ≈ 关系强弱</span></div></section>';
   html+='<section class="sec full"><div class="sec-t">关 系 强 弱 细 览</div><div class="relnet">'+((p.relationships||[]).map(function(r){var L=relLabel(r.strength);return '<div class="relrow" onclick="TMZhi.selectP(\''+oj(r.name)+'\')"><span class="nm">'+esc(r.name)+'</span><span class="lbl '+L[1]+'">'+esc(r.label||L[0])+'</span><span class="meter"><i></i>'+relMeter(r.strength)+'</span><span class="sc">'+(r.strength>0?'+':'')+r.strength+'</span></div>';}).join('')||'<div class="stub">暂无关系。</div>')+'</div></section>';
+  // 批辛·观感五维（char.relations 引擎五维·此前只喂 AI·今上屏只读）
+  if(!p.isPlayer&&p.wuweiRels&&p.wuweiRels.length){
+    html+='<section class="sec full"><div class="sec-t">观 感 五 维 <small>此人对诸人的亲·信·敬·畏·敌（引擎五维·只读）</small></div><div class="rows">'+p.wuweiRels.map(function(w){
+      return '<div class="row"><span class="k link" onclick="TMZhi.selectP(\''+oj(w.name)+'\')">'+esc(w.name)+'</span><span class="v" style="font-size:12px;color:var(--ink-soft)">亲'+w.affinity+' · 信'+w.trust+' · 敬'+w.respect+' · 畏'+w.fear+' · 敌'+w.hostility+'</span></div>';
+    }).join('')+'</div></section>';
+  }
   html+='<div class="dgrid"><section class="sec"><div class="sec-t">对 他 人 印 象</div><div class="rows">'+((p.impressions||[]).map(function(im){var col=im.favor>=0?'good':'bad';return '<div class="row"><span class="k">'+esc(im.name)+'</span><span class="v"><span class="lbl '+col+'" style="font-size:12px;padding:1px 8px;border-radius:8px">'+esc(im.label)+'（'+(im.favor>0?'+':'')+im.favor+'）</span></span></div>';}).join('')||'<div class="prose">暂无印象记录。</div>')+'</div></section>'
     +'<section class="sec"><div class="sec-t">血 亲</div><div class="rows">'+((p.bloodRelatives||[]).filter(function(m){return !m.self;}).map(function(m){return '<div class="row"><span class="k">'+esc(m.relation)+'</span><span class="v link" onclick="TMZhi.selectP(\''+oj(m.name)+'\')">'+esc(m.name)+(m.dead?' †':'')+'</span></div>';}).join('')||'<div class="prose">暂无血亲记录。</div>')+'</div></section></div>';
   return html;
@@ -872,9 +891,9 @@ function renderFolioPaihang(){
 }
 /* ===================== 朝野动态（NPC 自主行动 feed·读 _npcActionLedger） ===================== */
 // behaviorType→中文：优先全局单一真源 TM.NPC.behaviorVerbCN，缺则本地兜底（镜像 tm-endturn-apply.js 的 _NPC_BEHAVIOR_CN·display-only）
-var _DT_BEHAVIOR_CN={appoint:'任用',dismiss:'罢黜',declare_war:'宣战',reward:'赏赐',punish:'惩处',request_loyalty:'拉拢',reform:'推行新政',betray:'背叛',conspire:'密谋串联',petition:'进谏',investigate:'查劾',impeach:'弹劾',obstruct:'阻挠',slander:'中伤',reconcile:'和解',mentor:'提携',train_troops:'操练',fortify:'整饬城防',patrol:'巡防',flee:'出逃',retire:'告老',travel:'游历',develop:'兴修',donate:'捐输',hoard:'囤积',smuggle:'走私',suppress:'镇压',petition_jointly:'联名上书',recruit:'招募',study:'查访',recommend:'举荐',confront:'对质',mediate:'调和',frame_up:'构陷',expose_secret:'揭发',share_intelligence:'通风报信',guarantee:'担保',gift_present:'馈赠',private_visit:'私访',invite_banquet:'宴请',correspond_secret:'通密信',form_clique:'结党',marriage_alliance:'联姻',master_disciple:'收徒',duel_poetry:'诗文唱和',mourn_together:'共哀',mourn:'致哀',rival_compete:'争胜',obey:'听命',desert:'哗变'};
+var _DT_BEHAVIOR_CN={appoint:'任用',dismiss:'罢黜',declare_war:'宣战',reward:'赏赐',punish:'惩处',request_loyalty:'拉拢',reform:'推行新政',betray:'背叛',conspire:'密谋串联',petition:'进谏',investigate:'查劾',impeach:'弹劾',obstruct:'阻挠',slander:'中伤',reconcile:'和解',mentor:'提携',train_troops:'操练',fortify:'整饬城防',patrol:'巡防',flee:'出逃',retire:'告老',travel:'游历',develop:'兴修',donate:'捐输',hoard:'囤积',smuggle:'走私',suppress:'镇压',petition_jointly:'联名上书',recruit:'招募',study:'查访',recommend:'举荐',confront:'对质',mediate:'调和',frame_up:'构陷',expose_secret:'揭发',share_intelligence:'通风报信',guarantee:'担保',gift_present:'馈赠',private_visit:'私访',invite_banquet:'宴请',correspond_secret:'通密信',form_clique:'结党',marriage_alliance:'联姻',master_disciple:'收徒',duel_poetry:'诗文唱和',mourn_together:'共哀',mourn:'致哀',rival_compete:'争胜',obey:'听命',desert:'哗变',condole:'吊唁',celebrate_birthday:'贺寿',propose_match:'作伐',entrust_orphan:'托孤',seek_instruction:'求教',gift_medicine:'赠药',farewell_feast:'饯行',welcome_feast:'接风',express_gratitude:'谢恩',intercede:'求情',petition_retire:'乞休'};
 var _DT_TONE_HOSTILE={impeach:1,slander:1,frame_up:1,expose_secret:1,conspire:1,betray:1,obstruct:1,form_clique:1,desert:1,rival_compete:1,confront:1,smuggle:1,hoard:1,punish:1,declare_war:1,suppress:1,investigate:1};
-var _DT_TONE_FRIENDLY={recommend:1,guarantee:1,gift_present:1,invite_banquet:1,private_visit:1,correspond_secret:1,marriage_alliance:1,master_disciple:1,mentor:1,reconcile:1,mediate:1,duel_poetry:1,mourn_together:1,mourn:1,reward:1,request_loyalty:1,petition_jointly:1,share_intelligence:1,recruit:1};
+var _DT_TONE_FRIENDLY={recommend:1,guarantee:1,gift_present:1,invite_banquet:1,private_visit:1,correspond_secret:1,marriage_alliance:1,master_disciple:1,mentor:1,reconcile:1,mediate:1,duel_poetry:1,mourn_together:1,mourn:1,reward:1,request_loyalty:1,petition_jointly:1,share_intelligence:1,recruit:1,condole:1,celebrate_birthday:1,propose_match:1,entrust_orphan:1,seek_instruction:1,gift_medicine:1,farewell_feast:1,welcome_feast:1,express_gratitude:1,intercede:1,petition_retire:1};
 function _dtTone(bt){var k=String(bt||'').toLowerCase().trim();return _DT_TONE_HOSTILE[k]?'h':(_DT_TONE_FRIENDLY[k]?'f':'n');}
 function _dtVerb(bt){try{if(window.TM&&TM.NPC&&typeof TM.NPC.behaviorVerbCN==='function')return TM.NPC.behaviorVerbCN(bt);}catch(e){}var k=String(bt==null?'':bt).toLowerCase().trim();return _DT_BEHAVIOR_CN[k]||(/[a-z]/i.test(k)?'举动':(bt||'举动'));}
 function _dtLedger(){var L=(_g()&&_g()._npcActionLedger);return Array.isArray(L)?L:[];}

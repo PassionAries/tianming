@@ -4090,6 +4090,27 @@
         return bits.length ? (' ⟨' + bits.join('·') + '⟩') : '';
       }
 
+      // 批辛·关系网线索(座主/同年/血亲/党派压缩版·每深度≤1项)——喂 sc1b 让书信/求情/结盟涉及真实人脉网络(此前只喂自主决策 batch prompt)。
+      function _netRelCueSC(c) {
+        if (!c || !c.name) return '';
+        var bits = [];
+        try {
+          if (c.party && c.party !== '无党派') bits.push('党:' + String(c.party).slice(0, 8));   // 党
+          if (typeof getBloodRelatives === 'function') {
+            var _br = getBloodRelatives(c.name).slice(0, 2);
+            if (_br.length) bits.push('亲:' + _br.map(function(r){ return r.name + '(' + r.relation + ')'; }).join('/'));   // 亲
+          }
+          if (c.source === '科举') {   // 科举出身:座主/同年
+            var _mz = '';
+            if (typeof P !== 'undefined' && P.keju && P.keju.history) P.keju.history.forEach(function(h){ if (h.topThree && h.topThree.indexOf(c.name) >= 0 && h.chiefExaminer) _mz = h.chiefExaminer; });
+            if (_mz) bits.push('座师:' + _mz);   // 座主
+            var _sy = (GM.chars||[]).filter(function(x){ return x && x.alive !== false && x.source === '科举' && x.recruitTurn === c.recruitTurn && x.name !== c.name; }).slice(0, 2).map(function(x){ return x.name; });
+            if (_sy.length) bits.push('同年:' + _sy.join('/'));   // 同年
+          }
+        } catch(_nrE){}
+        return bits.length ? (' 〖' + bits.slice(0, 4).join('·') + '〗') : '';
+      }
+
       var _sc1bP = (async function() {
       // ═══ Sub-call 1b · 文事鸿雁人际专项（独立预算 8k，避免文事/鸿雁/互动被 sc1 庞大 schema 挤出）═══
       try {
@@ -4100,6 +4121,7 @@
         try {
           var _liveCharsB = (GM.chars||[]).filter(function(c){return c && c.alive!==false;});
           _liveCharsB.sort(function(a,b){return (a.rank||99)-(b.rank||99);});
+          var _netBudget = 600;   // 批辛·关系网线索总预算增量≤600 字·超则截断
           var _briefListB = _liveCharsB.slice(0,24).map(function(c){
             var _p = c.name;
             if (c.officialTitle) _p += '\u00B7' + c.officialTitle;
@@ -4110,6 +4132,8 @@
             if (_favA) _p += (_favA > 0 ? '\u00B7\u53D7\u6069' : '\u00B7\u79EF\u6028') + Math.abs(_favA);
             if (Array.isArray(c.traits) && c.traits.length) _p += ' \u7279{' + c.traits.slice(0,3).join(',') + '}';
             _p += _cogRelCueSC(c);   // 【B1】写信人认知(所求/口吻由认知带)+ 与他人交情(睦/隙·谁给谁写信)
+            var _netCue = _netRelCueSC(c);   // 批辛·座主/同年/血亲/党派人脉网络(受 _netBudget 截断)
+            if (_netCue && _netBudget > 0) { if (_netCue.length > _netBudget) _netCue = _netCue.slice(0, _netBudget); _netBudget -= _netCue.length; _p += _netCue; }
             return _p;
           });
           _charsBriefB = _briefListB.join('\n');
@@ -4124,6 +4148,27 @@
         if (_pNameB) tp1b += '\u73A9\u5BB6\u89D2\u8272\uFF1A' + _pNameB + '\uFF08\u4E0D\u5F97\u4F5C\u4E3A npc_interactions.actor\uFF0C\u4E0D\u5F97 autonomous \u4F5C cultural_works\uFF09\n';
         if (_recentSZJ) tp1b += '\n\u3010\u672C\u56DE\u5408\u5DF2\u8BB0\u65F6\u653F\u3011\n' + _recentSZJ + '\n';
         if (_charsBriefB) tp1b += '\n\u3010\u4E3B\u8981\u4EBA\u7269\uFF08\u542B\u4F4D\u7F6E/\u5B98\u804C/\u6D3E\u7CFB/\u7279\u8D28\uFF09\u3011\n' + _charsBriefB + '\n';
+        // 批辛·近期下狱/流放者及其至交（供 intercede 求情有据：为座主/同僚求情有据可依）
+        try {
+          var _pkNow = GM.turn || 0, _pkLines = [];
+          (GM.chars||[]).forEach(function(c){
+            if (!c || c.alive === false || _pkLines.length >= 5) return;
+            var _st = (c._imprisoned && (c._imprisonedTurn == null || _pkNow - c._imprisonedTurn <= 3)) ? '下狱'
+                    : (c._exiled && (c._exileTurn == null || _pkNow - c._exileTurn <= 3)) ? '流放' : '';
+            if (!_st) return;
+            var _al = [];
+            try { if (typeof AffinityMap !== 'undefined' && AffinityMap.getRelations) _al = (AffinityMap.getRelations(c.name)||[]).filter(function(r){ if (!r || r.value <= 20) return false; var _ac = (typeof findCharByName==='function') ? findCharByName(r.name) : null; return _ac && _ac.alive !== false && !_ac.isPlayer; }).slice(0,2).map(function(r){ return r.name; }); } catch(_paE){}
+            _pkLines.push('  ' + c.name + '（' + _st + '）' + (_al.length ? '·至交:' + _al.join('/') : ''));
+          });
+          if (_pkLines.length) tp1b += '\n【近期下狱/流放者及至交·intercede 求情素材】\n' + _pkLines.join('\n') + '\n';
+        } catch(_pkE){}
+        // 批辛·群臣前瞻意图（NPC 台账 active plans top5·仅作 AI 演绎素材·不建机械执行器·由 AI 自行决定是否续演）
+        try {
+          var _plA = (typeof window !== 'undefined' && window.TM && TM.NPC && TM.NPC.ActionLedger && TM.NPC.ActionLedger.ensurePlans) ? TM.NPC.ActionLedger.ensurePlans(GM) : (GM._npcPlans || []);
+          var _plActive = (Array.isArray(_plA) ? _plA : []).filter(function(p){ return p && p.actor && p.status === 'active'; }).slice(0, 5);
+          var _plVerb = function(t){ try { if (window.TM && TM.NPC && TM.NPC.behaviorVerbCN) return TM.NPC.behaviorVerbCN(t); } catch(_v){} return t; };
+          if (_plActive.length) tp1b += '\n【群臣前瞻意图·台账·仅供演绎参考】' + _plActive.map(function(p){ return p.actor + '正谋' + _plVerb(p.type) + (p.target ? '→'+p.target : ''); }).join('；') + '\n';
+        } catch(_plE){}
         // 长期事势注入·让后人戏说/鸿雁/密信能涉及多年未竣的工程
         if (typeof ChronicleTracker !== 'undefined' && ChronicleTracker.getAIContextString) {
           var _chronCtxB = ChronicleTracker.getAIContextString();
@@ -4171,6 +4216,8 @@
         tp1b += '  \u7CFB\u7EDF\u81EA\u52A8\u8DEF\u7531\uFF1Aimpeach/slander/expose_secret \u2192 \u594F\u758F\u5F39\u7AE0\uFF1Brecommend/guarantee/petition_jointly \u2192 \u8350\u8868\uFF1B\n';
         tp1b += '  private_visit/invite_banquet/duel_poetry \u2192 \u95EE\u5BF9\u6C42\u89C1\uFF1Bgift_present \u2192 \u9E3F\u96C1\u9644\u793C\uFF1Bcorrespond_secret/share_intelligence \u2192 \u9E3F\u96C1\u5BC6\u4FE1\uFF1B\n';
         tp1b += '  frame_up/betray/mediate/reconcile \u2192 \u98CE\u95FB\uFF1Bmaster_disciple \u2192 \u8D77\u5C45\u6CE8\u3002\n';
+        tp1b += '  \u6279\u8F9B\u65B0\u578B\uFF1Acondole\u540A\u5501/celebrate_birthday\u8D3A\u5BFF/farewell_feast\u996F\u884C/welcome_feast\u63A5\u98CE\u2192\u6C42\u89C1\u6216\u9E3F\u96C1\uFF1Bpropose_match\u4F5C\u4F10/entrust_orphan\u6258\u5B64/seek_instruction\u6C42\u6559/gift_medicine\u8D60\u836F\u2192\u4EBA\u9645\uFF1Bexpress_gratitude\u8C22\u6069(\u53D7\u8D4F/\u5347\u8FC1/\u5F97\u8D66\u8005\u5B9C)/intercede\u6C42\u60C5(\u4E3A\u4E0B\u72F1\u6D41\u653E\u540C\u50DA)/petition_retire\u4E5E\u4F11\u2192\u5BF9\u541B\u594F\u758F\u3002\n';
+        tp1b += '  \u5BB4\u96C6/\u8BD7\u4F1A/\u996F\u884C/\u6258\u5B64\u7C7B\u53EF\u5E26 involvedOthers \u5217\u5168\u4F53\u4E0E\u4F1A\u8005(\u7ED3\u540C\u5E2D\u4E4B\u8C0A)\uFF1Bgift_present \u53EF\u5E26 giftPurpose(\u8D3A\u5BFF/\u6C42\u60C5/\u8C22\u6069)\u3002\n';
         tp1b += '  \u5B57\u6BB5\uFF1A{actor, target, type, description(30-60\u5B57), involvedOthers?, publicKnown?(true/false)}\n';
         tp1b += '  \u6309\u4EBA\u7269\u6027\u683C/\u6D3E\u7CFB/\u5173\u7CFB\u9009\u5408\u9002\u7684 type\uFF0C\u907F\u514D"\u5FA1\u53F2\u5FC5\u8C0F/\u5C06\u519B\u5FC5\u8BF7\u6218"\u5DE5\u5177\u4EBA\u6A21\u677F\u3002\n';
         tp1b += '  \u7279\u522B\u6CE8\u610F\uFF1A\u5305\u542B\u5F39\u52BE/\u8350\u4E3E/\u5BC6\u5BFF/\u8FAD\u7E41/\u5F92\u5F92\u4F20\u9053\u7B49\u53E4\u5178\u653F\u6CBB\u884C\u4E3A\uFF0C\u4E00\u90E8\u5206 publicKnown=true \u8FDB\u98CE\u95FB\uFF0C\u4E00\u90E8\u5206 false \u79C1\u4E0B\u3002\n\n';

@@ -72,12 +72,25 @@ var NPC_INTERACTION_TYPES = {
   master_disciple:   { label:'师徒缔结', conflict:0, effect:{respect:+20, affinity:+10}, label_add_actor:['master'], label_add_target:['disciple'], mood:'喜', important:9, fameActor:+5, virtueActor:+8, virtueTarget:+5 },
   duel_poetry:       { label:'诗文切磋', conflict:0, effect:{respect:+5, affinity:+3}, label_add:['poet_friend'], mood:'平', important:3, fameActor:+4, virtueActor:+3 },
   share_intelligence:{ label:'通风报信', conflict:0, effect:{trust:+8}, mood:'平', important:5, fameActor:-1 },
-  betray:            { label:'背叛', conflict:+3, effect:{trust:-50, affinity:-30, hostility:+25}, mood:'恨', important:10, fameActor:-15, virtueActor:-20 },
+  betray:            { label:'背叛', conflict:+3, effect:{trust:-50, affinity:-30, hostility:+25}, effectActor:{hostility:+15}, mood:'恨', important:10, fameActor:-15, virtueActor:-20 },
   reconcile:         { label:'和解', conflict:-2, effect:{affinity:+10, trust:+5}, mood:'喜', important:6, fameActor:+2, virtueActor:+3 },
   mourn_together:    { label:'共哀', conflict:-1, effect:{affinity:+8}, mood:'忧', important:5, fameActor:+1, virtueActor:+2 },
   rival_compete:     { label:'竞争', conflict:+1, effect:{affinity:-5, respect:+3}, mood:'平', important:4, fameActor:+1 },
   guarantee:         { label:'担保', conflict:0, effect:{trust:+10, owesFavor:+1}, mood:'平', important:5, fameActor:+2, virtueActor:+4 },
-  slander:           { label:'诽谤', conflict:+1, effect:{affinity:-12, hostility:+10}, mood:'恨', important:6, fameActor:-4, fameTarget:-3, virtueActor:-3 }
+  slander:           { label:'诽谤', conflict:+1, effect:{affinity:-12, hostility:+10}, mood:'恨', important:6, fameActor:-4, fameTarget:-3, virtueActor:-3 },
+  // ── 批辛·新交互家族（吊唁/贺寿/作伐/托孤/求教/赠药/饯行/接风）·丰富 respect/fear 二维 ──
+  condole:           { label:'吊唁', conflict:0, effect:{affinity:+8, respect:+4}, mood:'忧', important:5, virtueActor:+2 },
+  celebrate_birthday:{ label:'贺寿', conflict:0, effect:{affinity:+6, respect:+3, owesFavor:+1}, mood:'喜', important:4, fameActor:+1 },
+  propose_match:     { label:'作伐', conflict:0, effect:{trust:+6, affinity:+4, owesFavor:+1}, mood:'喜', important:5, fameActor:+1 },   // 只牵线·正式缔结仍归 marriage_alliance
+  entrust_orphan:    { label:'托孤', conflict:0, effect:{trust:+30, respect:+15, owesFavor:+2}, effectActor:{trust:+25}, mood:'忧', important:9, virtueTarget:+5 },
+  seek_instruction:  { label:'求教', conflict:0, effect:{affinity:+5}, effectActor:{respect:+12, affinity:+5}, mood:'敬', important:4 },   // target 对 actor 观感 effect·actor 对 target 之敬在 effectActor
+  gift_medicine:     { label:'赠药', conflict:0, effect:{affinity:+7, trust:+5, fear:-3}, mood:'喜', important:4, fameActor:+1 },   // 示好化解戒惧·补 fear 维
+  farewell_feast:    { label:'饯行', conflict:0, effect:{affinity:+6, respect:+3}, mood:'忧', important:4, fameActor:+1 },
+  welcome_feast:     { label:'接风', conflict:0, effect:{affinity:+6, respect:+3}, mood:'喜', important:4, fameActor:+1 },
+  // ── 批辛·NPC→玩家四新面（谢恩/求情/乞休·由 apply.dispatch 走奏疏；贺寿等复用上族）──
+  express_gratitude: { label:'谢恩', conflict:0, effect:{affinity:+3, trust:+2}, mood:'喜', important:4, fameActor:+1, virtueActor:+1 },
+  intercede:         { label:'求情', conflict:0, effect:{affinity:+2}, mood:'忧', important:5, virtueActor:+2 },
+  petition_retire:   { label:'乞休', conflict:0, effect:{}, mood:'忧', important:6 }
 };
 
 // ── 势力互动类型 ──
@@ -234,6 +247,18 @@ function applyNpcInteraction(actor, target, type, extra) {
     }
   });
   if (eff.owesFavor) rBA.owesFavor = (rBA.owesFavor || 0) + eff.owesFavor;
+
+  // 批辛·不对称建模：actor 对 target 的观感变化 ≠ target 对 actor（如求教者敬业师、托孤者更托付、背叛者亦生恨）。
+  //   仅当型定义显式声明 effectActor 时才写 rAB·同 clamp。无 effectActor 的型 rAB 五维逐字节不变（零波及）。
+  var effA = def.effectActor;
+  if (effA) {
+    ['affinity','trust','respect','fear','hostility'].forEach(function(k) {
+      if (effA[k] !== undefined) {
+        rAB[k] = Math.max(-100, Math.min(100, (rAB[k] || 0) + effA[k]));
+      }
+    });
+    if (effA.owesFavor) rAB.owesFavor = (rAB.owesFavor || 0) + effA.owesFavor;
+  }
 
   // 冲突级变化（双向一致）
   if (def.conflict) {

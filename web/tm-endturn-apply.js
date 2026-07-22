@@ -26,7 +26,7 @@
 
 
   // ── NPC 行为类型→中文动词(供记忆/事件文案·复用 prompt 既有标签·防英文 behaviorType 漏进中文叙事·2026-06-13) ──
-  var _NPC_BEHAVIOR_CN = { appoint:'任用', dismiss:'罢黜', declare_war:'宣战', reward:'赏赐', punish:'惩处', request_loyalty:'拉拢', reform:'推行新政', betray:'背叛', conspire:'密谋串联', petition:'进谏', investigate:'查劾', impeach:'弹劾', obstruct:'阻挠', slander:'中伤', reconcile:'和解', mentor:'提携', train_troops:'操练', fortify:'整饬城防', patrol:'巡防', flee:'出逃', retire:'告老', travel:'游历', develop:'兴修', donate:'捐输', hoard:'囤积', smuggle:'走私', suppress:'镇压', petition_jointly:'联名上书', recruit:'招募', study:'查访', recommend:'举荐', confront:'对质', mediate:'调和', frame_up:'构陷', expose_secret:'揭发', share_intelligence:'通风报信', guarantee:'担保', gift_present:'馈赠', private_visit:'私访', invite_banquet:'宴请', correspond_secret:'通密信', form_clique:'结党', marriage_alliance:'联姻', master_disciple:'收徒', duel_poetry:'诗文唱和', mourn_together:'共哀', mourn:'致哀', rival_compete:'争胜', obey:'听命', desert:'哗变' };
+  var _NPC_BEHAVIOR_CN = { appoint:'任用', dismiss:'罢黜', declare_war:'宣战', reward:'赏赐', punish:'惩处', request_loyalty:'拉拢', reform:'推行新政', betray:'背叛', conspire:'密谋串联', petition:'进谏', investigate:'查劾', impeach:'弹劾', obstruct:'阻挠', slander:'中伤', reconcile:'和解', mentor:'提携', train_troops:'操练', fortify:'整饬城防', patrol:'巡防', flee:'出逃', retire:'告老', travel:'游历', develop:'兴修', donate:'捐输', hoard:'囤积', smuggle:'走私', suppress:'镇压', petition_jointly:'联名上书', recruit:'招募', study:'查访', recommend:'举荐', confront:'对质', mediate:'调和', frame_up:'构陷', expose_secret:'揭发', share_intelligence:'通风报信', guarantee:'担保', gift_present:'馈赠', private_visit:'私访', invite_banquet:'宴请', correspond_secret:'通密信', form_clique:'结党', marriage_alliance:'联姻', master_disciple:'收徒', duel_poetry:'诗文唱和', mourn_together:'共哀', mourn:'致哀', rival_compete:'争胜', obey:'听命', desert:'哗变', condole:'吊唁', celebrate_birthday:'贺寿', propose_match:'作伐', entrust_orphan:'托孤', seek_instruction:'求教', gift_medicine:'赠药', farewell_feast:'饯行', welcome_feast:'接风', express_gratitude:'谢恩', intercede:'求情', petition_retire:'乞休' };
   function _npcBehaviorVerbCN(bt) {
     var k = String(bt == null ? '' : bt).toLowerCase().trim();
     if (_NPC_BEHAVIOR_CN[k]) return _NPC_BEHAVIOR_CN[k];
@@ -4716,7 +4716,7 @@
               // ── 当事人（actor、target）写入记忆 ──
               if (typeof NpcMemorySystem !== 'undefined') {
                 var _aggressive = ['impeach','slander','frame_up','betray','expose_secret'].indexOf(it.type) >= 0;
-                var _friendly = ['recommend','guarantee','petition_jointly','private_visit','invite_banquet','gift_present','duel_poetry'].indexOf(it.type) >= 0;
+                var _friendly = ['recommend','guarantee','petition_jointly','private_visit','invite_banquet','gift_present','duel_poetry','celebrate_birthday','propose_match','seek_instruction','gift_medicine','welcome_feast','express_gratitude'].indexOf(it.type) >= 0;
                 var _emo = _aggressive ? '怒' : (_friendly ? '喜' : '平');
                 var _wt = _aggressive ? 6 : (_friendly ? 4 : 3);
                 if (it.actor && it.actor !== _pName) {
@@ -4726,10 +4726,16 @@
                   NpcMemorySystem.remember(it.target, ' ' + it.actor + ' 对我 ' + typeInfo + (it.description ? '——' + it.description.slice(0,30) : ''), _aggressive ? '恨' : _emo, _wt);
                 }
               }
-              // 涉及第三方——也记入他们的记忆
+              // 涉及第三方——记入他们的记忆·并与 actor 结轻社交纽带（批辛·多人雅集：宴集/诗会/饯行的与会者同席之谊）
               if (Array.isArray(it.involvedOthers) && typeof NpcMemorySystem !== 'undefined') {
+                var _tieN = 0;   // 走 AffinityMap 因其为玩家可见系统(图志关系页读)·+2 轻纽带·封顶6人·死者/玩家跳过
                 it.involvedOthers.forEach(function(n) {
-                  if (n && n !== _pName) NpcMemorySystem.remember(n, '见 ' + it.actor + ' 对 ' + it.target + ' ' + typeInfo, '平', 3);
+                  if (!n || n === _pName) return;
+                  NpcMemorySystem.remember(n, '见 ' + it.actor + ' 对 ' + it.target + ' ' + typeInfo, '平', 3);
+                  if (n !== it.actor && _tieN < 6 && typeof AffinityMap !== 'undefined') {
+                    var _invCh = (typeof findCharByName === 'function') ? findCharByName(n) : null;
+                    if (!_invCh || _invCh.alive !== false) { AffinityMap.add(it.actor, n, 2, '同席·' + typeInfo); _tieN++; }
+                  }
                 });
               }
               // ── NPC 对玩家行为的分发 ──
@@ -4749,7 +4755,7 @@
                 if (typeof PhaseD !== 'undefined' && PhaseD.addFengwen) {
                   var _fwType = (['impeach','slander','frame_up','expose_secret'].indexOf(it.type)>=0) ? '告状'
                               : (['correspond_secret','share_intelligence'].indexOf(it.type)>=0) ? '密札'
-                              : (['private_visit','invite_banquet','duel_poetry','gift_present','recommend','guarantee','petition_jointly'].indexOf(it.type)>=0) ? '耳报'
+                              : (['private_visit','invite_banquet','duel_poetry','gift_present','recommend','guarantee','petition_jointly','condole','celebrate_birthday','propose_match','entrust_orphan','seek_instruction','gift_medicine','farewell_feast','welcome_feast'].indexOf(it.type)>=0) ? '耳报'
                               : '风议';
                   PhaseD.addFengwen({
                     type: _fwType,
@@ -4827,7 +4833,7 @@
               from: actor, to: '玩家',
               fromLocation: _fromLoc, toLocation: _capital,
               letterType: it.type === 'gift_present' ? 'gift' : 'intelligence',
-              content: desc,
+              content: (it.giftPurpose ? '（' + it.giftPurpose + '之礼）' : '') + desc,   // 批辛·giftPurpose(贺寿/求情/谢恩)进鸿雁文案
               sentTurn: turn, deliveryTurn: turn,
               _sentDay: _nowD1, _deliveryDay: _nowD1, _travelDays: 0,
               status: 'delivered', urgency: 'normal',
@@ -4843,6 +4849,21 @@
               title: actor + (it.type==='betray'?'似有不臣之心':'恐有构陷之谋'),
               content: desc, status: 'pending_review', turn: turn, _arrivedTurn: turn
             });
+          } else if (it.type === 'condole' || it.type === 'celebrate_birthday' || it.type === 'farewell_feast' || it.type === 'welcome_feast') {
+            // 批辛·吊唁/贺寿/饯行/接风 → 在京者阶下求见·在外者鸿雁附书（按在京与否路由）
+            if (_actorChDp && typeof _tmIsForeignCourtChar === 'function' && _tmIsForeignCourtChar(_actorChDp)) return;
+            var _feCap = GM._capital || '京城', _feLoc = _actorChDp && _actorChDp.location;
+            if (!_feLoc || (typeof _isSameLocation === 'function' ? _isSameLocation(_feLoc, _feCap) : String(_feLoc) === String(_feCap))) {
+              (GM._pendingAudiences = GM._pendingAudiences || []).push({ name: actor, reason: desc, turn: turn });   // arch-ok·dispatch 既有玩家求见队列写口(镜像 private_visit 分支)
+            } else {
+              (GM.letters = GM.letters || []).push({ id: 'letter_auto_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), from: actor, to: '玩家', fromLocation: _feLoc||'远方', toLocation: _feCap, letterType: 'personal', content: desc, sentTurn: turn, deliveryTurn: turn, _sentDay: 0, _deliveryDay: 0, _travelDays: 0, status: 'delivered', urgency: 'normal', _npcInitiated: true, _replyExpected: false, _playerRead: false, _sendMode: 'multi_courier' });   // arch-ok·dispatch 既有鸿雁写口(镜像 gift_present 分支)
+            }
+          } else if (it.type === 'express_gratitude' || it.type === 'intercede' || it.type === 'petition_retire') {
+            // 批辛·谢恩→谢表·求情→讼冤·乞休→乞休疏（本朝臣工上奏疏·pending·乞休疏批红接线见 tm-memorials._commitMemorialDecisions）
+            if (_actorNonCourt) return;
+            var _m4t = it.type === 'express_gratitude' ? '谢表' : it.type === 'intercede' ? '讼冤' : '乞休';
+            var _m4h = it.type === 'express_gratitude' ? (actor + '谢恩') : it.type === 'intercede' ? (actor + '为' + ((it.involvedOthers && it.involvedOthers[0]) || '同僚') + '求情') : (actor + '乞骸骨');
+            (GM.memorials = GM.memorials || []).push({ id: 'mem_auto_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), from: actor, type: _m4t, subtype: '公疏', title: _m4h, content: desc, status: 'pending_review', turn: turn, _arrivedTurn: turn });   // arch-ok·dispatch 既有奏疏写口(镜像 impeach/recommend 分支)
           }
           // 所有对玩家的 NPC 行为也记起居注
           if (GM.qijuHistory) {

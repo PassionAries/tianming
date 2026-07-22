@@ -23,7 +23,7 @@ const index = read('index.html');
 const verifyAll = read('scripts/verify-all.js');
 
 assert(
-  manager.includes('<main class="tm-mall tm-mall-page" role="main" aria-label="'),
+  manager.includes('<main class="tm-mall tm-mall-page atelier-shell" role="main" aria-label="'),
   'content manager should render the workshop as a full-page main surface'
 );
 assert(
@@ -60,7 +60,7 @@ assert(
   'full-page workshop should keep search usable on narrow viewports'
 );
 assert(
-  index.includes('tm-online-mall.css?v=20260605-mall-fullpage'),
+  index.includes('tm-online-mall.css?v=20260722-baigong-landscape'),
   'index should bust cached mall CSS after the full-page fix'
 );
 assert(

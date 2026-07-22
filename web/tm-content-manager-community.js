@@ -27,19 +27,35 @@
   function loggedInNow() { return !!(window.TM && TM.OnlineClient && TM.OnlineClient.isLoggedIn && TM.OnlineClient.isLoggedIn()); }
   // --- 擂台 ---
   function loadArenas() {
-    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.arenas)) return;
+    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.arenas)) {
+      state.arenaList = []; state.arenasLoaded = true; state.arenasLoading = false;
+      state.arenaStatus = 'error'; state.arenaError = '正式擂台接口未加载'; render(); return;
+    }
     state.arenasLoading = true;
+    state.arenaStatus = 'loading'; state.arenaError = '';
     TM.OnlineClient.arenas('', state.onlineApiUrl || undefined).then(function(res){
-      state.arenaList = (res && res.arenas) || []; state.arenasLoaded = true; state.arenasLoading = false; render();
-    }).catch(function(){ state.arenasLoading = false; render(); });
+      if (!res || res.success === false) throw new Error((res && res.error) || '正式擂台接口返回失败');
+      state.arenaList = Array.isArray(res.arenas) ? res.arenas : []; state.arenasLoaded = true; state.arenasLoading = false;
+      state.arenaStatus = 'ok'; state.arenaError = ''; render();
+    }).catch(function(error){
+      state.arenaList = []; state.arenasLoaded = true; state.arenasLoading = false;
+      state.arenaStatus = 'error'; state.arenaError = (error && error.message) || '正式擂台接口不可用'; render();
+    });
   }
   function openArena(id) {
-    state.arenaOpen = true; state.arenaDetail = null; state.arenaMsg = ''; render();
+    state.arenaOpen = true; state.arenaOpenId = String(id); state.arenaDetail = null; state.arenaMsg = '';
+    state.arenaDetailStatus = 'loading'; state.arenaDetailError = ''; render();
     TM.OnlineClient.arenaDetail(id, state.onlineApiUrl || undefined).then(function(res){
-      if (res && res.success && state.arenaOpen) { state.arenaDetail = res; render(); }
-    }).catch(function(){});
+      if (!res || res.success === false || !res.arena) throw new Error((res && res.error) || '擂台详情返回无效');
+      if (state.arenaOpen && state.arenaOpenId === String(id)) {
+        state.arenaDetail = res; state.arenaDetailStatus = 'ok'; state.arenaDetailError = ''; render();
+      }
+    }).catch(function(error){
+      if (!state.arenaOpen || state.arenaOpenId !== String(id)) return;
+      state.arenaDetailStatus = 'error'; state.arenaDetailError = (error && error.message) || '擂台详情接口不可用'; render();
+    });
   }
-  function closeArena() { state.arenaOpen = false; state.arenaDetail = null; render(); }
+  function closeArena() { state.arenaOpen = false; state.arenaOpenId = ''; state.arenaDetail = null; render(); }
   function createArenaUI() {
     if (!loggedInNow()) { state.arenasMsg = '登录后可开擂台。'; render(); return; }
     var t = document.getElementById('tm-arena-title'), m = document.getElementById('tm-arena-metric'), s = document.getElementById('tm-arena-scn');
@@ -67,7 +83,11 @@
     if (!state.arenaOpen) return '';
     var d = state.arenaDetail;
     var inner;
-    if (!d || !d.arena) { inner = '<div class="empty"><div class="glyph">擂</div><div class="t">正在开擂…</div></div>'; }
+    if (!d || !d.arena) {
+      inner = state.arenaDetailStatus === 'error'
+        ? truthEmpty('擂', '擂台详情不可用', state.arenaDetailError || '无法读取正式擂台详情。')
+        : '<div class="empty"><div class="glyph">擂</div><div class="t">正在开擂…</div></div>';
+    }
     else {
       var a = d.arena, board = d.leaderboard || [];
       var rows = board.length ? board.map(function(e){
@@ -91,19 +111,35 @@
   }
   // --- 合集 ---
   function loadCollections() {
-    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.collections)) return;
+    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.collections)) {
+      state.collectionList = []; state.collectionsLoaded = true; state.collectionsLoading = false;
+      state.collectionStatus = 'error'; state.collectionError = '正式合集接口未加载'; render(); return;
+    }
     state.collectionsLoading = true;
+    state.collectionStatus = 'loading'; state.collectionError = '';
     TM.OnlineClient.collections('', state.onlineApiUrl || undefined).then(function(res){
-      state.collectionList = (res && res.collections) || []; state.collectionsLoaded = true; state.collectionsLoading = false; render();
-    }).catch(function(){ state.collectionsLoading = false; render(); });
+      if (!res || res.success === false) throw new Error((res && res.error) || '正式合集接口返回失败');
+      state.collectionList = Array.isArray(res.collections) ? res.collections : []; state.collectionsLoaded = true; state.collectionsLoading = false;
+      state.collectionStatus = 'ok'; state.collectionError = ''; render();
+    }).catch(function(error){
+      state.collectionList = []; state.collectionsLoaded = true; state.collectionsLoading = false;
+      state.collectionStatus = 'error'; state.collectionError = (error && error.message) || '正式合集接口不可用'; render();
+    });
   }
   function openCollection(id) {
-    state.collectionOpen = true; state.collectionDetail = null; render();
+    state.collectionOpen = true; state.collectionOpenId = String(id); state.collectionDetail = null;
+    state.collectionDetailStatus = 'loading'; state.collectionDetailError = ''; render();
     TM.OnlineClient.collectionDetail(id, state.onlineApiUrl || undefined).then(function(res){
-      if (res && res.success && state.collectionOpen) { state.collectionDetail = res; render(); }
-    }).catch(function(){});
+      if (!res || res.success === false || !res.collection) throw new Error((res && res.error) || '合集详情返回无效');
+      if (state.collectionOpen && state.collectionOpenId === String(id)) {
+        state.collectionDetail = res; state.collectionDetailStatus = 'ok'; state.collectionDetailError = ''; render();
+      }
+    }).catch(function(error){
+      if (!state.collectionOpen || state.collectionOpenId !== String(id)) return;
+      state.collectionDetailStatus = 'error'; state.collectionDetailError = (error && error.message) || '合集详情接口不可用'; render();
+    });
   }
-  function closeCollection() { state.collectionOpen = false; state.collectionDetail = null; render(); }
+  function closeCollection() { state.collectionOpen = false; state.collectionOpenId = ''; state.collectionDetail = null; render(); }
   function createCollectionUI() {
     if (!loggedInNow()) { state.collectionsMsg = '登录后可建合集。'; render(); return; }
     var t = document.getElementById('tm-col-title'), d = document.getElementById('tm-col-desc');
@@ -118,10 +154,14 @@
     if (!state.collectionOpen) return '';
     var d = state.collectionDetail;
     var inner;
-    if (!d || !d.collection) { inner = '<div class="empty"><div class="glyph">集</div><div class="t">正在翻阅…</div></div>'; }
+    if (!d || !d.collection) {
+      inner = state.collectionDetailStatus === 'error'
+        ? truthEmpty('集', '合集详情不可用', state.collectionDetailError || '无法读取正式合集详情。')
+        : '<div class="empty"><div class="glyph">集</div><div class="t">正在翻阅…</div></div>';
+    }
     else {
-      var c = d.collection, packs = d.packs || [];
-      inner = '<div class="dmeta"><span>策展 ' + esc(c.ownerNick) + '</span><span>' + c.count + ' 件</span></div>' +
+      var c = d.collection, packs = Array.isArray(d.packs) ? d.packs : [];
+      inner = '<div class="dmeta"><span>策展 ' + esc(c.ownerNick || '未署名') + '</span><span>' + (hasMetric(c, 'count') ? esc(String(c.count)) + ' 件' : '件数未提供') + '</span></div>' +
         (c.description ? '<div class="dcopy" style="margin-bottom:10px;">' + esc(c.description) + '</div>' : '') +
         (packs.length ? '<div class="grid">' + packs.map(mallCard).join('') + '</div>' : '<div class="empty"><div class="glyph">集</div><div class="t">合集还空着</div><div>在作品详情点「收入合集」往里加</div></div>');
     }
@@ -136,14 +176,17 @@
   function openCollectionPicker(packId) {
     if (!loggedInNow()) { state.catalogMessage = '登录后可收入合集。'; render(); return; }
     state.colPickFor = packId; state.colPickOpen = true; state.colPickMsg = '';
-    if (!state.collectionsLoaded) loadCollections(); else render();
+    render();
+    if (!state.collectionsLoaded) loadCollections();
   }
   function closeCollectionPicker() { state.colPickOpen = false; render(); }
   function pickCollection(cid) {
     var packId = state.colPickFor;
     if (!packId || !cid) return;
     TM.OnlineClient.collectionItem(cid, packId, 'add', state.onlineApiUrl || undefined).then(function(res){
-      state.colPickMsg = res && res.success ? '已收入合集（' + (res.count || 0) + ' 件）。' : ('收入失败：' + ((res && res.error) || ''));
+      state.colPickMsg = res && res.success
+        ? ('已收入合集' + (hasMetric(res, 'count') ? '（' + esc(String(res.count)) + ' 件）' : '') + '。')
+        : ('收入失败：' + ((res && res.error) || ''));
       render();
     }).catch(function(){ state.colPickMsg = '收入失败。'; render(); });
   }
@@ -160,8 +203,12 @@
     if (!state.colPickOpen) return '';
     var mine = (state.collectionList || []);
     var rows = mine.length ? mine.map(function(c){
-      return '<div class="rk" style="cursor:pointer;" onclick="TMContentManager.pickCollection(' + Number(c.id) + ')"><div class="n">集</div><div class="t"><b>' + esc(c.title) + '</b><small>' + c.count + ' 件 · ' + esc(c.ownerNick) + '</small></div><div style="color:var(--gold);">收入 ›</div></div>';
-    }).join('') : '<div class="dcopy" style="color:var(--ink-faint);">还没有合集，下面新建一个。</div>';
+      return '<div class="rk" style="cursor:pointer;" onclick="TMContentManager.pickCollection(' + Number(c.id) + ')"><div class="n">集</div><div class="t"><b>' + esc(c.title || '未命名合集') + '</b><small>' + (hasMetric(c, 'count') ? esc(String(c.count)) + ' 件' : '件数未提供') + ' · ' + esc(c.ownerNick || '未署名') + '</small></div><div style="color:var(--gold);">收入 ›</div></div>';
+    }).join('') : (state.collectionsLoading
+      ? '<div class="dcopy" style="color:var(--ink-faint);">正在读取正式合集…</div>'
+      : (state.collectionStatus === 'error'
+        ? '<div class="dcopy" style="color:var(--ink-faint);">合集接口不可用：' + esc(state.collectionError || '读取失败') + '</div>'
+        : '<div class="dcopy" style="color:var(--ink-faint);">正式接口返回 0 个合集，可在下面新建一个。</div>'));
     return '<div class="sheet" role="dialog" aria-modal="true" aria-label="收入合集" onclick="if(event.target===this)TMContentManager.closeCollectionPicker()">' +
       '<div class="sheet-box" style="width:min(460px,94%);">' +
         '<div class="sh-head"><b>收入合集</b><button class="btn sm" style="margin-left:auto;" onclick="TMContentManager.closeCollectionPicker()">关闭</button></div>' +
@@ -179,11 +226,20 @@
   var COMM_KIND = { portrait: '立绘', music: '配乐', scenario: '剧本', other: '其他' };
   // --- 圈子 ---
   function loadCircles() {
-    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.circles)) return;
+    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.circles)) {
+      state.circleList = []; state.circlesLoaded = true; state.circlesLoading = false;
+      state.circleStatus = 'error'; state.circleError = '正式圈子接口未加载'; render(); return;
+    }
     state.circlesLoading = true;
+    state.circleStatus = 'loading'; state.circleError = '';
     TM.OnlineClient.circles(state.onlineApiUrl || undefined).then(function(res){
-      state.circleList = (res && res.circles) || []; state.circlesLoaded = true; state.circlesLoading = false; render();
-    }).catch(function(){ state.circlesLoading = false; render(); });
+      if (!res || res.success === false) throw new Error((res && res.error) || '正式圈子接口返回失败');
+      state.circleList = Array.isArray(res.circles) ? res.circles : []; state.circlesLoaded = true; state.circlesLoading = false;
+      state.circleStatus = 'ok'; state.circleError = ''; render();
+    }).catch(function(error){
+      state.circleList = []; state.circlesLoaded = true; state.circlesLoading = false;
+      state.circleStatus = 'error'; state.circleError = (error && error.message) || '正式圈子接口不可用'; render();
+    });
   }
   function createCircleUI() {
     if (!loggedInNow()) { state.circlesMsg = '登录后可建圈。'; render(); return; }
@@ -203,15 +259,25 @@
     }).catch(function(){});
   }
   function openCircle(id) {
-    state.circleOpen = true; state.circleDetailData = null; state.circleFeedData = null; state.circleMsg = ''; render();
+    state.circleOpen = true; state.circleOpenId = String(id); state.circleDetailData = null; state.circleFeedData = null; state.circleMsg = '';
+    state.circleDetailStatus = 'loading'; state.circleDetailError = '';
+    state.circleFeedStatus = 'loading'; state.circleFeedError = ''; render();
     TM.OnlineClient.circleDetail(id, state.onlineApiUrl || undefined).then(function(res){
-      if (res && res.success && state.circleOpen) { state.circleDetailData = res; render(); }
-    }).catch(function(){});
+      if (!res || res.success === false || !res.circle) throw new Error((res && res.error) || '圈子详情返回无效');
+      if (state.circleOpen && state.circleOpenId === String(id)) { state.circleDetailData = res; state.circleDetailStatus = 'ok'; state.circleDetailError = ''; render(); }
+    }).catch(function(error){
+      if (!state.circleOpen || state.circleOpenId !== String(id)) return;
+      state.circleDetailStatus = 'error'; state.circleDetailError = (error && error.message) || '圈子详情接口不可用'; render();
+    });
     TM.OnlineClient.circleFeed(id, 1, state.onlineApiUrl || undefined).then(function(res){
-      if (res && res.success && state.circleOpen) { state.circleFeedData = res.posts || []; render(); }
-    }).catch(function(){});
+      if (!res || res.success === false) throw new Error((res && res.error) || '圈内动态返回无效');
+      if (state.circleOpen && state.circleOpenId === String(id)) { state.circleFeedData = Array.isArray(res.posts) ? res.posts : []; state.circleFeedStatus = 'ok'; state.circleFeedError = ''; render(); }
+    }).catch(function(error){
+      if (!state.circleOpen || state.circleOpenId !== String(id)) return;
+      state.circleFeedStatus = 'error'; state.circleFeedError = (error && error.message) || '圈内动态接口不可用'; render();
+    });
   }
-  function closeCircle() { state.circleOpen = false; state.circleDetailData = null; render(); }
+  function closeCircle() { state.circleOpen = false; state.circleOpenId = ''; state.circleDetailData = null; render(); }
   function postToCircle() {
     var c = state.circleDetailData && state.circleDetailData.circle;
     if (!c) return;
@@ -231,9 +297,11 @@
     var cards = cols.length ? cols.map(function(c){
       return '<div class="card" style="cursor:pointer;" onclick="TMContentManager.openCircle(' + Number(c.id) + ')"><div class="pad">' +
         '<h4>' + esc(c.name) + (c.topic ? ' <span class="tag">' + esc(c.topic) + '</span>' : '') + '</h4>' +
-        '<div class="au">圈主 ' + esc(c.ownerNick) + ' · ' + (c.members || 0) + ' 人</div>' +
+        '<div class="au">圈主 ' + esc(c.ownerNick || '未署名') + ' · ' + (hasMetric(c, 'members') ? esc(String(c.members)) + ' 人' : '人数未提供') + '</div>' +
         '<div class="rt"><span>' + (c.joined ? '已加入' : '点进去看看') + '</span><span style="color:var(--gold);">进圈 ›</span></div></div></div>';
-    }).join('') : '<div class="empty"><div class="glyph">圈</div><div class="t">还没有圈子</div><div>建一个，聚同好</div></div>';
+    }).join('') : (state.circlesLoading ? mallSkeleton(3) : (state.circleStatus === 'error'
+      ? truthEmpty('圈', '正式圈子接口不可用', state.circleError || '无法读取正式圈子。')
+      : truthEmpty('圈', '正式圈子当前为空', '接口返回 0 个圈子；可登录后创建第一个。')));
     var creator = loggedInNow()
       ? '<div class="composer" style="margin-bottom:14px;"><div style="display:flex;gap:8px;flex-wrap:wrap;">' +
           '<input id="tm-circle-name" class="input" style="flex:1;min-width:160px;" placeholder="圈名，如「明末研究会」">' +
@@ -247,18 +315,26 @@
   function renderCircleLayer() {
     if (!state.circleOpen) return '';
     var d = state.circleDetailData, inner;
-    if (!d || !d.circle) { inner = '<div class="empty"><div class="glyph">圈</div><div class="t">正在进圈…</div></div>'; }
+    if (!d || !d.circle) {
+      inner = state.circleDetailStatus === 'error'
+        ? truthEmpty('圈', '圈子详情不可用', state.circleDetailError || '无法读取正式圈子详情。')
+        : '<div class="empty"><div class="glyph">圈</div><div class="t">正在进圈…</div></div>';
+    }
     else {
       var c = d.circle;
       var isOwner = c.ownerId != null && String(c.ownerId) === String(selfId());
       var joinBtn = loggedInNow() ? (isOwner ? '<span class="tag">圈主</span>' : (c.joined ? '<button class="btn sm" onclick="TMContentManager.toggleCircleJoin(' + Number(c.id) + ',true)">退出</button>' : '<button class="btn sm primary" onclick="TMContentManager.toggleCircleJoin(' + Number(c.id) + ',false)">加入圈子</button>')) : '';
       var posts = state.circleFeedData || [];
-      var feed = posts.length ? posts.map(feedCard).join('') : '<div class="empty"><div class="glyph">邸</div><div class="t">圈内还没动静</div></div>';
+      var feed = posts.length ? posts.map(feedCard).join('') : (state.circleFeedStatus === 'error'
+        ? truthEmpty('邸', '圈内动态不可用', state.circleFeedError || '无法读取正式圈内动态。')
+        : (state.circleFeedStatus === 'loading'
+          ? '<div class="empty"><div class="glyph">邸</div><div class="t">正在读取圈内动态…</div></div>'
+          : truthEmpty('邸', '圈内还没动静', '正式接口返回 0 条圈内动态。')));
       var composer = (loggedInNow() && c.joined) ? '<div class="composer"><textarea id="tm-circle-post" class="input" rows="2" placeholder="在「' + esc(c.name) + '」发点什么…"></textarea><div style="display:flex;justify-content:flex-end;margin-top:8px;"><button class="btn primary sm" onclick="TMContentManager.postToCircle()">圈内发布</button></div></div>' : (loggedInNow() ? '<div class="status">加入后可在圈内发帖。</div>' : '');
-      inner = '<div class="dmeta"><span>' + (c.topic ? esc(c.topic) + ' · ' : '') + '圈主 ' + esc(c.ownerNick) + '</span><span>' + (c.members || 0) + ' 人</span>' + joinBtn + '</div>' +
+      inner = '<div class="dmeta"><span>' + (c.topic ? esc(c.topic) + ' · ' : '') + '圈主 ' + esc(c.ownerNick || '未署名') + '</span><span>' + (hasMetric(c, 'members') ? esc(String(c.members)) + ' 人' : '人数未提供') + '</span>' + joinBtn + '</div>' +
         (c.description ? '<div class="dcopy" style="margin-bottom:10px;">' + esc(c.description) + '</div>' : '') +
         composer + (state.circleMsg ? '<div class="status" style="margin:8px 0;">' + esc(state.circleMsg) + '</div>' : '') +
-        '<div class="dsec-h">圈内动态 · ' + posts.length + '</div><div class="feed-list">' + feed + '</div>';
+        '<div class="dsec-h">圈内动态' + (state.circleFeedStatus === 'ok' ? ' · ' + posts.length : '') + '</div><div class="feed-list">' + feed + '</div>';
     }
     var ctitle = d && d.circle ? d.circle.name : '圈子';
     return '<div class="sheet" role="dialog" aria-modal="true" aria-label="同好圈子" onclick="if(event.target===this)TMContentManager.closeCircle()">' +
@@ -269,10 +345,19 @@
   }
   // --- 共编（详情内修订）---
   function loadRevisions(packId) {
-    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.revisions)) return;
+    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.revisions)) {
+      state.detailRevisions = []; state.revisionStatus = 'error'; state.revisionError = '正式修订接口未加载'; render(); return;
+    }
+    state.revisionStatus = 'loading'; state.revisionError = '';
     TM.OnlineClient.revisions(packId, state.onlineApiUrl || undefined).then(function(res){
-      if (res && res.success && state.detailOpen && state.detailPack && String(state.detailPack.id) === String(packId)) { state.detailRevisions = res.revisions || []; render(); }
-    }).catch(function(){});
+      if (!res || res.success === false || !Array.isArray(res.revisions)) throw new Error((res && res.error) || '正式修订接口返回无效');
+      if (state.detailOpen && state.detailPack && String(state.detailPack.id) === String(packId)) {
+        state.detailRevisions = res.revisions; state.revisionStatus = 'ok'; state.revisionError = ''; render();
+      }
+    }).catch(function(error){
+      if (!state.detailOpen || !state.detailPack || String(state.detailPack.id) !== String(packId)) return;
+      state.detailRevisions = []; state.revisionStatus = 'error'; state.revisionError = (error && error.message) || '正式修订接口不可用'; render();
+    });
   }
   function proposeRevisionUI() {
     if (!loggedInNow()) { state.revMsg = '登录后可提修订。'; render(); return; }
@@ -300,18 +385,32 @@
       var st = r.status === 'accepted' ? '<span class="pill good">已采纳</span>' : (r.status === 'rejected' ? '<span class="pill bad">已婉拒</span>' : '<span class="pill">待处理</span>');
       var act = (isAuthor && r.status === 'open') ? '<div class="dacts" style="margin-top:6px;"><button class="btn sm primary" onclick="TMContentManager.respondRevisionUI(' + Number(r.id) + ',\'accept\')">采纳</button><button class="btn sm" onclick="TMContentManager.respondRevisionUI(' + Number(r.id) + ',\'reject\')">婉拒</button></div>' : '';
       return '<div class="chron"><div><b>' + esc(r.proposerNick) + '</b> ' + st + '</div><div class="dcopy" style="margin-top:4px;">' + esc(r.note) + '</div>' + act + '</div>';
-    }).join('') : '<div class="dcopy" style="color:var(--ink-faint);">还没有修订提案。</div>';
+    }).join('') : (state.revisionStatus === 'error'
+      ? '<div class="dcopy" style="color:var(--ink-faint);">修订接口不可用：' + esc(state.revisionError || '读取失败') + '</div>'
+      : (state.revisionStatus === 'loading'
+        ? '<div class="dcopy" style="color:var(--ink-faint);">正在读取正式修订…</div>'
+        : '<div class="dcopy" style="color:var(--ink-faint);">正式接口返回 0 条修订提案。</div>'));
     var form = loggedInNow() ? '<div class="field" style="margin-top:8px;"><textarea id="tm-rev-note" class="input" rows="2" placeholder="给作者提个修订建议（如：把某事件触发条件放宽）…"></textarea></div><div style="margin:6px 0;"><button class="btn sm" onclick="TMContentManager.proposeRevisionUI()">提交修订</button></div>' : '<div class="dcopy">登录后可提修订。</div>';
-    return '<div class="dsec-h">共编修订' + (revs.length ? ' · ' + revs.length : '') + '</div>' +
+    return '<div class="dsec-h">共编修订' + (state.revisionStatus === 'ok' ? ' · ' + revs.length : '') + '</div>' +
       (state.revMsg ? '<div class="status" style="margin-bottom:6px;">' + esc(state.revMsg) + '</div>' : '') +
       form + rows;
   }
   // --- 约稿墙 ---
   function loadCommissions() {
-    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.commissions)) return;
+    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.commissions)) {
+      state.commissionList = []; state.commissionsLoaded = true; state.commissionsLoading = false;
+      state.commissionStatus = 'error'; state.commissionError = '正式约稿接口未加载'; render(); return;
+    }
+    state.commissionsLoading = true;
+    state.commissionStatus = 'loading'; state.commissionError = '';
     TM.OnlineClient.commissions(state.onlineApiUrl || undefined).then(function(res){
-      state.commissionList = (res && res.commissions) || []; state.commissionsLoaded = true; render();
-    }).catch(function(){});
+      if (!res || res.success === false) throw new Error((res && res.error) || '正式约稿接口返回失败');
+      state.commissionList = Array.isArray(res.commissions) ? res.commissions : []; state.commissionsLoaded = true; state.commissionsLoading = false;
+      state.commissionStatus = 'ok'; state.commissionError = ''; render();
+    }).catch(function(error){
+      state.commissionList = []; state.commissionsLoaded = true; state.commissionsLoading = false;
+      state.commissionStatus = 'error'; state.commissionError = (error && error.message) || '正式约稿接口不可用'; render();
+    });
   }
   function postCommissionUI() {
     if (!loggedInNow()) { state.commMsg = '登录后可发约稿。'; render(); return; }
@@ -329,7 +428,7 @@
     }).catch(function(){});
   }
   function renderCommissionSection() {
-    if (!state.commissionsLoaded) { try { setTimeout(loadCommissions, 0); } catch (e) {} }
+    if (!state.commissionsLoaded && !state.commissionsLoading) { try { setTimeout(loadCommissions, 0); } catch (e) {} }
     var list = state.commissionList || [];
     var mine = selfId();
     var rows = list.length ? list.map(function(c){
@@ -338,7 +437,9 @@
       return '<div class="upd-row"><div class="ic-up" style="font-family:var(--serif);">' + esc((COMM_KIND[c.kind] || '稿').charAt(0)) + '</div>' +
         '<div><b>' + esc(c.title) + ' <span class="tag">' + esc(COMM_KIND[c.kind] || c.kind) + '</span></b><small>' + esc(c.requesterNick) + (c.detail ? ' · ' + esc(c.detail) : '') + '</small></div>' +
         '<div style="display:flex;gap:6px;">' + (canDm ? '<button class="btn sm primary" onclick="TMContentManager.openDm(' + Number(c.requesterId) + ', ' + jsArg(c.requesterNick || '') + ')">接单私信</button>' : '') + (isMine ? '<button class="btn sm" onclick="TMContentManager.closeCommissionUI(' + Number(c.id) + ')">关闭</button>' : '') + '</div></div>';
-    }).join('') : '<div class="empty"><div class="glyph">稿</div><div class="t">暂无约稿</div><div>发一条，求人给你的剧本配立绘/配乐</div></div>';
+    }).join('') : (state.commissionsLoading ? mallSkeleton(3) : (state.commissionStatus === 'error'
+      ? truthEmpty('稿', '正式约稿接口不可用', state.commissionError || '无法读取正式约稿。')
+      : truthEmpty('稿', '正式约稿当前为空', '接口返回 0 条约稿；可登录后发布第一条。')));
     var form = loggedInNow()
       ? '<div class="composer" style="margin-bottom:14px;"><div style="display:flex;gap:8px;flex-wrap:wrap;">' +
           '<input id="tm-comm-title" class="input" style="flex:1;min-width:180px;" placeholder="约稿标题，如「求一套崇祯朝立绘」">' +
@@ -359,7 +460,7 @@
     return '<div class="tm-pack">' +
       '<div>' +
         '<div class="tm-pack-title">' + esc(rec.title || rec.packId) + badge + '</div>' +
-        '<div class="tm-pack-meta">' + esc(rec.packId) + ' / v' + esc(rec.version || '1.0.0') + '</div>' +
+        '<div class="tm-pack-meta">' + esc(rec.packId) + ' / ' + (rec.version ? 'v' + esc(rec.version) : '版本未提供') + '</div>' +
       '</div>' +
       '<div class="tm-actions" style="margin-top:0;justify-content:flex-end;">' +
         (upd ? action('更新到 ' + upd.to, 'TMContentManager.updateWorkshopPack(' + jsArg(rec.packId) + ')', 'primary') : '') +
@@ -595,18 +696,26 @@
 
   // P2-S1 好友区（poll-based）：加好友 + 收到的申请 + 我的好友。
   function loadFriends() {
-    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.isLoggedIn && TM.OnlineClient.isLoggedIn())) return;
+    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.isLoggedIn && TM.OnlineClient.isLoggedIn())) {
+      state.friendsStatus = 'idle'; state.friendsError = ''; return;
+    }
     state.friendsLoading = true;
+    state.friendsStatus = 'loading'; state.friendsError = '';
     Promise.all([
       TM.OnlineClient.friends(state.onlineApiUrl || undefined),
       TM.OnlineClient.friendRequests(state.onlineApiUrl || undefined)
     ]).then(function(r){
       var fr = r[0] || {}, rq = r[1] || {};
+      if (fr.success === false || rq.success === false) throw new Error(fr.error || rq.error || '正式好友接口返回失败');
       state.friendsData = { friends: fr.friends || [], incoming: rq.incoming || [], outgoing: rq.outgoing || [] };
       state.friendsLoaded = true;
       state.friendsLoading = false;
+      state.friendsStatus = 'ok'; state.friendsError = '';
       render();
-    }).catch(function(){ state.friendsLoading = false; });
+    }).catch(function(error){
+      state.friendsData = { friends: [], incoming: [], outgoing: [] }; state.friendsLoaded = true; state.friendsLoading = false;
+      state.friendsStatus = 'error'; state.friendsError = (error && error.message) || '正式好友接口不可用'; render();
+    });
   }
   function renderFriendsSection(user) {
     var d = state.friendsData || { friends: [], incoming: [], outgoing: [] };
@@ -625,7 +734,9 @@
           '<button class="tm-action" onclick="TMContentManager.openDm(' + Number(f.id) + ', ' + jsArg(f.nickname || '') + ')">私信</button>' +
           '<button class="tm-action danger" onclick="TMContentManager.removeFriend(' + Number(f.id) + ')">删除</button>' +
         '</div></div>';
-    }).join('') : '<div class="tm-empty">还没有好友，搜对方用户名加一个。</div>';
+    }).join('') : (state.friendsLoading ? '<div class="tm-empty">正在读取正式好友列表…</div>' : (state.friendsStatus === 'error'
+      ? '<div class="tm-empty">好友接口不可用：' + esc(state.friendsError || '读取失败') + '</div>'
+      : '<div class="tm-empty">好友列表为空，可按用户名发送申请。</div>'));
     return '<section class="tm-panel" style="margin-top:.8rem;">' +
       '<h4>好友' + (d.friends.length ? ' · ' + d.friends.length : '') + '</h4>' +
       '<div class="tm-field" style="margin-top:.2rem;"><label for="tm-friend-add">添加好友（用户名）</label>' +
@@ -665,11 +776,21 @@
   // P2-S3 通知中心。
   function loadNotifs() {
     if (!(window.TM && TM.OnlineClient && TM.OnlineClient.isLoggedIn && TM.OnlineClient.isLoggedIn())) return;
+    if (!(TM.OnlineClient && TM.OnlineClient.notifications)) {
+      state.notifData = { notifications: [], unread: null }; state.notifLoaded = true; state.notifLoading = false;
+      state.notifStatus = 'error'; state.notifError = '正式通知接口未加载'; render(); return;
+    }
     state.notifLoading = true;
+    state.notifStatus = 'loading'; state.notifError = '';
     TM.OnlineClient.notifications(state.onlineApiUrl || undefined).then(function(res){
-      state.notifData = { notifications: (res && res.notifications) || [], unread: (res && res.unread) || 0 };
-      state.notifLoaded = true; state.notifLoading = false; render();
-    }).catch(function(){ state.notifLoading = false; });
+      if (!res || res.success === false || !Array.isArray(res.notifications)) throw new Error((res && res.error) || '正式通知接口返回无效');
+      var unread = hasMetric(res, 'unread') ? Number(res.unread) : res.notifications.filter(function(n){ return !n.read; }).length;
+      state.notifData = { notifications: res.notifications, unread: unread };
+      state.notifLoaded = true; state.notifLoading = false; state.notifStatus = 'ok'; state.notifError = ''; render();
+    }).catch(function(error){
+      state.notifData = { notifications: [], unread: null }; state.notifLoaded = true; state.notifLoading = false;
+      state.notifStatus = 'error'; state.notifError = (error && error.message) || '正式通知接口不可用'; render();
+    });
   }
   function notifIcon(t) { return ({ comment: '✎', friend_request: '＋', friend_accept: '✓', message: '✉', moderation: '⚖' })[t] || '●'; }
   function notifText(n) {
@@ -692,7 +813,11 @@
         '<div class="tm-notif-b"><div>' + esc(notifText(n)) + '</div><small>' + esc(n.createdAt || '') + '</small></div>' +
         (n.read ? '' : '<button class="tm-action" onclick="event.stopPropagation();TMContentManager.markNotif(' + Number(n.id) + ')">已读</button>') +
       '</div>';
-    }).join('') : '<div class="tm-empty">暂无通知。</div>';
+    }).join('') : (state.notifLoading
+      ? '<div class="tm-empty">正在读取正式通知…</div>'
+      : (state.notifStatus === 'error'
+        ? '<div class="tm-empty">通知接口不可用：' + esc(state.notifError || '读取失败') + '</div>'
+        : '<div class="tm-empty">正式接口返回 0 条通知。</div>'));
     return '<section class="tm-panel" style="margin-top:.8rem;">' +
       '<h4>通知' + (d.unread ? ' · <span class="tm-unread">' + d.unread + ' 未读</span>' : '') + '</h4>' +
       '<div class="tm-actions" style="margin-top:.2rem;">' +
@@ -713,13 +838,24 @@
 
   // P2-S2 私信浮层。
   function openDmInbox() {
-    state.dmOpen = true; state.dmView = 'inbox'; state.dmPeer = null; state.dmMsg = ''; render();
+    state.dmOpen = true; state.dmView = 'inbox'; state.dmPeer = null; state.dmInbox = []; state.dmMsg = '';
+    state.dmLoadStatus = 'loading'; state.dmLoadError = ''; render();
+    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.inbox)) {
+      state.dmLoadStatus = 'error'; state.dmLoadError = '正式私信接口未加载'; render(); return;
+    }
     TM.OnlineClient.inbox(state.onlineApiUrl || undefined).then(function(res){
-      if (res && res.success) { state.dmInbox = res.conversations || []; render(); }
-    }).catch(function(){});
+      if (!res || res.success === false || !Array.isArray(res.conversations)) throw new Error((res && res.error) || '正式私信接口返回无效');
+      if (state.dmOpen && state.dmView === 'inbox') {
+        state.dmInbox = res.conversations; state.dmLoadStatus = 'ok'; state.dmLoadError = ''; render();
+      }
+    }).catch(function(error){
+      if (!state.dmOpen || state.dmView !== 'inbox') return;
+      state.dmInbox = []; state.dmLoadStatus = 'error'; state.dmLoadError = (error && error.message) || '正式私信接口不可用'; render();
+    });
   }
   function openDm(userId, nickname) {
-    state.dmOpen = true; state.dmView = 'chat'; state.dmPeer = { id: userId, nickname: nickname }; state.dmMessages = []; state.dmMsg = ''; render();
+    state.dmOpen = true; state.dmView = 'chat'; state.dmPeer = { id: userId, nickname: nickname }; state.dmMessages = []; state.dmMsg = '';
+    state.dmLoadStatus = 'loading'; state.dmLoadError = ''; render();
     loadConversation(userId);
   }
   function openDmFromNotif(userId, nickname, notifId) {
@@ -727,13 +863,22 @@
     openDm(userId, nickname);
   }
   function loadConversation(userId) {
+    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.conversation)) {
+      state.dmLoadStatus = 'error'; state.dmLoadError = '正式对话接口未加载'; render(); return;
+    }
+    state.dmLoadStatus = 'loading'; state.dmLoadError = '';
     TM.OnlineClient.conversation(userId, state.onlineApiUrl || undefined).then(function(res){
-      if (res && res.success && state.dmOpen && state.dmPeer && Number(state.dmPeer.id) === Number(userId)) {
-        state.dmMessages = res.messages || [];
+      if (!res || res.success === false || !Array.isArray(res.messages)) throw new Error((res && res.error) || '正式对话接口返回无效');
+      if (state.dmOpen && state.dmPeer && Number(state.dmPeer.id) === Number(userId)) {
+        state.dmMessages = res.messages;
         if (res.peer && res.peer.nickname) state.dmPeer.nickname = res.peer.nickname;
+        state.dmLoadStatus = 'ok'; state.dmLoadError = '';
         render();
       }
-    }).catch(function(){});
+    }).catch(function(error){
+      if (!state.dmOpen || !state.dmPeer || Number(state.dmPeer.id) !== Number(userId)) return;
+      state.dmMessages = []; state.dmLoadStatus = 'error'; state.dmLoadError = (error && error.message) || '正式对话接口不可用'; render();
+    });
   }
   function closeDm() { state.dmOpen = false; state.dmView = 'inbox'; state.dmPeer = null; render(); }
   function sendDm() {
@@ -753,7 +898,11 @@
     if (state.dmView === 'chat' && state.dmPeer) {
       var msgs = (state.dmMessages || []).length ? state.dmMessages.map(function(m){
         return '<div class="bub ' + (m.fromMe ? 'me' : 'them') + '">' + esc(m.text) + '</div>';
-      }).join('') : '<div class="empty"><div class="t">还没有消息</div><div>发第一条</div></div>';
+      }).join('') : (state.dmLoadStatus === 'error'
+        ? truthEmpty('信', '对话接口不可用', state.dmLoadError || '无法读取正式对话。')
+        : (state.dmLoadStatus === 'loading'
+          ? truthEmpty('信', '正在读取正式对话', '请稍候。')
+          : truthEmpty('信', '还没有消息', '正式接口返回 0 条消息；可发送第一条。')));
       head = '<button class="btn sm" onclick="TMContentManager.openDmInbox()">‹ 私信</button><b>' + esc(state.dmPeer.nickname || '对话') + '</b>';
       body = '<div class="dm-thread" style="height:62vh;min-height:340px;">' +
         '<div class="dm-msgs">' + msgs + '</div>' +
@@ -764,7 +913,11 @@
       var list = (state.dmInbox || []).length ? state.dmInbox.map(function(c){
         return '<div class="dm-c" onclick="TMContentManager.openDm(' + Number(c.userId) + ', ' + jsArg(c.nickname || '') + ')">' + av(c.nickname) +
           '<div><b>' + esc(c.nickname) + (c.unread ? ' <span class="tag">' + c.unread + '</span>' : '') + '</b><small>' + (c.fromMe ? '我：' : '') + esc(c.lastText || '') + '</small></div></div>';
-      }).join('') : '<div class="empty"><div class="glyph">✉</div><div class="t">还没有私信</div><div>从好友列表点「私信」开始聊</div></div>';
+      }).join('') : (state.dmLoadStatus === 'error'
+        ? truthEmpty('信', '私信接口不可用', state.dmLoadError || '无法读取正式私信。')
+        : (state.dmLoadStatus === 'loading'
+          ? truthEmpty('信', '正在读取正式私信', '请稍候。')
+          : truthEmpty('信', '还没有私信', '正式接口返回 0 个会话；可从好友列表开始聊天。')));
       head = '<b>私信</b>';
       body = '<div class="dm-list" style="border:1px solid var(--line);">' + list + '</div>';
     }
@@ -1029,6 +1182,37 @@
     var g = p && p.galleryImages;
     return Array.isArray(g) ? g.filter(function(x){ return x && x.url; }).slice(0, 6) : [];
   }
+  function hasMetric(record, key) {
+    return !!record && record[key] != null && record[key] !== '' && isFinite(Number(record[key]));
+  }
+  function metricText(record, key, prefix, suffix) {
+    return hasMetric(record, key) ? String(prefix || '') + esc(String(record[key])) + String(suffix || '') : '未提供';
+  }
+  function aggregateMetric(records, key) {
+    var list = Array.isArray(records) ? records : [];
+    var known = list.filter(function(record){ return hasMetric(record, key); });
+    return {
+      value: known.reduce(function(sum, record){ return sum + Number(record[key]); }, 0),
+      known: known.length,
+      total: list.length,
+      complete: known.length === list.length
+    };
+  }
+  function aggregateMetricText(aggregate) {
+    if (!aggregate || aggregate.known === 0) return aggregate && aggregate.total === 0 ? '0' : '—';
+    return String(aggregate.value) + (aggregate.complete ? '' : '+');
+  }
+  function runtimeFallbackCover(p) {
+    var tags = Array.isArray(p && p.tags) ? p.tags.join(' ') : '';
+    var text = [p && p.title, p && p.description, p && p.type, tags].filter(Boolean).join(' ');
+    if (/绍宋|建炎|南宋|江南/.test(text)) return 'assets/ui/workshop/cover-jiangnan.webp';
+    if (/天启|明末|崇祯/.test(text)) return 'assets/ui/workshop/hero-jianyan.webp';
+    if (/武将|立绘|portrait/.test(text)) return 'assets/ui/workshop/cover-general.webp';
+    return 'assets/ui/workshop/cover-yanmen.webp';
+  }
+  function truthEmpty(glyph, title, copy, actionHtml) {
+    return '<div class="empty truth-empty"><div class="glyph">' + esc(glyph) + '</div><div><div class="t">' + esc(title) + '</div><p>' + esc(copy) + '</p>' + (actionHtml || '') + '</div></div>';
+  }
   function mallCover(p, sizeStyle) {
     var g = mallGlyph(p);
     var tags = Array.isArray(p && p.tags) ? p.tags : [];
@@ -1036,18 +1220,23 @@
     var ptype = String((p && p.type) || 'scenario');
     var tone = (window.TMWorkshopCovers && TMWorkshopCovers.tone) ? TMWorkshopCovers.tone(g) : 'zhu';
     var coverUrl = packCoverUrl(p);
+    var resolvedCover = coverUrl || runtimeFallbackCover(p);
     var inner = (window.TMWorkshopCovers && TMWorkshopCovers.coverInner)
       ? TMWorkshopCovers.coverInner(g, { official: official, type: ptype, typeLabel: ptype !== 'scenario' ? packTypeLabel(ptype) : '' })
       : ('<span class="glyph">' + esc(g) + '</span>');
-    if (coverUrl) inner = '<img class="cover-img" src="' + esc(coverUrl) + '" alt="">';
+    inner = inner + '<img class="cover-img" src="' + esc(resolvedCover) + '" alt="" loading="lazy" decoding="async" onerror="this.remove()">' +
+      '<span class="cover-provenance' + (coverUrl ? '' : ' truth-cover-fallback') + '">' + (coverUrl ? '投稿封面' : '题材底图 · 非投稿封面') + '</span>';
     return '<div class="cover ' + tone + '"' + (sizeStyle ? ' style="' + sizeStyle + '"' : '') + '>' + inner + '</div>';
   }
   function mallStars(p) {
-    var r = Number(p && p.rating) || 0;
+    if (!hasMetric(p, 'rating') || !hasMetric(p, 'ratingCount') || Number(p.ratingCount) <= 0) {
+      return '<span class="stars is-missing">— 暂无评分</span>';
+    }
+    var r = Number(p.rating);
     var full = Math.round(r);
     var s = '';
     for (var i = 1; i <= 5; i++) s += (i <= full ? '★' : '☆');
-    return '<span class="stars">' + s + (r ? ' <i>' + r.toFixed(1) + '</i>' : '') + '</span>';
+    return '<span class="stars">' + s + ' <i>' + r.toFixed(1) + ' · ' + esc(String(p.ratingCount)) + ' 人</i></span>';
   }
   function mallCard(p) {
     var tags = Array.isArray(p.tags) ? p.tags.filter(Boolean).slice(0, 3) : [];
@@ -1055,8 +1244,8 @@
       mallCover(p) +
       '<div class="pad">' +
         '<h4>' + esc(p.title || p.id) + '</h4>' +
-        '<div class="au">' + esc(p.author || '佚名') + (p.parentId ? ' · 改编' : '') + '</div>' +
-        '<div class="rt">' + mallStars(p) + '<span>↓' + (p.downloads || 0) + (p.endorsements ? ' · ✦' + p.endorsements : '') + '</span></div>' +
+        '<div class="au">' + esc(p.author || '未署名') + (p.parentId ? ' · 改编' : '') + '</div>' +
+        '<div class="rt">' + mallStars(p) + '<span>' + (hasMetric(p, 'downloads') ? '↓' + esc(String(p.downloads)) : '下载量未提供') + (hasMetric(p, 'endorsements') ? ' · ✦' + esc(String(p.endorsements)) : '') + '</span></div>' +
         (tags.length ? '<div class="tg">' + tags.map(function(t){ return '<span class="tag">' + esc(t) + '</span>'; }).join('') + '</div>' : '') +
       '</div>' +
     '</div>';
@@ -1072,7 +1261,7 @@
     var ctype = state.catalogType || '';
     var featuredOn = !!state.featuredOn;
     var packs = (state.catalog && state.catalog.packs) || [];
-    var feat = '<span class="chip' + (featuredOn ? ' on' : '') + '" onclick="TMContentManager.toggleFeatured()">✦ 社区精选</span>';
+    var feat = '<span class="chip' + (featuredOn ? ' on' : '') + '" onclick="TMContentManager.toggleFeatured()">✦ 正式精选</span>';
     return '<div class="typebar">' + feat + PACK_TYPES.map(function(t){
       var n = t.v ? packs.filter(function(pp){ return String(pp.type || 'scenario') === t.v; }).length : packs.length;
       return '<span class="chip' + (!featuredOn && ctype === t.v ? ' on' : '') + '" onclick="TMContentManager.switchCatalogType(' + jsArg(t.v) + ')">' + esc(t.label) + (packs.length ? ' ' + n : '') + '</span>';
@@ -1099,60 +1288,74 @@
   function renderDiscover() {
     var packs = (state.catalog && state.catalog.packs) || [];
     var vs = catalogViewState(state);
-    if (!packs.length) {
-      var heroHtml = '<div class="searchhero"><h2>访古问今 · 列朝在此</h2><p>浏览、安装其他玩家与官方的史册剧本；也可把你的剧本发布给天下人。</p>' +
-        '<div class="box"><input id="tm-mall-hq" placeholder="输入朝代、事件、人物或作者…" onkeydown="if(event.key===\'Enter\')TMContentManager.mallSearch(this.value)"><button class="btn primary" onclick="TMContentManager.loadWorkshopCatalog()">载入目录</button></div></div>';
-      if (state.catalogLoading) {
-        return heroHtml + '<div class="sec-h"><h3>正在载入目录…</h3></div>' + mallSkeleton(8);
-      }
-      // 无旧数据时出错 → 错误卡（可见+可重试）；否则真空卡。发现页此前漏读 catalogError。
-      return heroHtml + (vs === 'error' ? catalogErrorCardHtml(state)
-        : '<div class="empty"><div class="glyph">坊</div><div class="t">尚未载入在线目录</div><div>点上方「载入目录」从官方目录浏览并安装。</div></div>');
+    var catalogReady = vs === 'list' || vs === 'stale' || state.catalogStatus === 'ok' || state.catalogStatus === 'fallback';
+    var officialCount = packs.filter(function(p){
+      return !!p.official || p.author === '天命官方' || (Array.isArray(p.tags) && p.tags.indexOf('官方') >= 0);
+    }).length;
+    var versionMeta = document.querySelector('meta[name="tm-version"]');
+    var version = (state.status && state.status.currentVersion) || (versionMeta && versionMeta.content) || '';
+    var originLabel = state.catalogStatus === 'fallback' ? '仓库内置官方清单' : '正式在线目录';
+    var updatedAt = state.catalog && state.catalog.updatedAt ? String(state.catalog.updatedAt) : '更新时间未提供';
+    var heroHtml = '<div class="searchhero atelier-discovery-lead"><div class="atelier-lead-copy"><small>CATALOGUE STATUS · ' + esc(originLabel) + '</small>' +
+      '<h2>' + packs.length + ' 件真实收录</h2><p>未返回的评分、下载量、版本与素材字段统一显示“未提供”，不会用样例或零值补齐。' + (updatedAt ? ' · ' + esc(updatedAt) : '') + '</p></div>' +
+      '<dl class="atelier-catalog-facts"><div><dt>' + packs.length + '</dt><dd>目录总数</dd></div><div><dt>' + officialCount + '</dt><dd>官方内容</dd></div><div><dt>' + (packs.length - officialCount) + '</dt><dd>社区内容</dd></div><div><dt>' + esc(version || '—') + '</dt><dd>仓库版本</dd></div></dl>' +
+      '<div class="box"><input id="tm-mall-hq" value="' + esc(state.catalogQuery || '') + '" placeholder="输入朝代、事件、人物或作者…" onkeydown="if(event.key===\'Enter\')TMContentManager.mallSearch(this.value)"><button class="btn primary" onclick="TMContentManager.mallSearch(document.getElementById(\'tm-mall-hq\').value)">搜索真源</button></div></div>';
+
+    if (state.catalogLoading || state.catalogStatus === 'loading') {
+      return heroHtml + '<div class="sec-h"><h3>正在读取正式目录</h3></div>' + mallSkeleton(8);
     }
-    var sorted = packs.slice();
-    var hot = sorted.slice().sort(function(a, b){ return (b.downloads || 0) - (a.downloads || 0); });
-    var feat = hot[0] || packs[0];
-    var fside = hot.slice(1, 4);
-    var fg = mallGlyph(feat);
-    var ftone = (window.TMWorkshopCovers && TMWorkshopCovers.tone) ? TMWorkshopCovers.tone(fg) : 'zhu';
-    var fscene = (window.TMWorkshopCovers && TMWorkshopCovers.sceneSVG) ? TMWorkshopCovers.sceneSVG(fg, feat.type) : '';
-    var featBanner =
-      '<div class="feat-main" onclick="TMContentManager.openPackDetail(' + jsArg(feat.id || '') + ')">' +
-        '<div class="bg cover ' + ftone + '" style="border:none;">' + fscene + '</div>' +
-        '<div class="ov">' +
-          '<div class="kick">' + ((feat.author === '天命官方') ? '官方剧本 · 编辑推荐' : '编辑推荐') + '</div>' +
-          '<h2>' + esc(feat.title || feat.id) + '</h2>' +
-          (feat.description ? '<p>' + esc(feat.description) + '</p>' : '') +
-          '<div class="row">' + mallStars(feat) + '<span style="font-size:12px;color:var(--ink-dim);">↓' + (feat.downloads || 0) + '</span>' +
-            '<button class="btn primary" onclick="event.stopPropagation();TMContentManager.openPackDetail(' + jsArg(feat.id || '') + ')">查看详情</button></div>' +
-        '</div>' +
-      '</div>';
-    var fsideHtml = fside.map(function(p){
-      return '<div class="fs" onclick="TMContentManager.openPackDetail(' + jsArg(p.id || '') + ')">' + mallCover(p, 'width:62px;height:62px;font-size:26px;') +
-        '<div><b>' + esc(p.title || p.id) + '</b><small>' + esc(p.author || '佚名') + ' · ↓' + (p.downloads || 0) + '</small></div></div>';
-    }).join('') || '<div class="fs"><div style="color:var(--ink-faint);font-size:12px;">更多内容陆续上架</div></div>';
-    var hotGrid = hot.slice(0, 8).map(mallCard).join('');
-    var rail = hot.slice(0, 6).map(function(p, i){
-      return '<div class="rk" onclick="TMContentManager.openPackDetail(' + jsArg(p.id || '') + ')"><div class="n' + (i < 3 ? ' top' : '') + '">' + (i + 1) + '</div>' +
-        '<div class="t"><b>' + esc(p.title || p.id) + '</b><small>' + esc(p.author || '佚名') + ' · ↓' + (p.downloads || 0) + '</small></div></div>';
-    }).join('');
-    // 有旧数据但刷新失败 → 顶部横条 banner，下方列表照常渲染（stale 可见但不遮内容）。
-    return (vs === 'stale' ? catalogStaleBannerHtml(state) : '') +
-      '<div class="searchhero"><h2>访古问今 · 列朝在此</h2><p>浏览、安装其他玩家与官方的史册剧本；也可把你的剧本发布给天下人。</p>' +
-        '<div class="box"><input id="tm-mall-hq" value="' + esc(state.catalogQuery || '') + '" placeholder="输入朝代、事件、人物或作者…" onkeydown="if(event.key===\'Enter\')TMContentManager.mallSearch(this.value)"><button class="btn primary" onclick="TMContentManager.mallSearch(document.getElementById(\'tm-mall-hq\').value)">搜索</button></div></div>' +
+    if (!catalogReady) {
+      return heroHtml + (vs === 'error'
+        ? catalogErrorCardHtml(state)
+        : truthEmpty('检', '目录来源不可用', state.catalogError || '正式目录与仓库清单均未能读取。', '<button class="btn primary sm" onclick="TMContentManager.refreshWorkshopSources()">重试真源</button>'));
+    }
+
+    var formalFeatured = state.featuredStatus === 'ok' && Array.isArray(state.featuredPacks) ? state.featuredPacks : [];
+    var feat = formalFeatured[0] || null;
+    var fside = formalFeatured.slice(1, 4);
+    var featuredHtml;
+    if (feat) {
+      var featBanner = '<div class="feat-main" onclick="TMContentManager.openPackDetail(' + jsArg(feat.id || '') + ')">' +
+        mallCover(feat, 'position:absolute;inset:0;width:100%;height:100%;border:none;') +
+        '<div class="ov"><div class="kick">正式精选接口返回 · ' + (packCoverUrl(feat) ? '投稿封面' : '题材底图非投稿封面') + '</div>' +
+          '<h2>' + esc(feat.title || feat.id) + '</h2><p>' + esc(feat.description || '发布者未填写简介。') + '</p>' +
+          '<div class="row">' + mallStars(feat) + '<span class="atelier-feature-metric">' + metricText(feat, 'downloads', '↓', '') + '</span>' +
+            '<button class="btn primary" onclick="event.stopPropagation();TMContentManager.openPackDetail(' + jsArg(feat.id || '') + ')">展开真实卷宗</button></div></div></div>';
+      var fsideHtml = fside.map(function(p){
+        return '<div class="fs" onclick="TMContentManager.openPackDetail(' + jsArg(p.id || '') + ')">' + mallCover(p, 'width:62px;height:62px;font-size:26px;') +
+          '<div><b>' + esc(p.title || p.id) + '</b><small>' + esc(p.author || '未署名') + ' · ' + metricText(p, 'downloads', '↓', '') + '</small></div></div>';
+      }).join('') || '<div class="fs is-empty"><div><b>仅返回 1 件精选</b><small>未伪造其他推荐位</small></div></div>';
+      featuredHtml = '<div class="feature truth-feature">' + featBanner + '<div class="feat-side">' + fsideHtml + '</div></div>';
+    } else if (state.featuredStatus === 'loading') {
+      featuredHtml = mallSkeleton(2);
+    } else if (state.featuredStatus === 'ok') {
+      featuredHtml = truthEmpty('精', '正式精选当前为空', '精选接口返回 0 件内容；这里不拿普通目录记录伪装精选。');
+    } else {
+      featuredHtml = truthEmpty('精', '正式精选接口不可用', state.featuredError || '无法读取正式精选。');
+    }
+
+    var hot = packs.filter(function(p){ return hasMetric(p, 'downloads'); }).sort(function(a, b){ return Number(b.downloads) - Number(a.downloads); });
+    var hotSection;
+    if (hot.length) {
+      var hotGrid = hot.slice(0, 8).map(mallCard).join('');
+      var rail = hot.slice(0, 6).map(function(p, i){
+        return '<div class="rk" onclick="TMContentManager.openPackDetail(' + jsArg(p.id || '') + ')"><div class="n' + (i < 3 ? ' top' : '') + '">' + (i + 1) + '</div>' +
+          '<div class="t"><b>' + esc(p.title || p.id) + '</b><small>' + esc(p.author || '未署名') + ' · ↓' + esc(String(p.downloads)) + '</small></div></div>';
+      }).join('');
+      hotSection = '<div class="cols"><div><div class="grid">' + hotGrid + '</div></div><aside><div class="rail"><h4>下载榜</h4>' + rail + '</div>' +
+        '<div class="becre"><b>成为创作者</b><p>登录后可发布真实剧本与素材包，并进入现有审核流程。</p><button class="btn primary sm" onclick="TMContentManager.switchPane(\'studio\')">前往创作</button></div></aside></div>';
+    } else {
+      hotSection = truthEmpty('榜', '暂无可排行下载量', '当前正式目录没有返回下载量字段，作品不会被按零下载伪排序。');
+    }
+
+    return heroHtml + (vs === 'stale' ? catalogStaleBannerHtml(state) : '') + (state.catalogStatus === 'fallback' ? '<div class="status atelier-fallback-note">正式在线目录不可用；当前只展示仓库内置官方清单。</div>' : '') +
       mallTypeChips() +
-      '<div class="sec-h"><h3>本周精选</h3><span class="more" onclick="TMContentManager.switchPane(\'browse\')">看全部 ›</span></div>' +
-      '<div class="feature">' + featBanner + '<div class="feat-side">' + fsideHtml + '</div></div>' +
-      '<div class="sec-h"><h3>按类浏览</h3></div>' +
-      '<div class="cats">' + PACK_TYPES.filter(function(t){ return t.v; }).map(function(t){
+      '<div class="sec-h"><h3>正式精选</h3><span class="more" onclick="TMContentManager.toggleFeatured()">查看精选目录 ›</span></div>' + featuredHtml +
+      '<div class="sec-h"><h3>按类浏览</h3></div><div class="cats">' + PACK_TYPES.filter(function(t){ return t.v; }).map(function(t){
         var n = packs.filter(function(pp){ return String(pp.type || 'scenario') === t.v; }).length;
         return '<div class="cat" onclick="TMContentManager.switchCatalogType(' + jsArg(t.v) + ');TMContentManager.switchPane(\'browse\')"><div class="g">' + esc(t.label.charAt(0)) + '</div><b>' + esc(t.label) + '</b><small>' + n + ' 件</small></div>';
       }).join('') + '</div>' +
-      '<div class="sec-h"><h3>热门下载</h3><span class="more" onclick="TMContentManager.switchPane(\'browse\')">更多 ›</span></div>' +
-      '<div class="cols"><div><div class="grid">' + hotGrid + '</div></div>' +
-        '<aside><div class="rail"><h4>下载榜</h4>' + rail + '</div>' +
-          '<div class="becre"><b>成为创作者</b><p>登录后即可发布剧本、立绘、音乐，加入世界线与史册接龙。</p><button class="btn primary sm" onclick="TMContentManager.switchPane(\'studio\')">前往创作</button></div>' +
-        '</aside></div>';
+      '<div class="sec-h"><h3>热门下载</h3><span class="more" onclick="TMContentManager.switchPane(\'ranks\')">完整榜单 ›</span></div>' + hotSection;
   }
   function mallFopt(label, count, active, onclick) {
     return '<div class="fopt" onclick="' + onclick + '"><span style="margin-left:0;color:' + (active ? 'var(--gold-bright)' : 'var(--ink-faint)') + ';">' + (active ? '◉' : '○') + '</span>' + esc(label) + '<span>' + (count != null ? count : '') + '</span></div>';
@@ -1164,25 +1367,27 @@
     var featuredOn = !!state.featuredOn;
     var base = featuredOn ? (state.featuredPacks || []) : packs;
     var shown = (!featuredOn && ctype) ? base.filter(function(pp){ return String(pp.type || 'scenario') === ctype; }) : base;
-    // 出错且无旧数据 → 错误卡（走共享 helper）；出错但有旧数据由下方 banner 提示、列表照常渲染。
-    var grid = shown.length ? shown.map(mallCard).join('')
-      : (state.catalogLoading ? mallSkeleton(8)
-        : (vs === 'error'
-          ? catalogErrorCardHtml(state)
-          : '<div class="empty"><div class="glyph">坊</div><div class="t">' + (featuredOn ? '还没有被社区推荐的内容' : (packs.length ? '此类型下暂无内容' : '尚未载入在线目录')) + '</div><div>' + (packs.length ? '换个类型或来源看看' : '点右侧「刷新」从官方目录浏览') + '</div></div>'));
+    var grid;
+    if (shown.length) grid = shown.map(mallCard).join('');
+    else if (state.catalogLoading || (featuredOn && state.featuredStatus === 'loading')) grid = mallSkeleton(8);
+    else if (featuredOn && state.featuredStatus === 'error') grid = truthEmpty('精', '正式精选接口不可用', state.featuredError || '无法读取正式精选。');
+    else if (featuredOn) grid = truthEmpty('精', '正式精选当前为空', '精选接口返回 0 件内容；不会拿普通目录记录补位。');
+    else if (vs === 'error') grid = catalogErrorCardHtml(state);
+    else if (state.catalogStatus === 'error') grid = truthEmpty('检', '目录来源不可用', state.catalogError || '无法读取正式目录。');
+    else grid = truthEmpty('坊', packs.length ? '此类型下暂无内容' : '正式目录当前为空', packs.length ? '换个类型或来源看看。' : '目录返回 0 件内容。');
     var typeOpts = PACK_TYPES.map(function(t){
       var n = t.v ? packs.filter(function(pp){ return String(pp.type || 'scenario') === t.v; }).length : packs.length;
       return mallFopt(t.label, n, !featuredOn && ctype === t.v, 'TMContentManager.switchCatalogType(' + jsArg(t.v) + ')');
     }).join('');
     var authorView = state.catalogAuthorView;
-    var head = authorView ? ('作者：' + authorView) : (featuredOn ? '社区精选' : (ctype ? packTypeLabel(ctype) : '全部内容'));
+    var head = authorView ? ('作者：' + authorView) : (featuredOn ? '正式精选' : (ctype ? packTypeLabel(ctype) : '全部内容'));
     return (authorView ? '<div class="status" style="margin-bottom:10px;">正在看作者「' + esc(authorView) + '」的作品 <span style="cursor:pointer;color:var(--gold);text-decoration:underline;margin-left:8px;" onclick="TMContentManager.loadWorkshopCatalog()">← 返回全部目录</span></div>' : '') +
     (vs === 'stale' ? catalogStaleBannerHtml(state) : '') +
     '<div class="browse">' +
       '<aside class="filters">' +
         '<h4>筛选</h4>' +
         '<div class="fgrp"><div class="flbl">内容类型</div>' + typeOpts + '</div>' +
-        '<div class="fgrp"><div class="flbl">来源</div>' + mallFopt('✦ 社区精选', null, featuredOn, 'TMContentManager.toggleFeatured()') + '</div>' +
+        '<div class="fgrp"><div class="flbl">来源</div>' + mallFopt('✦ 正式精选', null, featuredOn, 'TMContentManager.toggleFeatured()') + '</div>' +
         '<div class="fgrp"><div class="flbl">排序</div><select id="tm-workshop-sort" class="sortsel" style="width:100%;" onchange="TMContentManager.loadWorkshopCatalog()">' +
           '<option value="new"' + (!state.catalogSort || state.catalogSort === 'new' ? ' selected' : '') + '>最新</option>' +
           '<option value="hot"' + (state.catalogSort === 'hot' ? ' selected' : '') + '>最热（下载）</option>' +
@@ -1196,21 +1401,23 @@
   }
   function renderRanksPane() {
     var packs = ((state.catalog && state.catalog.packs) || []).slice();
-    if (!packs.length) return '<div class="sec-h"><h3>排行榜</h3></div><div class="empty"><div class="glyph">榜</div><div class="t">尚未载入目录</div></div>';
-    function rankList(arr, fmt) {
+    if (state.catalogStatus === 'loading') return '<div class="sec-h"><h3>百工榜</h3></div>' + mallSkeleton(6);
+    if (state.catalogStatus === 'error') return '<div class="sec-h"><h3>百工榜</h3></div>' + truthEmpty('榜', '目录来源不可用', state.catalogError || '无法读取正式目录。');
+    function rankList(arr, fmt, emptyCopy) {
+      if (!arr.length) return '<div class="rank-empty">' + esc(emptyCopy) + '</div>';
       return arr.slice(0, 10).map(function(p, i){
         return '<div class="rk" onclick="TMContentManager.openPackDetail(' + jsArg(p.id || '') + ')"><div class="n' + (i < 3 ? ' top' : '') + '">' + (i + 1) + '</div>' +
-          '<div class="t"><b>' + esc(p.title || p.id) + '</b><small>' + esc(p.author || '佚名') + ' · ' + fmt(p) + '</small></div></div>';
+          '<div class="t"><b>' + esc(p.title || p.id) + '</b><small>' + esc(p.author || '未署名') + ' · ' + fmt(p) + '</small></div></div>';
       }).join('');
     }
-    var byDown = packs.slice().sort(function(a, b){ return (b.downloads || 0) - (a.downloads || 0); });
-    var byRate = packs.slice().sort(function(a, b){ return (b.rating || 0) - (a.rating || 0); });
-    var byEnd = packs.slice().sort(function(a, b){ return (b.endorsements || 0) - (a.endorsements || 0); });
-    return '<div class="sec-h"><h3>排行榜</h3></div>' +
-      '<div class="cols" style="grid-template-columns:1fr 1fr 1fr;">' +
-        '<div class="rail"><h4>下载榜</h4>' + rankList(byDown, function(p){ return '↓' + (p.downloads || 0); }) + '</div>' +
-        '<div class="rail"><h4>口碑榜</h4>' + rankList(byRate, function(p){ return '★' + ((p.rating || 0).toFixed ? p.rating.toFixed(1) : p.rating); }) + '</div>' +
-        '<div class="rail"><h4>社区推荐榜</h4>' + rankList(byEnd, function(p){ return '✦' + (p.endorsements || 0); }) + '</div>' +
+    var byDown = packs.filter(function(p){ return hasMetric(p, 'downloads'); }).sort(function(a, b){ return Number(b.downloads) - Number(a.downloads); });
+    var byRate = packs.filter(function(p){ return hasMetric(p, 'rating') && hasMetric(p, 'ratingCount') && Number(p.ratingCount) > 0; }).sort(function(a, b){ return Number(b.rating) - Number(a.rating); });
+    var byEnd = packs.filter(function(p){ return hasMetric(p, 'endorsements'); }).sort(function(a, b){ return Number(b.endorsements) - Number(a.endorsements); });
+    return '<div class="sec-h"><h3>百工榜</h3><span class="more">只按正式目录实际字段排序</span></div>' +
+      '<div class="cols atelier-rank-columns" style="grid-template-columns:1fr 1fr 1fr;">' +
+        '<div class="rail"><h4>下载榜</h4>' + rankList(byDown, function(p){ return '↓' + esc(String(p.downloads)); }, '正式目录没有返回下载量字段。') + '</div>' +
+        '<div class="rail"><h4>口碑榜</h4>' + rankList(byRate, function(p){ return '★' + Number(p.rating).toFixed(1) + ' · ' + esc(String(p.ratingCount)) + ' 人'; }, '正式目录没有返回有效评分与评分人数。') + '</div>' +
+        '<div class="rail"><h4>社区推荐榜</h4>' + rankList(byEnd, function(p){ return '✦' + esc(String(p.endorsements)); }, '正式目录没有返回推荐量字段。') + '</div>' +
       '</div>';
   }
   function renderArenaSection() {
@@ -1218,10 +1425,12 @@
     var arenas = state.arenaList || [];
     var cards = arenas.length ? '<div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr));">' + arenas.map(function(a){
       return '<div class="card" style="cursor:pointer;" onclick="TMContentManager.openArena(' + Number(a.id) + ')"><div class="pad">' +
-        '<h4>' + esc(a.title) + '</h4><div class="au">擂主 ' + esc(a.creatorNick) + ' · 比' + esc(ARENA_METRIC[a.metric] || a.metric) + '</div>' +
-        '<div class="rt"><span>' + (a.entries || 0) + ' 人上榜</span><span style="color:var(--gold);">看榜 ›</span></div></div></div>';
+        '<h4>' + esc(a.title || '未命名擂台') + '</h4><div class="au">擂主 ' + esc(a.creatorNick || '未署名') + ' · ' + (a.metric ? '比' + esc(ARENA_METRIC[a.metric] || a.metric) : '指标未提供') + '</div>' +
+        '<div class="rt"><span>' + (hasMetric(a, 'entries') ? esc(String(a.entries)) + ' 人上榜' : '战绩数未提供') + '</span><span style="color:var(--gold);">看榜 ›</span></div></div></div>';
     }).join('') + '</div>'
-      : '<div class="empty"><div class="glyph">擂</div><div class="t">还没有擂台</div><div>开一个，约人同台竞史</div></div>';
+      : (state.arenasLoading ? mallSkeleton(4) : (state.arenaStatus === 'error'
+        ? truthEmpty('擂', '正式擂台接口不可用', state.arenaError || '无法读取正式擂台。')
+        : truthEmpty('擂', '正式擂台当前为空', '接口返回 0 个擂台；可登录后开第一擂。')));
     var creator = loggedInNow()
       ? '<div class="composer" style="margin-bottom:14px;"><div style="display:flex;gap:8px;flex-wrap:wrap;">' +
           '<input id="tm-arena-title" class="input" style="flex:1;min-width:200px;" placeholder="擂台标题，如「天启七年·看谁的崇祯活最久」">' +
@@ -1243,19 +1452,12 @@
       '<div class="t"><b>' + esc(o.title) + '</b><small>' + esc(o.sub) + '</small></div></div>';
   }
   function renderTopicsPane() {
-    var topics = [
-      { glyph: '启', tone: 'zhu', title: '明末风云', sub: '天启崇祯，社稷飘摇', cls: '', onclick: 'TMContentManager.mallSearch(' + jsArg('明末') + ')' },
-      { glyph: '绍', tone: 'qing', title: '南宋中兴', sub: '建炎绍兴，重整山河', cls: 'b', onclick: 'TMContentManager.mallSearch(' + jsArg('南宋') + ')' },
-      { glyph: '贞', tone: 'jin', title: '盛唐气象', sub: '贞观开元，万邦来朝', cls: 'c', onclick: 'TMContentManager.mallSearch(' + jsArg('唐') + ')' }
-    ];
     var plays = [
-      { glyph: '绘', tone: 'jiang', type: 'portrait', title: '立绘美术', sub: '给你的剧本换张脸', cls: 'c', onclick: 'TMContentManager.switchCatalogType(\'portrait\');TMContentManager.switchPane(\'browse\')' },
-      { glyph: '音', tone: 'dai', type: 'music', title: '古风配乐', sub: '朝堂边关，各得其声', cls: 'b', onclick: 'TMContentManager.switchCatalogType(\'music\');TMContentManager.switchPane(\'browse\')' },
-      { glyph: '创', tone: 'zhe', title: 'AI 共创', sub: '一句话起草你的史册', cls: '', onclick: 'TMContentManager.switchPane(\'studio\')' }
+      { glyph: '卷', tone: 'zhu', type: 'scenario', title: '剧本卷宗', sub: '筛选正式目录中的剧本记录', cls: '', onclick: 'TMContentManager.switchCatalogType(\'scenario\');TMContentManager.switchPane(\'browse\')' },
+      { glyph: '绘', tone: 'jiang', type: 'portrait', title: '立绘素材', sub: '筛选正式目录中的立绘包', cls: 'c', onclick: 'TMContentManager.switchCatalogType(\'portrait\');TMContentManager.switchPane(\'browse\')' },
+      { glyph: '音', tone: 'dai', type: 'music', title: '音乐素材', sub: '筛选正式目录中的音乐包', cls: 'b', onclick: 'TMContentManager.switchCatalogType(\'music\');TMContentManager.switchPane(\'browse\')' }
     ];
-    return '<div class="sec-h"><h3>专题策划</h3></div>' +
-      '<div class="promos">' + topics.map(promoCard).join('') + '</div>' +
-      '<div class="sec-h"><h3>玩法精选</h3></div>' +
+    return '<div class="sec-h"><h3>内容门类 · 目录筛选</h3><span class="more">导航入口，不冒充策展专题</span></div>' +
       '<div class="promos">' + plays.map(promoCard).join('') + '</div>' +
       renderCollectionSection();
   }
@@ -1264,10 +1466,12 @@
     var cols = state.collectionList || [];
     var cards = cols.length ? '<div class="grid" style="grid-template-columns:repeat(3,minmax(0,1fr));">' + cols.map(function(c){
       return '<div class="card" style="cursor:pointer;" onclick="TMContentManager.openCollection(' + Number(c.id) + ')"><div class="pad">' +
-        '<h4>' + esc(c.title) + '</h4><div class="au">' + esc(c.ownerNick) + ' 策展 · ' + (c.count || 0) + ' 件</div>' +
+        '<h4>' + esc(c.title || '未命名合集') + '</h4><div class="au">' + esc(c.ownerNick || '未署名') + ' 策展 · ' + (hasMetric(c, 'count') ? esc(String(c.count)) + ' 件' : '件数未提供') + '</div>' +
         (c.description ? '<div class="rt"><span style="color:var(--ink-faint);">' + esc(c.description) + '</span></div>' : '') + '</div></div>';
     }).join('') + '</div>'
-      : '<div class="empty"><div class="glyph">集</div><div class="t">还没有合集</div><div>把好作品策成一辑，分享给同好</div></div>';
+      : (state.collectionsLoading ? mallSkeleton(3) : (state.collectionStatus === 'error'
+        ? truthEmpty('集', '正式合集接口不可用', state.collectionError || '无法读取正式合集。')
+        : truthEmpty('集', '正式合集当前为空', '接口返回 0 个合集；可登录后创建第一辑。')));
     var creator = loggedInNow()
       ? '<div class="composer" style="margin-bottom:14px;"><div style="display:flex;gap:8px;flex-wrap:wrap;">' +
           '<input id="tm-col-title" class="input" style="flex:1;min-width:180px;" placeholder="合集标题，如「明末入坑五部曲」">' +
@@ -1281,11 +1485,21 @@
   // ===== 我的合集（「我」页策展·服务端 collections(?ownerId) 按主人筛，非 nick 匹配） =====
   function loadMyCollections() {
     var uid = selfId();
-    if (uid == null || !(window.TM && TM.OnlineClient && TM.OnlineClient.collections)) return;
+    if (uid == null || !(window.TM && TM.OnlineClient && TM.OnlineClient.collections)) {
+      state.myCollectionList = []; state.myCollectionsLoaded = true; state.myCollectionsLoading = false;
+      state.myCollectionsStatus = 'error'; state.myCollectionsError = '正式合集接口未加载'; render(); return;
+    }
     state.myCollectionsLoading = true;
+    state.myCollectionsStatus = 'loading'; state.myCollectionsError = '';
     TM.OnlineClient.collections(uid, state.onlineApiUrl || undefined).then(function(res){
-      state.myCollectionList = (res && res.collections) || []; state.myCollectionsLoaded = true; state.myCollectionsLoading = false; render();
-    }).catch(function(){ state.myCollectionsLoading = false; render(); });
+      if (!res || res.success === false) throw new Error((res && res.error) || '正式合集接口返回失败');
+      state.myCollectionList = Array.isArray(res.collections) ? res.collections : [];
+      state.myCollectionsLoaded = true; state.myCollectionsLoading = false;
+      state.myCollectionsStatus = 'ok'; state.myCollectionsError = ''; render();
+    }).catch(function(error){
+      state.myCollectionList = []; state.myCollectionsLoaded = true; state.myCollectionsLoading = false;
+      state.myCollectionsStatus = 'error'; state.myCollectionsError = (error && error.message) || '正式合集接口不可用'; render();
+    });
   }
   function createMyCollectionUI() {
     var t = document.getElementById('tm-mycol-title'), d = document.getElementById('tm-mycol-desc');
@@ -1300,22 +1514,32 @@
     if (!state.myCollectionsLoaded && !state.myCollectionsLoading) { try { setTimeout(loadMyCollections, 0); } catch (e) {} }
     var cols = state.myCollectionList || [];
     var cards = cols.length ? '<div class="grid" style="grid-template-columns:repeat(3,minmax(0,1fr));">' + cols.map(function(c){
-      return '<div class="card" style="cursor:pointer;" onclick="TMContentManager.openCollection(' + Number(c.id) + ')"><div class="pad"><h4>' + esc(c.title) + '</h4><div class="au">' + (c.count || 0) + ' 件</div>' + (c.description ? '<div class="rt"><span style="color:var(--ink-faint);">' + esc(c.description) + '</span></div>' : '') + '</div></div>';
-    }).join('') + '</div>' : '<div class="empty"><div class="glyph">集</div><div class="t">还没有合集</div><div>把好作品策成一辑，分享给同好</div></div>';
+      return '<div class="card" style="cursor:pointer;" onclick="TMContentManager.openCollection(' + Number(c.id) + ')"><div class="pad"><h4>' + esc(c.title || '未命名合集') + '</h4><div class="au">' + (hasMetric(c, 'count') ? esc(String(c.count)) + ' 件' : '件数未提供') + '</div>' + (c.description ? '<div class="rt"><span style="color:var(--ink-faint);">' + esc(c.description) + '</span></div>' : '') + '</div></div>';
+    }).join('') + '</div>' : (state.myCollectionsLoading ? mallSkeleton(3) : (state.myCollectionsStatus === 'error'
+      ? truthEmpty('集', '我的合集接口不可用', state.myCollectionsError || '无法读取正式合集。')
+      : truthEmpty('集', '还没有合集', '正式接口返回 0 个合集；把好作品策成一辑，分享给同好。')));
     var creator = '<div class="composer" style="margin:10px 0 4px;"><div style="display:flex;gap:8px;flex-wrap:wrap;"><input id="tm-mycol-title" class="input" style="flex:1;min-width:180px;" placeholder="合集标题，如「明末入坑五部曲」"><input id="tm-mycol-desc" class="input" style="flex:1;min-width:160px;" placeholder="一句策展语(可选)"><button class="btn primary sm" onclick="TMContentManager.createMyCollectionUI()">建合集</button></div></div>';
     return (state.myCollectionsMsg ? '<div class="status" style="margin-bottom:10px;">' + esc(state.myCollectionsMsg) + '</div>' : '') + creator + cards;
   }
   // ===== A 史馆动态流 =====
   var FEED_TYPE_LABEL = { highlight: '局势高光', publish: '新作发布', chronicle: '史册落成', relay: '接龙邀请', milestone: '里程碑' };
   function loadFeed() {
-    if (!(window.TM && TM.OnlineClient)) return;
+    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.feed)) {
+      state.feedData = { posts: [] }; state.feedLoaded = true; state.feedLoading = false;
+      state.feedStatus = 'error'; state.feedError = '正式动态接口未加载'; render(); return;
+    }
     var scope = state.feedScope || 'recommend';
     state.feedLoading = true;
+    state.feedStatus = 'loading'; state.feedError = '';
     TM.OnlineClient.feed(scope, 1, state.onlineApiUrl || undefined).then(function(res){
-      state.feedData = res && res.success ? res : { posts: [] };
-      if (res && res.success === false && res.error) state.feedMsg = res.error;
-      state.feedLoaded = true; state.feedLoading = false; render();
-    }).catch(function(e){ state.feedLoading = false; state.feedMsg = '动态载入失败：' + (e && e.message || '未知'); render(); });
+      if (!res || res.success === false) throw new Error((res && res.error) || '正式动态接口返回失败');
+      state.feedData = Object.assign({}, res, { posts: Array.isArray(res.posts) ? res.posts : [] });
+      state.feedLoaded = true; state.feedLoading = false; state.feedStatus = 'ok'; state.feedError = ''; render();
+    }).catch(function(e){
+      state.feedData = { posts: [] }; state.feedLoaded = true; state.feedLoading = false;
+      state.feedStatus = 'error'; state.feedError = (e && e.message) || '正式动态接口不可用';
+      state.feedMsg = '动态载入失败：' + state.feedError; render();
+    });
   }
   function submitFeedPost() {
     if (!(window.TM && TM.OnlineClient && TM.OnlineClient.isLoggedIn())) { state.feedMsg = '请先登录再发动态。'; render(); return; }
@@ -1347,10 +1571,16 @@
     if (!(window.TM && TM.OnlineClient && TM.OnlineClient.isLoggedIn())) { state.feedMsg = '登录后可点赞。'; render(); return; }
     var posts = (state.feedData && state.feedData.posts) || [];
     var p = null; for (var i = 0; i < posts.length; i++) { if (String(posts[i].id) === String(id)) { p = posts[i]; break; } }
-    if (p) { p.liked = !p.liked; p.likes = Math.max(0, (p.likes || 0) + (p.liked ? 1 : -1)); render(); } // 乐观更新
+    var prior = p ? { liked: !!p.liked, likes: p.likes, hadLikes: hasMetric(p, 'likes') } : null;
+    if (p && prior.hadLikes) { p.liked = !p.liked; p.likes = Math.max(0, Number(p.likes) + (p.liked ? 1 : -1)); render(); } // 只对已知计数乐观更新
     TM.OnlineClient.likePost(id, state.onlineApiUrl || undefined).then(function(res){
       if (res && res.success && p) { p.liked = !!res.liked; if (res.likes != null) p.likes = res.likes; render(); }
-    }).catch(function(){});
+    }).catch(function(){
+      if (!p || !prior) return;
+      p.liked = prior.liked;
+      if (prior.hadLikes) p.likes = prior.likes; else delete p.likes;
+      render();
+    });
   }
   function feedMetricChips(metrics) {
     if (!Array.isArray(metrics) || !metrics.length) return '';
@@ -1376,8 +1606,8 @@
       (post.body ? '<div class="post-body">' + esc(post.body) + '</div>' : '') +
       img + feedMetricChips(post.metrics) + refLink +
       '<div class="post-acts">' +
-        '<span class="pa' + (liked ? ' on' : '') + '" onclick="TMContentManager.likeFeedPost(' + jsArg(post.id) + ')">♡ ' + (post.likes || 0) + '</span>' +
-        '<span class="pa">评 ' + (post.commentCount || 0) + '</span>' +
+        '<span class="pa' + (liked ? ' on' : '') + '" onclick="TMContentManager.likeFeedPost(' + jsArg(post.id) + ')">♡ ' + (hasMetric(post, 'likes') ? esc(String(post.likes)) : '未提供') + '</span>' +
+        '<span class="pa">评 ' + (hasMetric(post, 'commentCount') ? esc(String(post.commentCount)) : '未提供') + '</span>' +
         (ref.scenarioId ? '<span class="pa" onclick="TMContentManager.openChronicles(' + jsArg(ref.scenarioId) + ')">↪ 引用接龙</span>' : '') +
       '</div>' +
     '</div>';
@@ -1400,9 +1630,11 @@
       : '<div class="status" style="margin-bottom:12px;">登录后可发动态、关注作者、点赞。到「我」登录。</div>';
     var body = state.feedLoading
       ? '<div class="empty"><div class="glyph">邸</div><div class="t">正在汇集动态…</div></div>'
+      : (state.feedStatus === 'error'
+          ? truthEmpty('邸', '正式动态接口不可用', state.feedError || '无法读取正式动态。')
       : (posts.length
           ? posts.map(feedCard).join('')
-          : '<div class="empty"><div class="glyph">邸</div><div class="t">' + (scope === 'following' ? '关注的人还没有新动态' : '动态广场暂时安静') + '</div><div>' + (loggedIn ? '发一条今日时局，开个头。' : '登录后关注作者、发动态。') + '</div></div>');
+          : truthEmpty('邸', scope === 'following' ? '关注的人还没有新动态' : '正式动态当前为空', loggedIn ? '接口返回 0 条记录；可发布第一条今日时局。' : '接口返回 0 条记录；登录后可关注作者或发布动态。')));
     return '<div class="sec-h"><h3>史馆动态</h3><span class="more" onclick="TMContentManager.refreshFeed()">刷新 ›</span></div>' +
       tabs + composer +
       (state.feedMsg ? '<div class="status" style="margin-bottom:10px;">' + esc(state.feedMsg) + '</div>' : '') +
@@ -1561,7 +1793,9 @@
     var friends = d.friends.length ? d.friends.map(function(f){
       return '<div class="friend">' + av(f.nickname) + '<div><b>' + esc(f.nickname) + '</b><small>@' + esc(f.username) + '</small></div>' +
         '<div style="display:flex;gap:6px;"><button class="btn sm" onclick="TMContentManager.openDm(' + Number(f.id) + ', ' + jsArg(f.nickname || '') + ')">私信</button><button class="btn sm" onclick="TMContentManager.removeFriend(' + Number(f.id) + ')">删除</button></div></div>';
-    }).join('') : '<div class="empty"><div class="glyph">友</div><div class="t">还没有好友</div><div>搜对方用户名加一个</div></div>';
+    }).join('') : (state.friendsLoading ? mallSkeleton(3) : (state.friendsStatus === 'error'
+      ? truthEmpty('友', '正式好友接口不可用', state.friendsError || '无法读取好友列表。')
+      : truthEmpty('友', '好友列表当前为空', '正式接口返回 0 位好友；可按用户名发送申请。')));
     return '<div class="sec-h"><h3>好友' + (d.friends.length ? ' · ' + d.friends.length : '') + '</h3><span class="more" onclick="TMContentManager.openDmInbox()">私信箱 ›</span></div>' +
       '<div style="display:flex;gap:8px;max-width:480px;"><input id="tm-friend-add" class="input" placeholder="对方用户名"><button class="btn primary" onclick="TMContentManager.addFriend()">申请</button></div>' +
       (state.friendMessage ? '<div class="status" style="margin-top:8px;">' + esc(state.friendMessage) + '</div>' : '') +
@@ -1638,7 +1872,7 @@
       var dRows = packs.length ? packs.map(function(rec){
         var en = rec.enabled !== false; var missing = !rec.installed;
         return '<div class="inst-card">' + instCover(rec.title || rec.id, rec.id, rec.type) +
-          '<div><b>' + esc(rec.title || rec.id) + (missing ? '<span class="upd-badge" style="border-color:rgba(231,105,82,.5);color:#f0b7a8;background:rgba(120,31,23,.2);">文件缺失</span>' : '') + (en ? '' : '<span class="upd-badge" style="border-color:var(--line);color:var(--ink-faint);background:transparent;">已停用</span>') + '</b><small>' + esc(rec.id) + ' · v' + esc(rec.version || '1.0.0') + '</small></div>' +
+          '<div><b>' + esc(rec.title || rec.id) + (missing ? '<span class="upd-badge" style="border-color:rgba(231,105,82,.5);color:#f0b7a8;background:rgba(120,31,23,.2);">文件缺失</span>' : '') + (en ? '' : '<span class="upd-badge" style="border-color:var(--line);color:var(--ink-faint);background:transparent;">已停用</span>') + '</b><small>' + esc(rec.id) + ' · ' + (rec.version ? 'v' + esc(rec.version) : '版本未提供') + '</small></div>' +
           '<div class="acts"><button class="btn sm" onclick="TMContentManager.togglePack(' + jsArg(rec.id) + ',' + (!en) + ')">' + (en ? '停用' : '启用') + '</button><button class="btn sm" onclick="TMContentManager.uninstallPack(' + jsArg(rec.id) + ')">卸载</button></div></div>';
       }).join('') : '<div class="empty"><div class="glyph">坊</div><div class="t">尚未安装内容包</div></div>';
       return '<div class="inst-summary"><span class="s-stat"><b>' + packs.length + '</b>件已装</span><span class="s-spacer"></span>' +
@@ -1651,7 +1885,7 @@
     var rows = recs.length ? recs.map(function(rec){
       var upd = updates[rec.packId];
       return '<div class="inst-card">' + instCover(rec.title || rec.packId, rec.packId, rec.type) +
-        '<div><b>' + esc(rec.title || rec.packId) + (upd ? '<span class="upd-badge">有新版 ' + esc(upd.to) + '</span>' : '') + '</b><small>' + esc(rec.packId) + ' · v' + esc(rec.version || '1.0.0') + '</small></div>' +
+        '<div><b>' + esc(rec.title || rec.packId) + (upd ? '<span class="upd-badge">有新版 ' + esc(upd.to) + '</span>' : '') + '</b><small>' + esc(rec.packId) + ' · ' + (rec.version ? 'v' + esc(rec.version) : '版本未提供') + '</small></div>' +
         '<div class="acts">' + (upd ? '<button class="btn sm primary" onclick="TMContentManager.updateWorkshopPack(' + jsArg(rec.packId) + ')">更新</button>' : '') + '<button class="btn sm" onclick="TMContentManager.uninstallWebPack(' + jsArg(rec.packId) + ')">卸载</button></div></div>';
     }).join('') : '<div class="empty"><div class="glyph">坊</div><div class="t">尚未安装工坊剧本</div><div>到「发现」浏览并安装</div></div>';
     return '<div class="inst-summary"><span class="s-stat"><b>' + recs.length + '</b>件已装</span>' +
@@ -1685,15 +1919,17 @@
   }
   // 成就徽章：earned 高亮、locked 暗显（接现成 .badges-wall/.bdg）
   function renderBadges(works) {
-    var dl = works.reduce(function(s, p){ return s + (p.downloads || 0); }, 0);
-    var en = works.reduce(function(s, p){ return s + (p.endorsements || 0); }, 0);
-    var rated = works.some(function(p){ return (p.ratingCount || 0) >= 5; });
+    var dlMetric = aggregateMetric(works, 'downloads');
+    var endorsementMetric = aggregateMetric(works, 'endorsements');
+    var dl = dlMetric.value;
+    var en = endorsementMetric.value;
+    var rated = works.some(function(p){ return hasMetric(p, 'ratingCount') && Number(p.ratingCount) >= 5; });
     var forked = works.some(function(p){ return p.parentId; });
     var list = [
       { g: '命', t: '入籍天命', s: '已注册账号', on: true },
       { g: '著', t: '已发布作者', s: works.length + ' 件作品', on: works.length > 0 },
-      { g: '众', t: '千人传抄', s: '累计下载逾千', on: dl >= 1000 },
-      { g: '荐', t: '众望所归', s: '获社区推荐', on: en > 0 },
+      { g: '众', t: '千人传抄', s: dlMetric.known ? '已提供下载累计逾千' : '下载量尚未提供', on: dl >= 1000 },
+      { g: '荐', t: '众望所归', s: endorsementMetric.known ? '获社区推荐' : '推荐量尚未提供', on: en > 0 },
       { g: '评', t: '口碑之作', s: '单作评价满五', on: rated },
       { g: '脉', t: '世界线开创', s: '改编自他人之作', on: forked }
     ];
@@ -1716,13 +1952,14 @@
     }
     return { cur: cur, next: next };
   }
-  // 声望（客户端一阶估算·权重抗刷:被荐/被收藏高、下载低·服务器版后续接管为权威）
+  // 声望仅为明确标注的客户端估算；缺失指标不补零展示，服务器版后续接管为权威。
   function computeReputation(works, extra) {
     extra = extra || {};
-    var dl = works.reduce(function(s, p){ return s + (p.downloads || 0); }, 0);
-    var en = works.reduce(function(s, p){ return s + (p.endorsements || 0); }, 0);
-    var rc = works.reduce(function(s, p){ return s + (p.ratingCount || 0); }, 0);
-    return Math.round(works.length * 120 + dl * 0.6 + en * 40 + rc * 10 + (extra.friends || 0) * 15);
+    var dl = aggregateMetric(works, 'downloads').value;
+    var en = aggregateMetric(works, 'endorsements').value;
+    var rc = aggregateMetric(works, 'ratingCount').value;
+    var friends = hasMetric(extra, 'friends') ? Number(extra.friends) : 0;
+    return Math.round(works.length * 120 + dl * 0.6 + en * 40 + rc * 10 + friends * 15);
   }
 
   // 收藏阁：客户端本地收藏（localStorage·服务器版 collections 后续接管同步）
@@ -1863,14 +2100,21 @@
     }).join('');
     // 个人资料库脊梁：作品 / 声望 / 社区品级（一次算，名册头与「我的」共用）
     var works = myPublishedPacks(user);
-    var friendN = (state.friendsData && state.friendsData.friends) ? state.friendsData.friends.length : 0;
+    var friendsKnown = state.friendsStatus === 'ok' && state.friendsData && Array.isArray(state.friendsData.friends);
+    var friendN = friendsKnown ? state.friendsData.friends.length : null;
     var official = (user.nickname === '天命官方' || user.username === '天命官方');
     var reputation = computeReputation(works, { friends: friendN });
+    var reputationIncomplete = !friendsKnown || works.some(function(p){
+      return !hasMetric(p, 'downloads') || !hasMetric(p, 'endorsements') || !hasMetric(p, 'ratingCount');
+    });
     var rankInfo = socialRankFor(reputation);
-    try { setTimeout(syncServerFavorites, 0); setTimeout(loadMyFollow, 0); } catch (e) {}
+    try {
+      setTimeout(syncServerFavorites, 0); setTimeout(loadMyFollow, 0);
+      if (!state.friendsLoaded && !state.friendsLoading) setTimeout(loadFriends, 0);
+    } catch (e) {}
     var mf = state.myFollow;
     var repPct = rankInfo.next ? Math.max(4, Math.round((reputation - rankInfo.cur.v) / (rankInfo.next.v - rankInfo.cur.v) * 100)) : 100;
-    var heroTitles = '<span class="rank-chip">' + esc(rankInfo.cur.name) + '</span>' +
+    var heroTitles = '<span class="rank-chip" title="由当前已载入的正式目录指标在本机推导，不是服务器授予品级">估算 · ' + esc(rankInfo.cur.name) + '</span>' +
       (works.length ? '<span class="rank-chip cert">认证作者</span>' : '') +
       (official ? '<span class="rank-chip cert">官方</span>' : '');
     var card = '<div class="acct-hero"><div class="ah-wm serif">' + esc(String(user.nickname || user.username).charAt(0)) + '</div>' +
@@ -1879,7 +2123,7 @@
         '<div class="ah-id"><b>' + esc(user.nickname || user.username) + '</b>' +
           '<div class="ah-titles">' + heroTitles + '</div>' +
           '<small>@' + esc(user.username) + (user.email ? ' · ' + esc(user.email) : '') + '</small>' +
-          (mf ? '<div class="ah-follow">关注 <b>' + (mf.following || 0) + '</b> · 粉丝 <b>' + (mf.followers || 0) + '</b></div>' : '') +
+          (mf ? '<div class="ah-follow">关注 <b>' + metricText(mf, 'following', '', '') + '</b> · 粉丝 <b>' + metricText(mf, 'followers', '', '') + '</b></div>' : '') +
         '</div>' +
         '<div class="ah-acts">' +
           '<button class="btn sm primary" onclick="TMContentManager.switchPane(\'studio\')">去创作</button>' +
@@ -1888,7 +2132,7 @@
         '</div>' +
       '</div>' +
       '<div class="ah-rank"><div class="ah-rank-head"><b>' + esc(rankInfo.cur.name) + (rankInfo.next ? '<span class="nxt">→ ' + esc(rankInfo.next.name) + '</span>' : '') + '</b>' +
-        '<span>' + (rankInfo.next ? '声望 ' + reputation + ' / ' + rankInfo.next.v : '声望 ' + reputation + ' · 已至顶阶') + '</span></div>' +
+        '<span>' + (rankInfo.next ? '本地估算声望 ' + reputation + ' / ' + rankInfo.next.v : '本地估算声望 ' + reputation + ' · 已至顶阶') + (reputationIncomplete ? ' · 数据未全' : '') + '</span></div>' +
         '<div class="ah-rank-bar"><i style="width:' + repPct + '%;"></i></div></div>' +
     '</div>';
     var content;
@@ -1901,15 +2145,19 @@
         return '<div class="notif' + (n.read ? '' : ' unread') + '"' + click + '><div class="ic">' + notifIcon(n.type) + '</div>' +
           '<div><b>' + esc(notifText(n)) + '</b><p>' + esc(n.createdAt || '') + '</p></div>' +
           (n.read ? '<span></span>' : '<button class="btn sm" onclick="event.stopPropagation();TMContentManager.markNotif(' + Number(n.id) + ')">已读</button>') + '</div>';
-      }).join('') : '<div class="empty"><div class="glyph">铃</div><div class="t">暂无通知</div></div>';
+      }).join('') : (state.notifLoading
+        ? truthEmpty('铃', '正在读取正式通知', '正在连接正式通知接口。')
+        : (state.notifStatus === 'error'
+          ? truthEmpty('铃', '通知接口不可用', state.notifError || '无法读取正式通知。')
+          : truthEmpty('铃', '暂无通知', '正式接口返回 0 条通知。')));
       content = '<div style="display:flex;gap:8px;margin-bottom:10px;">' + (d.unread ? '<button class="btn sm" onclick="TMContentManager.markAllNotif()">全部已读</button>' : '') + '<button class="btn sm" onclick="TMContentManager.refreshNotifs()">刷新</button></div>' + rows;
     } else if (meTab === 'installed') {
       content = renderInstalledMall();
     } else if (meTab === 'friends') {
       content = renderFriendsPaneMall();
     } else {
-      var totalDl = works.reduce(function(s, p){ return s + (p.downloads || 0); }, 0);
-      var totalEn = works.reduce(function(s, p){ return s + (p.endorsements || 0); }, 0);
+      var totalDl = aggregateMetric(works, 'downloads');
+      var totalEn = aggregateMetric(works, 'endorsements');
       var worksHtml = works.length
         ? '<div class="grid">' + works.map(mallCard).join('') + '</div>'
         : '<div class="empty"><div class="glyph">著</div><div class="t">还没有发布作品</div><div>把你的剧本、立绘或配乐发布给天下人。</div><button class="btn primary sm" style="margin-top:4px;" onclick="TMContentManager.switchPane(\'studio\')">前往创作</button></div>';
@@ -1928,9 +2176,9 @@
           : '') +
         '<div class="statbar">' +
           '<div><b>' + works.length + '</b><small>发布作品</small></div>' +
-          '<div><b>' + totalDl + '</b><small>累计下载</small></div>' +
-          '<div><b>' + totalEn + '</b><small>社区推荐</small></div>' +
-          '<div><b>' + friendN + '</b><small>好友</small></div>' +
+          '<div><b>' + aggregateMetricText(totalDl) + '</b><small>' + (totalDl.complete ? '累计下载' : (totalDl.known ? '已提供下载' : '累计下载未提供')) + '</small></div>' +
+          '<div><b>' + aggregateMetricText(totalEn) + '</b><small>' + (totalEn.complete ? '社区推荐' : (totalEn.known ? '已提供推荐' : '推荐量未提供')) + '</small></div>' +
+          '<div><b>' + (friendsKnown ? friendN : '—') + '</b><small>' + (friendsKnown ? '好友' : '好友数未载入') + '</small></div>' +
         '</div>' +
         '<div class="sec-h"><h3>列传 · 我的发布</h3>' + (works.length ? '<span class="more" onclick="TMContentManager.switchPane(\'studio\')">发布新作 ›</span>' : '') + '</div>' + worksHtml +
         '<div class="sec-h"><h3>收藏阁' + (favWorks.length ? ' · ' + favWorks.length : '') + '</h3></div>' + favHtml +
@@ -1938,8 +2186,6 @@
         '<div class="sec-h"><h3>战绩 · 历代亲历</h3></div>' + renderWarRecords() +
         '<div class="sec-h"><h3>功业 · 成就</h3></div>' + renderBadges(works) +
         '<div class="sec-h"><h3>履历 · 近况</h3></div>' + renderHeatmap(activityEvents) +
-        '<div class="sec-h"><h3>题跋 · 他人评说</h3></div>' +
-          '<div class="empty"><div class="glyph">跋</div><div class="t">暂无题跋</div><div>别人对你作品的评价与留言会汇集于此。</div></div>' +
         '<div class="sec-h"><h3>账号设置</h3></div>' +
         '<div class="kv" style="margin-bottom:12px;">' +
           '<div><small>身份</small><b>' + (works.length ? '已发布作者' : '已登录') + '</b></div>' +

@@ -26,9 +26,11 @@ assert(adminScript, 'workshop-admin.html should include an inline script');
 new Function(adminScript[1]);
 
 // ── ① A1：catalog 直连分支存在 resp.ok 检查，且错误卡/空卡两态分离 ──
+// 融合树：tm-online-client.js 采百工谱阁超集版（两条 catalog 路径均 resp.ok 抛错 + cat.success===false 抛业务错），
+// 直连分支文案由批A「HTTP …」升为「在线目录 HTTP …」——语义（resp.text() 前先查 resp.ok、非 2xx 抛 HTTP 码）不变。
 assert(
-  /\.then\(function \(resp\) \{ if \(!resp\.ok\) throw new Error\('HTTP '/.test(onlineClient),
-  'A1: catalog() 直连分支必须在 resp.text() 前检查 resp.ok（非 2xx 抛 HTTP 码）'
+  /\.then\(function \(resp\) \{\s*if \(!resp\.ok\) throw new Error\('在线目录 HTTP ' \+ resp\.status\);\s*return resp\.text\(\);/.test(onlineClient),
+  'A1: catalog() 直连分支必须在 resp.text() 前检查 resp.ok（非 2xx 抛 HTTP 码·百工谱阁「在线目录 HTTP」文案）'
 );
 assert(
   cm.includes('state.catalogError = null;'),
@@ -167,9 +169,12 @@ function extractFn(src, header) {
   var covers = { tone: function () { return 'zhu'; }, sceneSVG: nil };
   var PACK_TYPES = [{ v: '', label: '全部' }, { v: 'scenario', label: '剧本' }, { v: 'portrait', label: '立绘' }];
   // 形参表（须与下方 TAIL 顺序一一对应；state / catalogViewState 每场景单独在 run() 里给）。
+  // 融合后 renderDiscover/renderBrowsePane 以百工谱阁新结构为体（引入 document/truthEmpty/metricText/
+  // packCoverUrl/hasMetric）——按需补齐 stub 面；四场景断言语义不变。
   var PARAMS = ['state', 'catalogViewState', 'catalogErrorCardHtml', 'catalogStaleBannerHtml',
     'mallSkeleton', 'mallGlyph', 'window', 'TMWorkshopCovers', 'jsArg', 'esc', 'mallStars',
-    'mallCover', 'mallCard', 'mallTypeChips', 'PACK_TYPES', 'mallFopt', 'packTypeLabel'];
+    'mallCover', 'mallCard', 'mallTypeChips', 'PACK_TYPES', 'mallFopt', 'packTypeLabel',
+    'document', 'truthEmpty', 'metricText', 'packCoverUrl', 'hasMetric'];
   var TAIL = [
     function () { return ERR; },   // catalogErrorCardHtml → 哨兵
     function () { return STALE; },  // catalogStaleBannerHtml → 哨兵
@@ -179,7 +184,12 @@ function extractFn(src, header) {
     covers,                         // TMWorkshopCovers
     jsArg, esc, nil,                // jsArg / esc / mallStars
     nil, nil, nil,                  // mallCover / mallCard / mallTypeChips
-    PACK_TYPES, nil, nil            // PACK_TYPES / mallFopt / packTypeLabel
+    PACK_TYPES, nil, nil,           // PACK_TYPES / mallFopt / packTypeLabel
+    { querySelector: function () { return null; } }, // document（heroHtml 取版本 meta）
+    nil,                            // truthEmpty（真空/降级卡 → ''）
+    nil,                            // metricText（下载量文案 → ''）
+    nil,                            // packCoverUrl（投稿封面 URL → '' 视作无封面）
+    function () { return false; }   // hasMetric（无真实字段 → 不纳入热门榜）
   ];
   function build(name) {
     return new Function(PARAMS.join(','), extractFn(community, 'function ' + name + '()') + '\nreturn ' + name + ';');
@@ -246,8 +256,10 @@ assert(cm.includes('var quota = isQuotaError(e);'),
 
 // ── R4·loadWorkshopCatalog 三条生命周期路径真跑（成功清错 / 失败保留 stale / 开跑清错）──
 (function testLoadCatalogLifecycle() {
+  // 融合后 loadWorkshopCatalog 的 catch 先走百工谱阁 loadBundledCatalogFallback 再分层——注入其 stub
+  // （恒返回 false = bundled 兜底也失败），令「失败保留旧在线数据(stale)」这条被测路径成立。
   var makeLWC = new Function(
-    'state', 'render', 'desktop', 'document', 'window', 'TM', 'catalogUrlWithParams', 'saveCatalogUrl',
+    'state', 'render', 'desktop', 'document', 'window', 'TM', 'catalogUrlWithParams', 'saveCatalogUrl', 'loadBundledCatalogFallback',
     extractFn(cm, 'async function loadWorkshopCatalog()') + '\nreturn loadWorkshopCatalog;'
   );
   function runLWC(state, catalogFn) {
@@ -259,7 +271,8 @@ assert(cm.includes('var quota = isQuotaError(e);'),
       {},
       { OnlineClient: { catalog: catalogFn } },
       function catalogUrlWithParams() { return state.catalogUrl || ''; },
-      function saveCatalogUrl() {}
+      function saveCatalogUrl() {},
+      async function loadBundledCatalogFallback() { return false; }
     );
     return lwc();
   }

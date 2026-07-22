@@ -13,9 +13,9 @@ const verifyAll = fs.readFileSync(path.join(ROOT, 'scripts/verify-all.js'), 'utf
 let n = 0;
 function ok(cond, msg) { assert(cond, msg); n++; }
 
-// ── nav 定义:擂台/约稿 已入一级导航 ──
-ok(/\['arenas',\s*'擂台'\]/.test(manager), '① navItems 含一级 tab「擂台」(arenas)');
-ok(/\['commissions',\s*'约稿'\]/.test(manager), '② navItems 含一级 tab「约稿」(commissions)');
+// ── nav 定义:擂台/约稿 已入一级导航（百工谱阁分组项可带第三列印记）──
+ok(/\['arenas',\s*'擂台'(?:,\s*'[^']+')?\]/.test(manager), '① 一级导航含「擂台」(arenas)');
+ok(/\['commissions',\s*'约稿'(?:,\s*'[^']+')?\]/.test(manager), '② 一级导航含「约稿」(commissions)');
 
 // ── 路由:renderMallPane 分派新 pane 到既有 section 渲染器 ──
 ok(/if \(pane === 'arenas'\) return renderArenaSection\(\);/.test(manager), '③ renderMallPane 路由 arenas→renderArenaSection');

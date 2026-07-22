@@ -3,7 +3,7 @@
 // ── 章节导航（grep 小节标题跳转，行号会漂）──
 //   剧本编辑器桥接 + 官制 AI 生成 + 官制编辑器（R131 从 tm-audio-theme.js 拆出）
 //   §1 桥接       openEditorHtml（打开 editor.html）· bindMainMenuButtons
-//   §2 崩溃恢复   检测 IndexedDB autosave / pre_endturn 并提示恢复
+//   §2 崩溃恢复   仅检测 pre_endturn 中断信号；异常快照失败时可回退 autosave
 //   §3 AI Gen     _aiStylePrefix / aiGenOfficeEd / aiGenOfficeStaff（override 1+2）· aiGenChr/Fac/Var/...
 //   §4 官制编辑   _renderOfficeDept · 部门卡 / 职位 leaf 卡 / _office* CRUD
 //   §5 启动       阶段A 完整官制骨架 · 阶段B 生成关键角色 · openScenarioResetEditor
@@ -375,7 +375,7 @@ function openEditorHtml(scnId){
   }
 })();
 
-// ── 页面加载：检测IndexedDB中的autosave/pre_endturn并提示恢复 ──
+// ── 页面加载：仅在 pre_endturn 中断信号存在时提示恢复 ──
 // pre_endturn 优先：标记存在=上回合 AI 推演崩溃·本回合诏令/批复/对话/调动尚未保存
 // autosave 次之：上回合正常完成的快照
 (function _checkAutoRestore() {
@@ -392,13 +392,15 @@ function openEditorHtml(scnId){
       preInfo = null;
     }
 
+    // 普通 autosave marker 是“最近自动存档索引”，成功推演后会长期保留；
+    // 它不是崩溃信号，不能在每次启动时都弹恢复确认。常规恢复统一走主页“续卷/读取存档”。
+    if (!preInfo) return;
+
     var autoMark = localStorage.getItem('tm_autosave_mark');
     var autoInfo = null;
     if (autoMark) {
       try { autoInfo = JSON.parse(autoMark); } catch(_amE) { autoInfo = null; }
     }
-
-    if (!preInfo && (!autoInfo || !autoInfo.turn)) return;
 
     // 延迟弹窗（等IndexedDB打开）
     setTimeout(function() {
@@ -447,21 +449,19 @@ function openEditorHtml(scnId){
           });
           return;
         } else {
-          // 用户拒绝 pre_endturn 恢复·清除标记·继续询问 autosave
+          // 用户明确拒绝本次崩溃恢复：清除异常标记并停在主页；普通存档仍可从“续卷”读取。
           try { localStorage.removeItem('tm_pre_endturn_mark'); } catch(_){}
+          return;
         }
       }
-
-      // ── fallback: 普通 autosave ──
-      _tryLoadAutosave(autoInfo);
     }, 500);
   } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-audio-theme');}catch(_){}}
 
   function _tryLoadAutosave(info) {
     if (!info || !info.turn) return;
-    var msg = '检测到上次推演（' + (info.scenarioName || '') + ' 第' + info.turn + '回合';
+    var msg = '过回合前快照无法恢复。检测到最近自动存档（' + (info.scenarioName || '') + ' 第' + info.turn + '回合';
     if (info.eraName) msg += ' · ' + info.eraName;
-    msg += '），是否恢复？';
+    msg += '），是否改为读取？';
     if (confirm(msg)) {
       showLoading('展卷恢复中……', 40);
       TM_SaveDB.load('autosave').then(function(record) {

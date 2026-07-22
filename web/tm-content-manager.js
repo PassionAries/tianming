@@ -25,6 +25,44 @@
     catalogUrl: '',
     defaultCatalogUrl: '',
     catalog: null,
+    catalogStatus: 'idle',
+    catalogError: '',
+    catalogOrigin: '',
+    featuredStatus: 'idle',
+    featuredError: '',
+    featuredPacks: [],
+    feedStatus: 'idle',
+    feedError: '',
+    arenaStatus: 'idle',
+    arenaError: '',
+    arenaDetailStatus: 'idle',
+    arenaDetailError: '',
+    collectionStatus: 'idle',
+    collectionError: '',
+    collectionDetailStatus: 'idle',
+    collectionDetailError: '',
+    circleStatus: 'idle',
+    circleError: '',
+    circleDetailStatus: 'idle',
+    circleDetailError: '',
+    circleFeedStatus: 'idle',
+    circleFeedError: '',
+    commissionStatus: 'idle',
+    commissionError: '',
+    friendsStatus: 'idle',
+    friendsError: '',
+    myCollectionsStatus: 'idle',
+    myCollectionsError: '',
+    notifStatus: 'idle',
+    notifError: '',
+    detailCommentsStatus: 'idle',
+    detailCommentsError: '',
+    revisionStatus: 'idle',
+    revisionError: '',
+    chronStatus: 'idle',
+    chronError: '',
+    dmLoadStatus: 'idle',
+    dmLoadError: '',
     catalogMessage: '',
     publishMessage: '',
     onlineApiUrl: '',
@@ -506,7 +544,7 @@
       '<div style="display:flex;justify-content:space-between;gap:.6rem;align-items:flex-start;">' +
         '<div style="min-width:0;">' +
           '<div style="font-weight:700;color:var(--gold);">' + esc(p.title || p.id) + '</div>' +
-          '<div style="font-size:.72rem;color:var(--txt-d);margin-top:.15rem;">' + esc(p.id) + ' · v' + esc(p.version || '1.0.0') + ' · ' + esc(p.type || 'content') + bad + '</div>' +
+          '<div style="font-size:.72rem;color:var(--txt-d);margin-top:.15rem;">' + esc(p.id) + ' · ' + (p.version ? 'v' + esc(p.version) : '版本未提供') + ' · ' + esc(p.type || 'content') + bad + '</div>' +
           (p.description ? '<div style="font-size:.76rem;color:var(--txt);line-height:1.5;margin-top:.35rem;">' + esc(p.description) + '</div>' : '') +
         '</div>' +
         '<div style="display:flex;gap:.35rem;flex-wrap:wrap;justify-content:flex-end;">' +
@@ -522,7 +560,7 @@
       '<div style="display:flex;justify-content:space-between;gap:.65rem;align-items:flex-start;">' +
         '<div style="min-width:0;">' +
           '<div style="font-weight:700;color:var(--gold);">' + esc(p.title || p.id) + '</div>' +
-          '<div style="font-size:.72rem;color:var(--txt-d);margin-top:.15rem;">' + esc(p.id) + ' · v' + esc(p.version || '1.0.0') + ' · ' + esc(p.author || '佚名') + '</div>' +
+          '<div style="font-size:.72rem;color:var(--txt-d);margin-top:.15rem;">' + esc(p.id) + ' · ' + (p.version ? 'v' + esc(p.version) : '版本未提供') + ' · ' + esc(p.author || '未署名') + '</div>' +
           (p.description ? '<div style="font-size:.76rem;color:var(--txt);line-height:1.5;margin-top:.35rem;">' + esc(p.description) + '</div>' : '') +
         '</div>' +
         '<div style="display:flex;gap:.35rem;flex-wrap:wrap;justify-content:flex-end;">' +
@@ -593,7 +631,7 @@
     return '<div class="tm-pack">' +
       '<div>' +
         '<div class="tm-pack-title">' + esc(p.title || p.id) + '</div>' +
-        '<div class="tm-pack-meta">' + esc(p.id) + ' / v' + esc(p.version || '1.0.0') + ' / ' + esc(p.type || 'content') + (missing ? ' / 文件缺失' : '') + '</div>' +
+        '<div class="tm-pack-meta">' + esc(p.id) + ' / ' + (p.version ? 'v' + esc(p.version) : '版本未提供') + ' / ' + esc(p.type || 'content') + (missing ? ' / 文件缺失' : '') + '</div>' +
         (p.description ? '<div class="tm-pack-desc">' + esc(p.description) + '</div>' : '') +
       '</div>' +
       '<div class="tm-actions" style="margin-top:0;justify-content:flex-end;">' +
@@ -604,12 +642,15 @@
   }
 
   function ratingStars(p) {
-    var avg = Number(p.rating || 0), cnt = Number(p.ratingCount || 0);
+    if (p.rating == null || p.ratingCount == null || !isFinite(Number(p.rating)) || !isFinite(Number(p.ratingCount)) || Number(p.ratingCount) <= 0) {
+      return '<span style="color:rgba(234,223,203,.58);font-size:.72rem;">— 暂无评分</span>';
+    }
+    var avg = Number(p.rating), cnt = Number(p.ratingCount);
     var full = Math.round(avg);
     var stars = '';
     for (var i = 1; i <= 5; i++) stars += (i <= full ? '★' : '☆');
     return '<span style="color:#e8c46a;font-size:.82rem;letter-spacing:1px;">' + stars + '</span>' +
-      '<span style="color:rgba(234,223,203,.74);font-size:.72rem;margin-left:.35rem;">' + (cnt ? (avg.toFixed(1) + ' · ' + cnt + ' 评') : '暂无评分') + '</span>';
+      '<span style="color:rgba(234,223,203,.74);font-size:.72rem;margin-left:.35rem;">' + avg.toFixed(1) + ' · ' + cnt + ' 评</span>';
   }
 
   function rateControl(p) {
@@ -658,8 +699,8 @@
       '<div class="tm-cat-body">' +
         '<div class="tm-cat-title" style="cursor:pointer;" ' + openDetail + '>' + esc(p.title || p.id) + '</div>' +
         '<div class="tm-cat-au">' +
-          '<span onclick="TMContentManager.loadAuthorPacks(' + jsArg(p.authorId != null ? p.authorId : '') + ',' + jsArg(p.author || '') + ')" style="color:var(--gold,#d8b56a);cursor:pointer;">' + esc(p.author || '佚名') + '</span>' +
-          ' · v' + esc(p.version || '1.0.0') + (p.downloads ? ' · ↓' + p.downloads : '') + (p.endorsements ? ' · ✦' + p.endorsements : '') + (p.parentId ? ' · 改编' : '') +
+          '<span onclick="TMContentManager.loadAuthorPacks(' + jsArg(p.authorId != null ? p.authorId : '') + ',' + jsArg(p.author || '') + ')" style="color:var(--gold,#d8b56a);cursor:pointer;">' + esc(p.author || '未署名') + '</span>' +
+          ' · ' + (p.version ? 'v' + esc(p.version) : '版本未提供') + (p.downloads != null && isFinite(Number(p.downloads)) ? ' · ↓' + esc(String(p.downloads)) : ' · 下载量未提供') + (p.endorsements != null && isFinite(Number(p.endorsements)) ? ' · ✦' + esc(String(p.endorsements)) : '') + (p.parentId ? ' · 改编' : '') +
         '</div>' +
         '<div style="margin-top:.28rem;">' + ratingStars(p) + '</div>' +
         (p.description ? '<div class="tm-pack-desc" style="margin-top:.35rem;">' + esc(p.description) + '</div>' : '') +
@@ -678,6 +719,8 @@
   function findCatalogPackById(id) {
     var packs = (state.catalog && state.catalog.packs) || [];
     for (var i = 0; i < packs.length; i++) if (String(packs[i].id) === String(id)) return packs[i];
+    var featured = state.featuredPacks || [];
+    for (var j = 0; j < featured.length; j++) if (String(featured[j].id) === String(id)) return featured[j];
     return state.detailPack && String(state.detailPack.id) === String(id) ? state.detailPack : null;
   }
   function openPackDetail(id) {
@@ -686,14 +729,18 @@
     state.detailPack = p;
     state.detailOpen = true;
     state.detailComments = [];
-    state.detailCommentCount = 0;
+    state.detailCommentCount = null;
     state.detailCommentMsg = '';
+    state.detailCommentsStatus = 'loading';
+    state.detailCommentsError = '';
     state.detailPlaying = -1;
     state.detailLineage = null;
     state.detailEndorsed = false;
     state.detailFollow = null;
     state.detailRevisions = [];
     state.revMsg = '';
+    state.revisionStatus = 'loading';
+    state.revisionError = '';
     render();
     loadPackComments(id);
     loadDetailFollow(p.authorId);
@@ -727,29 +774,44 @@
     if (!(window.TM && TM.OnlineClient && TM.OnlineClient.isLoggedIn())) { state.catalogMessage = '登录后可关注作者。'; render(); return; }
     if (authorId == null || authorId === '') return;
     var f = state.detailFollow;
-    if (f) { f.isFollowing = !f.isFollowing; f.followers = Math.max(0, (f.followers || 0) + (f.isFollowing ? 1 : -1)); render(); } // 乐观
+    var prior = f ? { isFollowing: !!f.isFollowing, followers: f.followers, hadFollowers: f.followers != null && f.followers !== '' && isFinite(Number(f.followers)) } : null;
+    if (f && prior.hadFollowers) { f.isFollowing = !f.isFollowing; f.followers = Math.max(0, Number(f.followers) + (f.isFollowing ? 1 : -1)); render(); } // 只对已知计数乐观更新
     TM.OnlineClient.follow(authorId, state.onlineApiUrl || undefined).then(function(res){
       if (res && res.success && state.detailFollow) {
         state.detailFollow.isFollowing = !!res.following;
         if (res.followers != null) state.detailFollow.followers = res.followers;
         render();
       }
-    }).catch(function(){});
+    }).catch(function(){
+      if (!f || !prior) return;
+      f.isFollowing = prior.isFollowing;
+      if (prior.hadFollowers) f.followers = prior.followers; else delete f.followers;
+      render();
+    });
   }
 
   // S3 评论：加载 / 发表（走 TM.OnlineClient，桌面端 renderer 同样可用）。
   function loadPackComments(id) {
     try {
-      if (window.TM && TM.OnlineClient && TM.OnlineClient.comments) {
-        TM.OnlineClient.comments(id, state.onlineApiUrl || undefined).then(function(res){
-          if (res && res.success && state.detailOpen && state.detailPack && String(state.detailPack.id) === String(id)) {
-            state.detailComments = res.comments || [];
-            state.detailCommentCount = res.count != null ? res.count : (res.comments || []).length;
-            render();
-          }
-        }).catch(function(){});
+      if (!(window.TM && TM.OnlineClient && TM.OnlineClient.comments)) {
+        state.detailCommentsStatus = 'error'; state.detailCommentsError = '正式评论接口未加载'; render(); return;
       }
-    } catch (e) {}
+      state.detailCommentsStatus = 'loading'; state.detailCommentsError = '';
+      TM.OnlineClient.comments(id, state.onlineApiUrl || undefined).then(function(res){
+        if (!res || res.success === false || !Array.isArray(res.comments)) throw new Error((res && res.error) || '正式评论接口返回无效');
+        if (state.detailOpen && state.detailPack && String(state.detailPack.id) === String(id)) {
+          state.detailComments = res.comments;
+          state.detailCommentCount = res.count != null && isFinite(Number(res.count)) ? Number(res.count) : res.comments.length;
+          state.detailCommentsStatus = 'ok'; state.detailCommentsError = ''; render();
+        }
+      }).catch(function(error){
+        if (!state.detailOpen || !state.detailPack || String(state.detailPack.id) !== String(id)) return;
+        state.detailComments = []; state.detailCommentCount = null;
+        state.detailCommentsStatus = 'error'; state.detailCommentsError = (error && error.message) || '正式评论接口不可用'; render();
+      });
+    } catch (e) {
+      state.detailCommentsStatus = 'error'; state.detailCommentsError = (e && e.message) || '正式评论接口不可用'; render();
+    }
   }
   function postPackComment() {
     var ta = document.getElementById('tm-detail-comment');
@@ -825,7 +887,7 @@
       return x.author === p.author || (tags.length && Array.isArray(x.tags) && x.tags.some(function(t){ return tags.indexOf(t) >= 0; }));
     }).slice(0, 4);
     var relHtml = related.length ? related.map(mallCard).join('') : '<div class="empty"><div class="t">暂无相关</div></div>';
-    return '<div class="sheet" role="dialog" aria-modal="true" aria-label="' + esc(packTypeNoun(ptype)) + '详情" onclick="if(event.target===this)TMContentManager.closePackDetail()">' +
+    return '<div class="sheet tm-pack-detail-sheet" role="dialog" aria-modal="true" aria-label="' + esc(packTypeNoun(ptype)) + '详情" onclick="if(event.target===this)TMContentManager.closePackDetail()">' +
       '<div class="sheet-box">' +
         '<div class="sh-head"><b>' + esc(packTypeNoun(ptype)) + '详情</b><button class="btn sm" style="margin-left:auto;" onclick="TMContentManager.closePackDetail()" aria-label="关闭详情">关闭</button></div>' +
         '<div class="sh-body scroll">' +
@@ -833,7 +895,11 @@
             '<div>' +
               '<div style="font-size:11.5px;letter-spacing:2px;color:var(--gold-bright);">' + (official ? '官方' : '玩家') + esc(packTypeNoun(ptype)) + (tags.length ? ' · ' + esc(tags[0]) : '') + '</div>' +
               '<h2>' + esc(p.title || p.id) + '</h2>' +
-              '<div class="dmeta">' + mallStars(p) + '<span>↓' + (p.downloads || 0) + '</span>' + (p.endorsements ? '<span>✦' + p.endorsements + '</span>' : '') + '<span>v' + esc(p.version || '1.0.0') + '</span>' + (p.size ? '<span>' + esc(formatBytes(p.size)) + '</span>' : '') + '</div>' +
+              '<div class="dmeta">' + mallStars(p) +
+                '<span>' + (p.downloads != null && isFinite(Number(p.downloads)) ? '↓' + esc(String(p.downloads)) : '下载量未提供') + '</span>' +
+                (p.endorsements != null && isFinite(Number(p.endorsements)) ? '<span>✦' + esc(String(p.endorsements)) + '</span>' : '') +
+                '<span>' + (p.version ? 'v' + esc(p.version) : '版本未提供') + '</span>' +
+                (p.size != null && isFinite(Number(p.size)) ? '<span>' + esc(formatBytes(p.size)) + '</span>' : '') + '</div>' +
               (tags.length ? '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px;">' + tags.slice(0, 6).map(function(t){ return '<span class="tag">' + esc(t) + '</span>'; }).join('') + '</div>' : '') +
               '<div class="dacts">' +
                 (isResumePack(p)
@@ -864,13 +930,19 @@
           renderStoreMedia(p) +
           renderDetailTypeBody(p) +
           renderLineageTree() +
-          '<div class="dsec-h">作者</div><div><span style="color:var(--gold);cursor:pointer;text-decoration:underline;" onclick="TMContentManager.loadAuthorPacks(' + jsArg(p.authorId != null ? p.authorId : '') + ',' + jsArg(p.author || '') + ')">' + esc(p.author || '佚名') + '</span>' + (official ? ' <span class="pill good">官方认证</span>' : '') + '</div>' +
-          '<div class="dsec-h">玩家评论' + (state.detailCommentCount ? ' · ' + state.detailCommentCount : '') + '</div>' +
+          '<div class="dsec-h">作者</div><div><span style="color:var(--gold);cursor:pointer;text-decoration:underline;" onclick="TMContentManager.loadAuthorPacks(' + jsArg(p.authorId != null ? p.authorId : '') + ',' + jsArg(p.author || '') + ')">' + esc(p.author || '未署名') + '</span>' + (official ? ' <span class="pill good">官方认证</span>' : '') + '</div>' +
+          '<div class="dsec-h">玩家评论' + (state.detailCommentsStatus === 'ok' ? ' · ' + state.detailCommentCount : '') + '</div>' +
           (loggedIn
             ? '<div class="field"><textarea id="tm-detail-comment" class="input" rows="2" placeholder="说说你的开局体验、攻略或建议…"></textarea></div><div style="margin:8px 0;"><button class="btn primary sm" onclick="TMContentManager.postPackComment()">发表评论</button></div>'
             : '<div class="dcopy">登录后可发表评论。</div>') +
           (state.detailCommentMsg ? '<div class="status" style="margin:6px 0;">' + esc(state.detailCommentMsg) + '</div>' : '') +
-          ((state.detailComments && state.detailComments.length) ? state.detailComments.map(mallCommentRow).join('') : '<div class="dcopy" style="color:var(--ink-faint);">还没有评论，来做第一个。</div>') +
+          ((state.detailComments && state.detailComments.length)
+            ? state.detailComments.map(mallCommentRow).join('')
+            : (state.detailCommentsStatus === 'error'
+              ? '<div class="dcopy" style="color:var(--ink-faint);">评论接口不可用：' + esc(state.detailCommentsError || '读取失败') + '</div>'
+              : (state.detailCommentsStatus === 'loading'
+                ? '<div class="dcopy" style="color:var(--ink-faint);">正在读取正式评论…</div>'
+                : '<div class="dcopy" style="color:var(--ink-faint);">正式接口返回 0 条评论，来做第一个。</div>'))) +
           renderRevisionSection() +
           '<div class="dsec-h">同作者 / 同标签</div><div class="grid">' + relHtml + '</div>' +
         '</div>' +
@@ -895,10 +967,30 @@
     return '<div class="dsec-h">世界线 · ' + lin.nodes.length + ' 个版本</div><div class="lineage">' + html + '</div>';
   }
   function loadFeatured() {
-    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.featured)) { render(); return; }
-    TM.OnlineClient.featured(state.onlineApiUrl || undefined).then(function(res){
-      state.featuredPacks = (res && res.packs) || []; render();
-    }).catch(function(){ render(); });
+    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.featured)) {
+      state.featuredStatus = 'error';
+      state.featuredError = '正式精选接口未加载';
+      state.featuredPacks = [];
+      render();
+      return Promise.resolve(null);
+    }
+    state.featuredStatus = 'loading';
+    state.featuredError = '';
+    render();
+    return TM.OnlineClient.featured(state.onlineApiUrl || undefined).then(function(res){
+      if (!res || res.success === false) throw new Error((res && res.error) || '正式精选接口返回失败');
+      state.featuredPacks = Array.isArray(res.packs) ? res.packs : [];
+      state.featuredStatus = 'ok';
+      state.featuredError = '';
+      render();
+      return res;
+    }).catch(function(error){
+      state.featuredPacks = [];
+      state.featuredStatus = 'error';
+      state.featuredError = (error && error.message) || '正式精选接口不可用';
+      render();
+      return null;
+    });
   }
   function loadLineage() {
     var p = state.detailPack; if (!p) return;
@@ -932,14 +1024,24 @@
   function openChronicles(scenarioId) {
     var sid = scenarioId || (state.detailPack ? state.detailPack.id : '');
     state.chronOpen = true; state.chronScenario = sid; state.chronList = []; state.chronChain = null; state.chronMsg = ''; state.chronParent = 0;
+    state.chronStatus = 'loading'; state.chronError = '';
     render();
     loadChronicles(sid);
   }
   function loadChronicles(sid) {
-    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.chronicles)) return;
+    if (!(window.TM && TM.OnlineClient && TM.OnlineClient.chronicles)) {
+      state.chronList = []; state.chronStatus = 'error'; state.chronError = '正式史册接口未加载'; render(); return;
+    }
+    state.chronStatus = 'loading'; state.chronError = '';
     TM.OnlineClient.chronicles(sid, state.onlineApiUrl || undefined).then(function(res){
-      if (res && res.success && state.chronOpen) { state.chronList = res.chronicles || []; render(); }
-    }).catch(function(){});
+      if (!res || res.success === false || !Array.isArray(res.chronicles)) throw new Error((res && res.error) || '正式史册接口返回无效');
+      if (state.chronOpen && String(state.chronScenario) === String(sid)) {
+        state.chronList = res.chronicles; state.chronStatus = 'ok'; state.chronError = ''; render();
+      }
+    }).catch(function(error){
+      if (!state.chronOpen || String(state.chronScenario) !== String(sid)) return;
+      state.chronList = []; state.chronStatus = 'error'; state.chronError = (error && error.message) || '正式史册接口不可用'; render();
+    });
   }
   function closeChronicles() { state.chronOpen = false; state.chronChain = null; render(); }
   function relayChronicle(parentId) { state.chronParent = parentId || 0; state.chronMsg = parentId ? '接龙模式：你的史册将续在所选史册之后。' : ''; render(); }
@@ -982,7 +1084,11 @@
           '<button class="btn sm" onclick="TMContentManager.viewChroniclesChain(' + Number(c.id) + ')">看接龙链</button>' +
         '</div>' +
       '</div>';
-    }).join('') : '<div class="empty"><div class="glyph">册</div><div class="t">还没有史册</div><div>写下第一篇结局</div></div>';
+    }).join('') : (state.chronStatus === 'error'
+      ? '<div class="empty"><div class="glyph">册</div><div class="t">史册接口不可用</div><div>' + esc(state.chronError || '无法读取正式史册。') + '</div></div>'
+      : (state.chronStatus === 'loading'
+        ? '<div class="empty"><div class="glyph">册</div><div class="t">正在读取正式史册…</div></div>'
+        : '<div class="empty"><div class="glyph">册</div><div class="t">还没有史册</div><div>正式接口返回 0 篇；可写下第一篇结局。</div></div>'));
     var chain = state.chronChain ? ('<div class="dsec-h">接龙链 · ' + state.chronChain.length + '</div><div class="relay-chain"><div class="relay">' + state.chronChain.map(function(c, i){
       return (i ? '<span class="rarrow">→</span>' : '') + '<div class="rnode"><b>' + esc(c.title) + '</b>' + chronOutcomeBadge(c.outcome) + '<small>' + esc(c.author || '') + '</small></div>';
     }).join('') + '</div></div>') : '';
@@ -998,12 +1104,69 @@
               '<div style="margin-top:11px;"><button class="btn primary" onclick="TMContentManager.publishChronicleUI()">' + (state.chronParent ? '接龙发布' : '发布史册') + '</button></div>'
             : '<div class="dcopy">登录后可发布史册、参与接龙。</div>') +
           (state.chronMsg ? '<div class="status" style="margin-top:8px;">' + esc(state.chronMsg) + '</div>' : '') +
-          '<div class="dsec-h">史册 · ' + (state.chronList || []).length + '</div>' + list +
+          '<div class="dsec-h">史册' + (state.chronStatus === 'ok' ? ' · ' + (state.chronList || []).length : '') + '</div>' + list +
           chain +
         '</div>' +
       '</div></div>';
   }
 
+
+  function workshopPaneCount(pane) {
+    var catalog = state.catalog && Array.isArray(state.catalog.packs) ? state.catalog.packs : [];
+    if (pane === 'browse' || pane === 'ranks') return /^(ok|fallback)$/.test(state.catalogStatus) ? catalog.length : '';
+    if (pane === 'feed') return state.feedLoaded ? (((state.feedData || {}).posts || []).length) : '';
+    if (pane === 'arenas') return state.arenasLoaded ? (state.arenaList || []).length : '';
+    if (pane === 'topics') return state.collectionsLoaded ? (state.collectionList || []).length : '';
+    if (pane === 'circles') return state.circlesLoaded ? (state.circleList || []).length : '';
+    if (pane === 'commissions') return state.commissionsLoaded ? (state.commissionList || []).length : '';
+    if (pane === 'friends') return state.friendsLoaded ? (((state.friendsData || {}).friends || []).length) : '';
+    if (pane === 'me') return (state.notifData && state.notifData.unread) || '';
+    return '';
+  }
+
+  function workshopRailButton(item, pane) {
+    var count = workshopPaneCount(item[0]);
+    return '<button type="button" class="atelier-rail-item' + (pane === item[0] ? ' is-active' : '') + '" onclick="TMContentManager.switchPane(\'' + item[0] + '\')"' + (pane === item[0] ? ' aria-current="page"' : '') + '>' +
+      '<span class="atelier-rail-glyph" aria-hidden="true">' + esc(item[2]) + '</span><span>' + esc(item[1]) + '</span>' +
+      (count !== '' ? '<small>' + esc(count) + '</small>' : '') + '</button>';
+  }
+
+  function renderWorkshopSidebar(pane) {
+    var groups = [
+      ['寻访', [['discover', '发现', '寻'], ['feed', '动态', '记'], ['browse', '浏览', '卷'], ['ranks', '排行', '榜']]],
+      ['社群', [['arenas', '擂台', '擂'], ['topics', '专题', '集'], ['circles', '圈子', '同'], ['commissions', '约稿', '求'], ['friends', '好友', '友']]],
+      ['创作者', [['studio', '创作', '著'], ['me', '我', '我']]]
+    ];
+    var installed = desktop() ? state.packs : state.webInstalled;
+    var installedCount = Array.isArray(installed) ? installed.length : '';
+    var updateCount = state.workshopUpdates ? Object.keys(state.workshopUpdates).length : '';
+    return '<aside class="atelier-rail" aria-label="创意工坊导航"><div class="atelier-rail-scroll">' + groups.map(function(group){
+      return '<section class="atelier-rail-group"><h2>' + esc(group[0]) + '</h2>' + group[1].map(function(item){ return workshopRailButton(item, pane); }).join('') + '</section>';
+    }).join('') + '</div><div class="atelier-rail-foot">' +
+      '<button type="button" class="atelier-foot-item' + (pane === 'me' && state.meTab === 'installed' ? ' is-active' : '') + '" onclick="TMContentManager.switchPane(\'me\');TMContentManager.switchMeTab(\'installed\')"><span aria-hidden="true">库</span><b>已装内容</b>' + (installedCount !== '' ? '<small>' + installedCount + '</small>' : '') + '</button>' +
+      '<button type="button" class="atelier-foot-item' + (pane === 'updates' ? ' is-active' : '') + '" onclick="TMContentManager.switchPane(\'updates\')"><span aria-hidden="true">更</span><b>更新中心</b>' + (updateCount !== '' ? '<small>' + updateCount + '</small>' : '') + '</button>' +
+    '</div></aside>';
+  }
+
+  function workshopSourceBadge(label, status, value, title) {
+    var tone = status === 'ok' ? 'is-ok' : (status === 'fallback' ? 'is-fallback' : (status === 'loading' ? 'is-loading' : (status === 'idle' ? 'is-idle' : 'is-error')));
+    return '<span class="' + tone + '"' + (title ? ' title="' + esc(title) + '"' : '') + '><i></i><b>' + esc(label) + '</b><em>' + esc(value) + '</em></span>';
+  }
+
+  function renderWorkshopSourceStrip() {
+    var packs = state.catalog && Array.isArray(state.catalog.packs) ? state.catalog.packs : [];
+    var catalogValue = state.catalogStatus === 'loading' ? '读取中' : state.catalogStatus === 'ok' ? packs.length + ' 件' : state.catalogStatus === 'fallback' ? packs.length + ' 件·仓库' : state.catalogStatus === 'idle' ? '未读取' : '不可用';
+    var featuredValue = state.featuredStatus === 'loading' ? '读取中' : state.featuredStatus === 'ok' ? (state.featuredPacks || []).length + ' 件' : state.featuredStatus === 'idle' ? '未读取' : '不可用';
+    var installed = desktop() ? state.packs : state.webInstalled;
+    var installedKnown = Array.isArray(installed);
+    var version = currentWorkshopVersion();
+    return '<div class="atelier-source-row" role="status" aria-live="polite"><div class="truth-strip">' +
+      workshopSourceBadge('正式在线目录', state.catalogStatus, catalogValue, state.catalogError) +
+      workshopSourceBadge('正式精选接口', state.featuredStatus, featuredValue, state.featuredError) +
+      workshopSourceBadge('当前安装库', installedKnown ? 'ok' : 'error', installedKnown ? installed.length + ' 件' : '不可读', '') +
+      workshopSourceBadge('仓库版本', version ? 'ok' : 'error', version ? 'v' + version : '未提供', '') +
+      '</div><button type="button" class="atelier-refresh" onclick="TMContentManager.refreshWorkshopSources()">刷新真源</button></div>';
+  }
 
   function render() {
     var bg = ensureLayer();
@@ -1011,27 +1174,33 @@
     var user = (state.accountSession || {}).user;
     var idLabel = user ? (user.nickname || user.username) : '登录';
     var notifUnread = (state.notifData && state.notifData.unread) || 0;
-    var navItems = [['discover', '发现'], ['feed', '动态'], ['browse', '浏览'], ['ranks', '排行'], ['arenas', '擂台'], ['topics', '专题'], ['circles', '圈子'], ['studio', '创作'], ['commissions', '约稿'], ['friends', '好友'], ['me', '我']];
-    var nav = navItems.map(function(it){ return '<a class="' + (pane === it[0] ? 'on' : '') + '" onclick="TMContentManager.switchPane(\'' + it[0] + '\')">' + it[1] + '</a>'; }).join('');
-    bg.innerHTML = '<main class="tm-mall tm-mall-page" role="main" aria-label="天命创意工坊" tabindex="-1">' +
-      '<div class="topbar">' +
-        '<div class="brand"><div class="seal" style="width:36px;height:36px;border-radius:6px;font-size:17px;">坊</div><b>天命·创意工坊<small>SCENARIO WORKSHOP</small></b></div>' +
-        '<nav class="nav">' + nav + '</nav>' +
-        '<div class="gsearch"><input id="tm-mall-q" value="' + esc(state.catalogQuery || '') + '" placeholder="搜剧本、作者、朝代、标签…" onkeydown="if(event.key===\'Enter\')TMContentManager.mallSearch(this.value)"><span style="cursor:pointer;color:var(--gold);font-family:var(--serif);" onclick="TMContentManager.mallSearch(document.getElementById(\'tm-mall-q\').value)">搜</span></div>' +
-        '<div class="tbright">' +
-          '<div class="bell" title="更新中心" onclick="TMContentManager.switchPane(\'updates\')">⇪</div>' +
-          '<div class="bell" title="私信" onclick="TMContentManager.openDmInbox()">✉</div>' +
-          '<div class="bell" title="通知" onclick="TMContentManager.switchPane(\'me\')">♪' + (notifUnread ? '<span class="badge">' + notifUnread + '</span>' : '') + '</div>' +
-          '<div class="idchip" onclick="TMContentManager.switchPane(\'me\')"><div class="av seal" style="width:28px;height:28px;border-radius:50%;font-size:14px;">' + esc(String(idLabel).charAt(0)) + '</div><small>' + esc(idLabel) + '</small></div>' +
-          '<div class="x" onclick="TMContentManager.close()" title="关闭">✕</div>' +
+    var updateCount = state.workshopUpdates ? Object.keys(state.workshopUpdates).length : 0;
+    if (state.hotCheck && state.hotCheck.hasUpdate) updateCount += 1;
+    bg.innerHTML = '<main class="tm-mall tm-mall-page atelier-shell" role="main" aria-label="天命创意工坊" tabindex="-1">' +
+      '<header class="topbar atelier-topbar">' +
+        '<div class="brand atelier-brand"><div class="seal atelier-brand-seal">天<br>命</div><b>天命 · 创意工坊<small>百 工 谱 阁</small></b></div>' +
+        '<label class="gsearch atelier-global-search"><span aria-hidden="true">⌕</span><input id="tm-mall-q" value="' + esc(state.catalogQuery || '') + '" placeholder="搜剧本、作者、朝代、标签…" aria-label="搜索创意工坊" onkeydown="if(event.key===\'Enter\')TMContentManager.mallSearch(this.value)"><kbd>Enter</kbd></label>' +
+        '<div class="tbright atelier-top-actions">' +
+          '<button type="button" class="atelier-filter" onclick="TMContentManager.switchPane(\'browse\')"><span aria-hidden="true">筛</span><b>高级筛选</b></button>' +
+          '<button type="button" class="atelier-hot" onclick="TMContentManager.switchPane(\'updates\')"><span aria-hidden="true">⇩</span><b>热更</b>' + (updateCount ? '<em>' + updateCount + '</em>' : '') + '</button>' +
+          '<button type="button" class="atelier-icon" title="私信" aria-label="私信" onclick="TMContentManager.openDmInbox()">函</button>' +
+          '<button type="button" class="atelier-icon" title="通知" aria-label="通知" onclick="TMContentManager.switchPane(\'me\');TMContentManager.switchMeTab(\'notif\')">铃' + (notifUnread ? '<em>' + notifUnread + '</em>' : '') + '</button>' +
+          '<button type="button" class="idchip atelier-profile" onclick="TMContentManager.switchPane(\'me\')"><span class="av seal">' + esc(String(idLabel).charAt(0)) + '</span><small>' + esc(idLabel) + '</small></button>' +
+          '<button type="button" class="x atelier-close" onclick="TMContentManager.close()" title="关闭工坊" aria-label="关闭工坊">✕</button>' +
         '</div>' +
+      '</header>' +
+      '<div class="atelier-body">' + renderWorkshopSidebar(pane) +
+        '<section class="main atelier-main" aria-label="工坊内容">' + renderWorkshopSourceStrip() + '<div class="scroll">' + renderMallPane(pane) + '</div></section>' +
       '</div>' +
-      '<div class="main"><div class="scroll">' + renderMallPane(pane) + '</div></div>' +
       (state.detailOpen ? renderPackDetail() : '') + (state.dmOpen ? renderDmLayer() : '') + (state.chronOpen ? renderChroniclesLayer() : '') +
       (state.arenaOpen ? renderArenaLayer() : '') + (state.collectionOpen ? renderCollectionLayer() : '') + (state.colPickOpen ? renderCollectionPicker() : '') +
       (state.circleOpen ? renderCircleLayer() : '') +
     '</main>';
     bg.style.display = 'flex';
+    if (!bg.contains(document.activeElement)) {
+      var shell = bg.querySelector('.atelier-shell');
+      try { if (shell) shell.focus({ preventScroll: true }); } catch (e0) {}
+    }
     try { if (window.TMWorkshopCovers) window.TMWorkshopCovers.enhance(bg); } catch (e) {}
   }
 
@@ -1040,6 +1209,13 @@
     var res = await window.tianming.listWorkshopPacks();
     if (res && res.success) state.packs = res.packs || [];
     render();
+  }
+
+  function refreshWorkshopSources(force) {
+    var tasks = [];
+    if (!state.catalogLoading && (force || state.catalogStatus !== 'ok')) tasks.push(loadWorkshopCatalog());
+    if (state.featuredStatus !== 'loading' && (force || state.featuredStatus !== 'ok')) tasks.push(loadFeatured());
+    return Promise.all(tasks);
   }
 
   async function openContentManager() {
@@ -1062,6 +1238,7 @@
       state.onlineMessage = '';
       await refreshWebInstalled();
       render();
+      refreshWorkshopSources(false);
       return;
     }
     try {
@@ -1086,6 +1263,7 @@
       state.status = { error: e.message };
     }
     render();
+    refreshWorkshopSources(false);
   }
 
   async function refreshAccountSession() {
@@ -1276,6 +1454,63 @@
     return base + (base.indexOf('?') >= 0 ? '&' : '?') + parts.join('&');
   }
 
+  function currentWorkshopVersion() {
+    var fromStatus = state.status && state.status.currentVersion;
+    if (fromStatus) return String(fromStatus);
+    var meta = document.querySelector('meta[name="tm-version"]');
+    return meta && meta.content ? String(meta.content) : '';
+  }
+
+  async function loadBundledCatalogFallback(cause) {
+    try {
+      var pair = await Promise.all([
+        fetch('bundled-scenarios/manifest.json?ts=' + Date.now(), { cache: 'no-store' }),
+        fetch('version.json?ts=' + Date.now(), { cache: 'no-store' })
+      ]);
+      if (!pair[0].ok) throw new Error('仓库官方剧本清单 HTTP ' + pair[0].status);
+      var manifest = await pair[0].json();
+      var versionData = pair[1].ok ? await pair[1].json() : null;
+      var version = (versionData && versionData.version) || currentWorkshopVersion();
+      var entries = Array.isArray(manifest && manifest.entries) ? manifest.entries : [];
+      var packs = entries.filter(function(entry){ return entry && entry.active !== false; }).map(function(entry){
+        return {
+          id: String(entry.id || entry.key || ''),
+          title: String(entry.name || entry.id || '未命名官方剧本'),
+          author: '天命官方',
+          type: 'scenario',
+          version: String(version || ''),
+          description: String(entry.background || [entry.era, entry.role].filter(Boolean).join(' · ')),
+          tags: [entry.era, entry.role, '官方'].filter(Boolean),
+          size: Number(entry.bytes) || null,
+          sha256: String(entry.sha256 || ''),
+          counts: entry.counts || null,
+          status: 'bundled',
+          official: true,
+          _truthOrigin: 'bundled-manifest'
+        };
+      });
+      var query = String(state.catalogQuery || '').trim().toLowerCase();
+      if (query) {
+        packs = packs.filter(function(pack){
+          return [pack.title, pack.author, pack.description].concat(pack.tags || []).join(' ').toLowerCase().indexOf(query) >= 0;
+        });
+      }
+      state.catalog = { type: 'tianming-bundled-scenario-manifest', title: '仓库官方剧本清单', updatedAt: '', packs: packs };
+      state.catalogStatus = 'fallback';
+      state.catalogOrigin = 'bundled-manifest';
+      state.catalogError = (cause && cause.message) || '正式在线目录不可用';
+      state.catalogMessage = '正式在线目录不可用；当前展示仓库内置官方剧本 ' + packs.length + ' 件。';
+      return true;
+    } catch (fallbackError) {
+      state.catalog = null;
+      state.catalogStatus = 'error';
+      state.catalogOrigin = '';
+      state.catalogError = ((cause && cause.message) || '正式在线目录不可用') + '；' + ((fallbackError && fallbackError.message) || '仓库官方清单不可用');
+      state.catalogMessage = '目录来源均不可用：' + state.catalogError;
+      return false;
+    }
+  }
+
   async function loadWorkshopCatalog() {
     var input = document.getElementById('tm-workshop-catalog');
     state.catalogUrl = input ? input.value.trim() : state.catalogUrl;
@@ -1285,10 +1520,16 @@
     if (qEl) state.catalogQuery = qEl.value.trim();
     if (sortEl) state.catalogSort = sortEl.value || 'new';
     state.catalogAuthorView = '';
+    // 记住本次刷新前是否已有可展示的目录数据：兜底彻底失败时用于「保留旧数据 + 过期横幅」(批A stale)。
+    var prevCatalog = state.catalog;
+    var prevOrigin = state.catalogOrigin;
+    var hadOldData = !!(prevCatalog && prevCatalog.packs && prevCatalog.packs.length);
     saveCatalogUrl(state.catalogUrl);
     state.catalogMessage = '正在载入在线工坊目录...';
     state.catalogLoading = true;
+    state.catalogStatus = 'loading';
     state.catalogError = null;
+    state.catalogOrigin = '';
     render();
     try {
       var catalog;
@@ -1300,14 +1541,36 @@
       } else {
         catalog = await TM.OnlineClient.catalog(url);
       }
+      if (!catalog || !Array.isArray(catalog.packs)) throw new Error('正式在线目录结构无效');
       state.catalog = catalog || null;
+      state.catalogStatus = 'ok';
+      state.catalogOrigin = 'formal-api';
+      state.catalogError = null;
       state.catalogMessage = '已载入 ' + ((catalog && catalog.packs && catalog.packs.length) || 0) + ' 个在线工坊包。' + (state.catalogQuery ? '（搜索：' + state.catalogQuery + '）' : '');
     } catch (e) {
-      state.catalogError = (e && e.message) || '未知错误';
-      state.catalogMessage = '载入在线目录失败：' + (e && e.message || '未知错误');
+      // 错误分层终局语义（拍定·勿让两套信号互踩）：
+      //   ① 先走百工谱阁 bundled 官方清单兜底；兜底成功 → 清 catalogError(=null)，
+      //      降级只由真源条 / _truthOrigin 表达，不再叠批A过期横幅（勿双横幅）。
+      //   ② 兜底失败但仍有旧的在线目录数据 → 保留旧数据 + 置 catalogError
+      //      （catalogViewState → 'stale' → 批A过期横幅，列表照常渲染）。
+      //   ③ 兜底失败且无任何数据 → 置 catalogError
+      //      （catalogViewState → 'error' → 批A错误卡；loadBundledCatalogFallback 已把 catalog 置 null）。
+      var recovered = await loadBundledCatalogFallback(e);
+      if (recovered) {
+        state.catalogError = null;
+      } else if (hadOldData) {
+        state.catalog = prevCatalog;
+        state.catalogStatus = 'stale';
+        state.catalogOrigin = prevOrigin;
+        state.catalogError = (e && e.message) || '未知错误';
+        state.catalogMessage = '在线目录刷新失败，暂显示上次结果：' + ((e && e.message) || '未知错误');
+      } else {
+        state.catalogError = (e && e.message) || '未知错误';
+      }
     }
     state.catalogLoading = false;
     render();
+    return state.catalog;
   }
 
   async function ratePack(id, score) {
@@ -1315,7 +1578,7 @@
     try {
       var res = await TM.OnlineClient.ratePack(id, score, state.onlineApiUrl || undefined);
       if (res && res.success) {
-        state.catalogMessage = '已评分：' + score + ' 星（' + id + ' 当前 ' + (res.rating != null ? res.rating : '') + ' 分 / ' + (res.ratingCount || 0) + ' 评）。';
+        state.catalogMessage = '已评分：' + score + ' 星（' + id + ' 当前 ' + (res.rating != null ? res.rating + ' 分' : '评分未提供') + ' / ' + (res.ratingCount != null ? res.ratingCount + ' 评' : '评价数未提供') + '）。';
         await loadWorkshopCatalog();
       } else {
         state.catalogMessage = '评分失败：' + ((res && res.error) || '未知错误');
@@ -2441,6 +2704,7 @@
     togglePack: togglePack,
     uninstallPack: uninstallPack,
     loadWorkshopCatalog: loadWorkshopCatalog,
+    refreshWorkshopSources: function(){ return refreshWorkshopSources(true); },
     ratePack: ratePack,
     checkWorkshopUpdates: checkWorkshopUpdates,
     updateWorkshopPack: updateWorkshopPack,

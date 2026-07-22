@@ -591,6 +591,23 @@
       return request('POST', 'workshop/upload', { body: payload, apiUrl: apiUrl, token: token });
     }
 
+    // 批C·下载进度：把 fetch Response body 流式读成 Uint8Array，边读边报 onProgress(received,total)。
+    // reader 不可用（老环境/无 body）时回落 resp.arrayBuffer()（行为不变）。纯网络原语·不碰 DOM/state。
+    function readBytesWithProgress(resp, onProgress) {
+      var reader = resp && resp.body && resp.body.getReader && resp.body.getReader();
+      if (!reader) return resp.arrayBuffer().then(function (ab) { return new Uint8Array(ab); });
+      var total = Number((resp.headers && resp.headers.get && resp.headers.get('Content-Length')) || 0) || 0;
+      var chunks = [], received = 0;
+      return (function pump() {
+        return reader.read().then(function (r) {
+          if (r.done) { var out = new Uint8Array(received), off = 0; for (var i = 0; i < chunks.length; i++) { out.set(chunks[i], off); off += chunks[i].length; } return out; }
+          chunks.push(r.value); received += r.value.length;
+          if (typeof onProgress === 'function') { try { onProgress(received, total); } catch (_) {} }
+          return pump();
+        });
+      })();
+    }
+
     // 上传一个纯文本剧本到工坊（落服务器自持存储 -> pending 待审）。
     function uploadScenario(meta, content, apiUrl, onProgress) {
       meta = meta || {};
@@ -710,7 +727,8 @@
       authorPacks: authorPacks,
       catalog: catalog,
       uploadScenario: uploadScenario,
-      uploadPack: uploadPack
+      uploadPack: uploadPack,
+      readBytesWithProgress: readBytesWithProgress
     };
   }
 

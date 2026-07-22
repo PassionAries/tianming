@@ -1167,7 +1167,7 @@
     return '<div class="atelier-source-row" role="status" aria-live="polite"><div class="truth-strip">' +
       workshopSourceBadge('正式在线目录', state.catalogStatus, catalogValue, catalogTitle) +
       workshopSourceBadge('正式精选接口', state.featuredStatus, featuredValue, state.featuredError) +
-      workshopSourceBadge('当前安装库', installedKnown ? 'ok' : 'error', installedKnown ? installed.length + ' 件' : '不可读', '') +
+      workshopSourceBadge('当前安装库', installedKnown ? 'ok' : 'error', installedKnown ? (installed.length + ' 件' + (state.workshopUpdates && Object.keys(state.workshopUpdates).length ? ' · ' + Object.keys(state.workshopUpdates).length + ' 可更新' : '')) : '不可读', '') +
       workshopSourceBadge('仓库版本', version ? 'ok' : 'error', version ? 'v' + version : '未提供', '') +
       '</div><button type="button" class="atelier-refresh" onclick="TMContentManager.refreshWorkshopSources()">刷新真源</button></div>';
   }
@@ -1250,6 +1250,7 @@
       await refreshWebInstalled();
       render();
       refreshWorkshopSources(false);
+      try { if (Array.isArray(state.webInstalled) && state.webInstalled.length) checkWorkshopUpdates(true); } catch (eU) {} // 批C·静默检查更新(有已装包才跑·不弹窗·结果缀真源条/更新中心)
       return;
     }
     try {
@@ -1682,8 +1683,9 @@
       var resolvedUrl = packageUrl;
       try { resolvedUrl = new URL(packageUrl, state.catalogUrl || state.defaultCatalogUrl || location.href).toString(); } catch (e0) {}
       var resp = await fetch(resolvedUrl, { mode: 'cors', cache: 'no-store' });
-      if (!resp.ok) throw new Error('下载失败 HTTP ' + resp.status);
-      var rawBuf = new Uint8Array(await resp.arrayBuffer());
+      if (!resp.ok) throw new Error('下载失败：HTTP ' + resp.status);
+      var _dlp = -1, _dlt = 0;   // 下载进度节流游标
+      var rawBuf = (resp.body && resp.body.getReader && window.TM && TM.OnlineClient && TM.OnlineClient.readBytesWithProgress) ? await TM.OnlineClient.readBytesWithProgress(resp, function (loaded, total) { if (!total) return; var pct = Math.max(0, Math.min(100, Math.round(loaded / total * 100))), now = Date.now(); if (uploadProgressShouldRender(pct, _dlp, now - _dlt)) { _dlp = pct; _dlt = now; state.catalogMessage = '正在下载… ' + pct + '%'; render(); } }) : new Uint8Array(await resp.arrayBuffer());
       // 批Ⅴ(2026-07-22)·zip 资产包分支：PK 魔数→网页/安卓也能装（store zip 解包入 IDB·
       // 音乐/立绘/图幅经 TM.WorkshopAssets 生效）。压缩 zip 由 parseZip 明说拒收。
       if (rawBuf.length > 3 && rawBuf[0] === 0x50 && rawBuf[1] === 0x4b && rawBuf[2] === 0x03 && rawBuf[3] === 0x04) {
@@ -1900,10 +1902,9 @@
   }
 
   // 订阅=安装：检查已装工坊包是否有新版（作者发新版 + owner 审核通过后）。
-  async function checkWorkshopUpdates() {
-    if (desktop()) { state.catalogMessage = '桌面端工坊更新走本体/热更通道。'; render(); return; }
-    state.catalogMessage = '正在检查工坊更新...';
-    render();
+  async function checkWorkshopUpdates(silent) {
+    if (desktop()) { if (!silent) { state.catalogMessage = '桌面端工坊更新走本体/热更通道。'; render(); } return; }
+    if (!silent) { state.catalogMessage = '正在检查工坊更新...'; render(); }
     var recs = [];
     try { recs = await wsGetAll(); } catch (e) {}
     var updates = {};
@@ -1919,7 +1920,7 @@
     state.workshopUpdates = updates;
     await refreshWebInstalled();
     var cnt = Object.keys(updates).length;
-    state.catalogMessage = cnt ? ('发现 ' + cnt + ' 个工坊包有新版，可点「更新」。') : '已安装的工坊包均为最新。';
+    if (!silent) state.catalogMessage = cnt ? ('发现 ' + cnt + ' 个工坊包有新版，可点「更新」。') : '已安装的工坊包均为最新。';
     render();
   }
 
@@ -1987,6 +1988,7 @@
     if (!desktop()) return installCatalogPackWeb(packageUrl, sha256, packId);
     state.catalogMessage = '正在下载并安装在线工坊包...';
     render();
+    // 桌面下载进度：installWorkshopPackFromUrl 的 IPC 暂无 main→renderer 进度回传（downloadRemoteFile 支持 onProgress 但 workshop-install-from-url 未透传）；新开 IPC 面留待发版后，网页端已流式显示百分比。
     var res = await window.tianming.installWorkshopPackFromUrl(packageUrl, sha256 || '', !!overwrite);
     if (res && res.exists && !overwrite) {
       if (confirm(res.error + '\n是否覆盖安装？')) return installCatalogPack(packageUrl, sha256, packId, true);

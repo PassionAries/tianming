@@ -125,7 +125,7 @@
   function saveSettings(){ try { localStorage.setItem(API_KEY, api()); localStorage.setItem(ADMIN_KEY, key()); } catch(e) {} }
   function typeLabel(t){ return ({scenario:'剧本',portrait:'立绘',music:'音乐',map:'地图',mod:'MOD'})[String(t || 'scenario')] || t; }
   function fmtBytes(n){ n = Number(n) || 0; if(n > 1048576) return (n / 1048576).toFixed(1) + ' MB'; if(n > 1024) return (n / 1024).toFixed(1) + ' KB'; return n + ' B'; }
-  function coverUrl(p){ return p && p.coverImage && p.coverImage.url ? p.coverImage.url : ''; }
+  function coverUrl(p){ if (p && p.coverImage && p.coverImage.url) return p.coverImage.url; if (p && typeof p.coverUrl === 'string' && p.coverUrl) return p.coverUrl; return ''; }
   function gallery(p){ return Array.isArray(p && p.galleryImages) ? p.galleryImages.filter(function(x){ return x && x.url; }) : []; }
   function tags(p){ return Array.isArray(p && p.tags) ? p.tags : []; }
   function flags(p){ return Array.isArray(p && p.flags) ? p.flags : []; }

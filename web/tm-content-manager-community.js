@@ -1022,6 +1022,7 @@
     var c = p && p.coverImage;
     if (c && typeof c === 'object' && c.url) return String(c.url);
     if (c && typeof c === 'string') return c;
+    if (p && typeof p.coverUrl === 'string' && p.coverUrl) return p.coverUrl;
     return '';
   }
   function packGalleryImages(p) {

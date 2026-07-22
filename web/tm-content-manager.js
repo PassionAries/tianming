@@ -1380,6 +1380,15 @@
     return null;
   }
 
+  // A4·配额判定（纯函数）：只认真配额错误，勿把 "Maximum call stack size exceeded" 之类误报成空间不足。
+  //   命中条件 = QuotaExceededError 名 / message 含 quota / 含「存储空间」 / （storage 且 exceed|full|不足 组合）。
+  function isQuotaError(e) {
+    if (!e) return false;
+    if (e.name === 'QuotaExceededError') return true;
+    var msg = String(e.message || '');
+    return /quota/i.test(msg) || /存储空间/.test(msg) || (/storage/i.test(msg) && /exceed|full|不足/i.test(msg));
+  }
+
   // 网页安装：把工坊剧本的 JSON 直接下载并入剧本库（IndexedDB），无需本地落盘。
   // 带资源（立绘/音频）的 .tm-pack 打包文件在网页解析为 JSON 会失败，提示改用桌面版。
   async function installCatalogPackWeb(packageUrl, sha256, packId, metaOverride) {
@@ -1455,7 +1464,7 @@
       render();
     } catch (e) {
       // A4：设备存储配额耗尽（IDB 写满 / 安卓 WebView 配额）给专门文案，其余保持现文案。
-      var quota = e && (e.name === 'QuotaExceededError' || /quota|存储空间|exceeded/i.test(String(e.message || '')));
+      var quota = isQuotaError(e);
       state.catalogMessage = quota ? '设备存储空间不足：请清理空间或卸载不用的工坊包后重试。' : ('网页安装失败：' + (e && e.message || '未知错误'));
       render();
     }
@@ -1523,18 +1532,37 @@
     if (!_waPortraitIdx || !name) return '';
     return _waPortraitIdx[String(name).trim()] || '';
   }
+  // R2·纯归并（确定可复述）：把各包扫描出的 { type, order, entries } 按稳定优先级归并成立绘索引。
+  //   优先级 = portrait 包先于 mod 包；同类型按 waListAssetPacks 返回列表序（order）。首见占坑（高优先级先归并）。
+  //   独立纯函数便于测试——同名立绘取决于 pack 优先级而非 IDB 到达时序。
+  function waMergePortraitIndex(items) {
+    var prio = function(t){ return t === 'portrait' ? 0 : 1; };
+    var ordered = (items || []).slice().sort(function(a, b){
+      var pa = prio(a && a.type), pb = prio(b && b.type);
+      if (pa !== pb) return pa - pb;
+      return (a.order || 0) - (b.order || 0);
+    });
+    var idx = {};
+    ordered.forEach(function(it){
+      ((it && it.entries) || []).forEach(function(e){
+        if (e && e.url && e.base && !idx[e.base]) idx[e.base] = e.url;
+      });
+    });
+    return idx;
+  }
   function waWarmup() {
     waListAssetPacks().then(function(list){
-      var idx = {};
-      var jobs = (list || []).map(function(pk){
+      list = list || [];
+      var jobs = list.map(function(pk, i){
         var pre = pk.source === 'idb' ? waHydrate(pk) : Promise.resolve(pk);
         return pre.then(function(){ return waGetManifest(pk); }).then(function(mf){
+          var out = [];
           // 批A·A3：立绘包全扫；mod=混合资产组合包·仅扫其中被识别为立绘的图片。
           var isPortraitPack = pk.type === 'portrait';
           var isModPack = pk.type === 'mod';
-          if (!isPortraitPack && !isModPack) return;
+          if (!isPortraitPack && !isModPack) return { type: pk.type, order: i, entries: out };
           // 残局借 mod 壳（tags 含「残局」/packageKind='resume'）：不当资产扫（不影响其接演链）。
-          if (isModPack && isResumePack(mf)) return;
+          if (isModPack && isResumePack(mf)) return { type: pk.type, order: i, entries: out };
           var files = (mf && Array.isArray(mf.files)) ? mf.files : [];
           var typed = (mf && Array.isArray(mf.assets)) ? mf.assets : [];
           files.forEach(function(f){
@@ -1549,12 +1577,14 @@
               if (!declared && !inPortraitDir) return;
             }
             var u = waFileUrl(pk, name);
-            if (u && !idx[base]) idx[base] = u;
+            if (u) out.push({ base: base, url: u });
           });
-        }).catch(function(){});
+          return { type: pk.type, order: i, entries: out };
+        }).catch(function(){ return { type: pk.type, order: i, entries: [] }; });
       });
-      return Promise.all(jobs).then(function(){
-        _waPortraitIdx = idx;
+      // Promise.all 结果按输入(list)序返回·与 IDB 到达时序无关；再交纯归并按优先级定夺同名占坑。
+      return Promise.all(jobs).then(function(results){
+        _waPortraitIdx = waMergePortraitIndex(results);
         // 音乐轮播刷新（audio 早于本桥装载时其 web 分支空转·此处回手补一遍）
         try { if (window.AudioSystem && typeof AudioSystem.loadWorkshopTracks === 'function') AudioSystem.loadWorkshopTracks(function(){}); } catch (e) {}
       });

@@ -1078,16 +1078,36 @@
       return '<span class="chip' + (!featuredOn && ctype === t.v ? ' on' : '') + '" onclick="TMContentManager.switchCatalogType(' + jsArg(t.v) + ')">' + esc(t.label) + (packs.length ? ' ' + n : '') + '</span>';
     }).join('') + '</div>';
   }
+  // ── R1·目录视图态（纯推导·全走 state 标记·绝不靠文案串匹配判断态）─────────────
+  //   'error' 出错且无旧数据 → 错误卡（⚠+HTTP码+重试）
+  //   'stale' 出错但有旧数据 → 列表上方横条 banner（列表照常渲染·提示当前可能是过期目录）
+  //   'empty' 无错误无数据   → 真空卡
+  //   'list'  无错误有数据   → 列表
+  //   browse 与 discover 两处页面统一走此判定 + 下方两个卡/条 helper。
+  function catalogViewState(state) {
+    var hasData = !!(state && state.catalog && state.catalog.packs && state.catalog.packs.length);
+    var hasError = !!(state && state.catalogError);
+    if (hasError) return hasData ? 'stale' : 'error';
+    return hasData ? 'list' : 'empty';
+  }
+  function catalogErrorCardHtml(st) {
+    return '<div class="empty err"><div class="glyph">⚠</div><div class="t">在线目录加载出错</div><div>' + esc((st && st.catalogError) || '未知错误') + '</div><button class="btn sm primary" style="margin-top:10px;" onclick="TMContentManager.loadWorkshopCatalog()">重试</button></div>';
+  }
+  function catalogStaleBannerHtml(st) {
+    return '<div class="status err" style="margin-bottom:10px;">⚠ 目录刷新失败（' + esc((st && st.catalogError) || '未知错误') + '）· 当前显示的可能是过期目录 <span style="cursor:pointer;color:var(--gold);text-decoration:underline;margin-left:8px;" onclick="TMContentManager.loadWorkshopCatalog()">重试</span></div>';
+  }
   function renderDiscover() {
     var packs = (state.catalog && state.catalog.packs) || [];
+    var vs = catalogViewState(state);
     if (!packs.length) {
       var heroHtml = '<div class="searchhero"><h2>访古问今 · 列朝在此</h2><p>浏览、安装其他玩家与官方的史册剧本；也可把你的剧本发布给天下人。</p>' +
         '<div class="box"><input id="tm-mall-hq" placeholder="输入朝代、事件、人物或作者…" onkeydown="if(event.key===\'Enter\')TMContentManager.mallSearch(this.value)"><button class="btn primary" onclick="TMContentManager.loadWorkshopCatalog()">载入目录</button></div></div>';
       if (state.catalogLoading) {
         return heroHtml + '<div class="sec-h"><h3>正在载入目录…</h3></div>' + mallSkeleton(8);
       }
-      return heroHtml +
-        '<div class="empty"><div class="glyph">坊</div><div class="t">尚未载入在线目录</div><div>点上方「载入目录」从官方目录浏览并安装。</div></div>';
+      // 无旧数据时出错 → 错误卡（可见+可重试）；否则真空卡。发现页此前漏读 catalogError。
+      return heroHtml + (vs === 'error' ? catalogErrorCardHtml(state)
+        : '<div class="empty"><div class="glyph">坊</div><div class="t">尚未载入在线目录</div><div>点上方「载入目录」从官方目录浏览并安装。</div></div>');
     }
     var sorted = packs.slice();
     var hot = sorted.slice().sort(function(a, b){ return (b.downloads || 0) - (a.downloads || 0); });
@@ -1116,7 +1136,8 @@
       return '<div class="rk" onclick="TMContentManager.openPackDetail(' + jsArg(p.id || '') + ')"><div class="n' + (i < 3 ? ' top' : '') + '">' + (i + 1) + '</div>' +
         '<div class="t"><b>' + esc(p.title || p.id) + '</b><small>' + esc(p.author || '佚名') + ' · ↓' + (p.downloads || 0) + '</small></div></div>';
     }).join('');
-    return '' +
+    // 有旧数据但刷新失败 → 顶部横条 banner，下方列表照常渲染（stale 可见但不遮内容）。
+    return (vs === 'stale' ? catalogStaleBannerHtml(state) : '') +
       '<div class="searchhero"><h2>访古问今 · 列朝在此</h2><p>浏览、安装其他玩家与官方的史册剧本；也可把你的剧本发布给天下人。</p>' +
         '<div class="box"><input id="tm-mall-hq" value="' + esc(state.catalogQuery || '') + '" placeholder="输入朝代、事件、人物或作者…" onkeydown="if(event.key===\'Enter\')TMContentManager.mallSearch(this.value)"><button class="btn primary" onclick="TMContentManager.mallSearch(document.getElementById(\'tm-mall-hq\').value)">搜索</button></div></div>' +
       mallTypeChips() +
@@ -1138,14 +1159,16 @@
   }
   function renderBrowsePane() {
     var packs = (state.catalog && state.catalog.packs) || [];
+    var vs = catalogViewState(state);
     var ctype = state.catalogType || '';
     var featuredOn = !!state.featuredOn;
     var base = featuredOn ? (state.featuredPacks || []) : packs;
     var shown = (!featuredOn && ctype) ? base.filter(function(pp){ return String(pp.type || 'scenario') === ctype; }) : base;
+    // 出错且无旧数据 → 错误卡（走共享 helper）；出错但有旧数据由下方 banner 提示、列表照常渲染。
     var grid = shown.length ? shown.map(mallCard).join('')
       : (state.catalogLoading ? mallSkeleton(8)
-        : (state.catalogError
-          ? '<div class="empty err"><div class="glyph">⚠</div><div class="t">在线目录加载出错</div><div>' + esc(state.catalogError) + '</div><button class="btn sm primary" style="margin-top:10px;" onclick="TMContentManager.loadWorkshopCatalog()">重试</button></div>'
+        : (vs === 'error'
+          ? catalogErrorCardHtml(state)
           : '<div class="empty"><div class="glyph">坊</div><div class="t">' + (featuredOn ? '还没有被社区推荐的内容' : (packs.length ? '此类型下暂无内容' : '尚未载入在线目录')) + '</div><div>' + (packs.length ? '换个类型或来源看看' : '点右侧「刷新」从官方目录浏览') + '</div></div>'));
     var typeOpts = PACK_TYPES.map(function(t){
       var n = t.v ? packs.filter(function(pp){ return String(pp.type || 'scenario') === t.v; }).length : packs.length;
@@ -1154,6 +1177,7 @@
     var authorView = state.catalogAuthorView;
     var head = authorView ? ('作者：' + authorView) : (featuredOn ? '社区精选' : (ctype ? packTypeLabel(ctype) : '全部内容'));
     return (authorView ? '<div class="status" style="margin-bottom:10px;">正在看作者「' + esc(authorView) + '」的作品 <span style="cursor:pointer;color:var(--gold);text-decoration:underline;margin-left:8px;" onclick="TMContentManager.loadWorkshopCatalog()">← 返回全部目录</span></div>' : '') +
+    (vs === 'stale' ? catalogStaleBannerHtml(state) : '') +
     '<div class="browse">' +
       '<aside class="filters">' +
         '<h4>筛选</h4>' +

@@ -4,6 +4,7 @@
       "tm-border-invasion.js",
       "tm-captive-court.js",
       "tm-indices.js",
+      "tm-party-inference.js",
       "tm-revolt-entity.js",
       "tm-revolt-inference.js",
       "tm-save-lifecycle.js"

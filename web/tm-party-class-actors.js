@@ -368,11 +368,33 @@
     return next;
   }
 
+  // 批乙·阶层身份轻装（2026-07-22）：tm-party-inference.forgeIdentity 顺带为活跃阶层锻
+  // cls._identity={creed 本位诉求口号, voice 代言风格}。此处把 creed 拼进 class actor 的动作文案
+  // (grievance/belief)——阶层动作从模板句升级为有立场口吻。仅当阶层已有 _identity.creed 时生效
+  // (演绎层纯叠加·AI 缺席/未锻身份→零变化)。阶层不做独立 tickInference(先党派后阶层·轻装第一步)。
+  function enrichClassActionCreed(actor, raw) {
+    raw = raw || {};
+    if (raw.actorType !== 'class') return raw;
+    // flag OFF 全截：玩家关演绎=全关·即便存档已有 cls._identity.creed 也不拼(同款默认 ON 形)
+    try { if (global.P && global.P.conf && global.P.conf.partyInferenceEnabled === false) return raw; } catch (_) {}
+    var creed = actor && actor._identity && actor._identity.creed;
+    if (!creed) return raw;
+    creed = String(creed).trim();
+    if (!creed) return raw;
+    var belief = String(raw.belief || '');
+    if (belief.indexOf(creed) >= 0) return raw;
+    var next = Object.assign({}, raw);
+    next.belief = '本位诉求「' + creed + '」——' + belief;
+    next.classCreed = creed;
+    return next;
+  }
+
   function addAction(root, actor, raw, options) {
     root = pickRoot(root);
     options = options || {};
     raw = raw || {};
     raw = enrichClassActionDelegate(root, actor, raw, options);
+    raw = enrichClassActionCreed(actor, raw);
     var turn = Number(options.turn != null ? options.turn : root.turn) || 0;
     if (!root.party_actions) root.party_actions = [];
     if (!root.class_actions) root.class_actions = [];

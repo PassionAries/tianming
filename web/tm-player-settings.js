@@ -327,6 +327,7 @@ function _togglePConf(confKey, on) {
     talentCohortEnabled: { on: '已启用人才范式渗透（实验）·新式学校→多瓶颈漏斗→渐渗+双向阻力·兴造弹窗见「人才与风气」', off: '已关闭人才范式渗透·学校不再注入人才引擎（零回归）' },
     worldReactorBattleEnabled: { on: '已启用兵败牵动天下·战败方确定性折损实力', off: '已关闭·战败只走 AI 裁量·不自动折损实力' },
     revoltEntityEnabled: { on: '已启用民变实体化·民变闹大交 AI 演绎(起旗号/立渠帅/攻守招抚)', off: '已关闭·民变维持原五级抽象台账' },
+    partyInferenceEnabled: { on: '已启用党争演绎·党派自主行动(立身份·联名/清议/杯葛/结盟/倒阁/煽动阶层交 AI 演绎)', off: '已关闭·党派退回纯数值信号(内部动态照旧演化·不再逐回合自主行动)' },
     borderInvasionEnabled: { on: '已启用边患真入侵·持续高压时敌对势力真出兵', off: '已关闭·边患仅停留在数值与文案' },
     populationBottomUpEnabled: { on: '已启用人口自下而上·按叶级政区分别核算', off: '已关闭·走全局粗粒度人口增长' },
     cognitionFeedbackEnabled: { on: '已启用认知反馈·知遇/贬谪落到忠诚数值', off: '已关闭·忠诚不因升降迁谪自动漂移' },

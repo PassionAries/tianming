@@ -1177,6 +1177,275 @@ if (typeof SettlementPipeline !== 'undefined' && typeof SettlementPipeline.regis
   SettlementPipeline.register('npcRetireReact', '致仕涟漪', function() { _npcRetireRipple(); }, 90, 'perturn');
 }
 
+// ============================================================
+// 2.11: 势力大事涟漪（批丙·C1）——占府/入寇/宣战/民变/拒抚/受抚/条约 六类势力级大事在 NPC 心里激起真实反应。
+//   范式同四涟漪家族(单 chokepoint·近1回合窗天然挡存量/首上线刷屏·幂等标记打在**事件对象**上非 char)。
+//   只写人物反应层(remember/loyalty/stress/心绪)·绝不碰世界事实层(GM._aiMemory/_chronicle/evtLog/
+//   _socialPoliticalSignals/addEB)——世界推演 prompt 已有事实层·涟漪只是人物反应层。跳过死者与玩家(c.isPlayer)。
+//   单回合记忆总封顶 24 条·防大乱世刷屏。
+//   ⚠后续候选：char 无「主战/主和」立场字段·本刀不做立场分化(按 rank/role/性格勇烈分流)·俟立场字段落地再分。
+// ============================================================
+function _factionEventRipple() {
+  if (typeof GM === 'undefined' || !GM || !Array.isArray(GM.chars)) return;
+  if (typeof NpcMemorySystem === 'undefined' || typeof NpcMemorySystem.remember !== 'function') return;
+  var turn = GM.turn || 0;
+  var CAP = 24, wrote = 0;                         // 单回合记忆总封顶(防大乱世刷屏)
+  var capital = GM._capital || '京城';     // 京城
+
+  // — 工具(function 声明·hoist·六段扫描前置) —
+  function _isNew(t) { return (typeof t === 'number') && ((turn - t) <= 1); }   // 近1回合(逐字照四涟漪家族)
+  function _live(name) {
+    var c = (name && typeof findCharByName === 'function') ? findCharByName(name) : null;
+    return (c && c.alive !== false && !c.isPlayer) ? c : null;
+  }
+  function _rank(c) { try { return (typeof TMPromotion !== 'undefined' && TMPromotion.resolveRankLevel) ? TMPromotion.resolveRankLevel(c, GM) : 18; } catch (_) { return 18; } }
+  function _sameLoc(a, b) { try { return (typeof _isSameLocation === 'function') ? _isSameLocation(a, b) : (String(a || '') === String(b || '')); } catch (_) { return false; } }
+  function _bold(c) { return !!c && ((Number(c.valor) || 0) >= 60 || /勇|刚|悍|烈|猛/.test(String(c.personality || ''))); }   // 勇/刚/悍/烈/猛——性格勇烈(主战/备战怒·否则忧)
+  function _rem(c, ev, emo, imp, extra) {
+    if (wrote >= CAP || !c || c.alive === false || c.isPlayer) return false;
+    NpcMemorySystem.remember(c.name, ev, emo, imp, '');
+    wrote++;
+    if (extra) {
+      if (typeof extra.stress === 'number') c.stress = Math.min(100, (c.stress || 0) + extra.stress);
+      if (typeof extra.loyalty === 'number' && typeof adjustCharacterLoyalty === 'function') adjustCharacterLoyalty(c, extra.loyalty, extra.reason || '势力大事涟漪', { source: 'faction-event-ripple' });
+      if (extra.mood) c._mood = extra.mood;
+    }
+    return true;
+  }
+  var _allDivsCache = null;
+  function _allDivs() {
+    if (_allDivsCache !== null) return _allDivsCache;
+    _allDivsCache = [];
+    try {
+      var IB = (typeof IntegrationBridge !== 'undefined') ? IntegrationBridge : null;
+      if (IB && typeof IB.getDivisionArray === 'function' && GM.adminHierarchy) _allDivsCache = IB.getDivisionArray(GM.adminHierarchy) || [];
+    } catch (_) {}
+    return _allDivsCache;
+  }
+  function _govOf(regionName) {
+    if (!regionName) return null;
+    var divs = _allDivs();
+    for (var i = 0; i < divs.length; i++) { var d = divs[i]; if (d && d.governor && _sameLoc(d.name, regionName)) return _live(d.governor); }
+    return null;
+  }
+  var _capHigh = null;   // 京中高品(在京·rank≤8·活人·非玩家)·按品级升序算一次·各事件切片复用
+  function _capitalHigh(topN) {
+    if (_capHigh === null) {
+      _capHigh = GM.chars.filter(function (c) { return c && c.alive !== false && !c.isPlayer && _sameLoc(c.location, capital) && _rank(c) <= 8; });
+      _capHigh.sort(function (a, b) { return _rank(a) - _rank(b); });
+    }
+    return _capHigh.slice(0, topN);
+  }
+  // — 玩家势力判定(战争/条约牵涉玩家才反应) —
+  //   canonical 源镜像 _playerFactionNameForArmy(tm-ai-change-army.js:84)∪_isPlayerName(tm-faction-diplomacy.js:31)·
+  //   归一用同款 _norm(trim+toLowerCase)·比对严格相等·不自造模糊/包含匹配(防别名/空格漏判)。
+  function _normFac(s) { return String(s == null ? '' : s).trim().toLowerCase(); }
+  function _playerFacNames() {
+    var out = [];
+    try {
+      var P0 = (typeof P !== 'undefined' && P) ? P : {};
+      var pi = P0.playerInfo || {};
+      [pi.factionName, P0.playerFactionName, P0.playerFaction, GM.playerFaction].forEach(function (n) { if (n) out.push(_normFac(n)); });
+      GM.chars.forEach(function (c) { if (c && c.isPlayer && c.faction) out.push(_normFac(c.faction)); });
+      if (Array.isArray(GM.facs)) GM.facs.forEach(function (f) { if (f && (f.isPlayer || f.player) && f.name) out.push(_normFac(f.name)); });
+    } catch (_) {}
+    return out;
+  }
+  function _isPlayerFac(name) { var k = _normFac(name); if (!k) return false; var pn = _playerFacNames(); for (var i = 0; i < pn.length; i++) { if (pn[i] === k) return true; } return false; }
+  function _warPlayer(w) {
+    if (_isPlayerFac(w.attacker) || _isPlayerFac(w.defender)) return true;
+    if (w.enemy && !w.attacker && !w.defender) return true;   // enemy 型条目(无 attacker/defender)=朝廷对敌·玩家天然涉入
+    return false;
+  }
+  function _treatyPlayer(t) {
+    if (_isPlayerFac(t.from) || _isPlayerFac(t.to)) return true;
+    if (Array.isArray(t.parties)) { for (var i = 0; i < t.parties.length; i++) { var p = t.parties[i]; if (_isPlayerFac((p && p.name) || p)) return true; } }
+    return false;
+  }
+  // 条约否定/解除语义判定(2026-07-22 Codex 复审·保守策)：命中关键词后·检查其前 4 字窗口是否含否定/解除词·
+  //   命中即判反(拒绝称臣/废除岁币/解除同盟)。否定语义的情绪交 AI 叙事层·涟漪只对明确正向成约反应。
+  var _TREATY_NEG = /解除|[拒废罢毁绝断却]/;
+  function _treatyNegated(text, kwRe) {
+    var f = kwRe.flags || ''; if (f.indexOf('g') < 0) f += 'g';
+    var re = new RegExp(kwRe.source, f), m;
+    while ((m = re.exec(text)) !== null) {
+      if (_TREATY_NEG.test(text.slice(Math.max(0, m.index - 4), m.index))) return true;
+      if (m.index === re.lastIndex) re.lastIndex++;   // 零宽保险(防死循环)
+    }
+    return false;
+  }
+
+  // ① 占府/陷城 —— div.occupiedBy + _occupiedTurn(写口 tm-revolt-inference.js:223)·幂等 div._occupyRippleReacted
+  var _divs = _allDivs();
+  for (var di = 0; di < _divs.length && wrote < CAP; di++) {
+    var dv = _divs[di];
+    if (!dv || !dv.occupiedBy || dv._occupyRippleReacted || !_isNew(dv._occupiedTurn)) continue;
+    dv._occupyRippleReacted = true;
+    var seen1 = {};
+    var gov1 = _live(dv.governor);   // ①该省主官(惧·imp8·stress+10·loyalty-2)
+    if (gov1 && !seen1[gov1.name]) { seen1[gov1.name] = 1; _rem(gov1, '治所「' + dv.name + '」陷于「' + dv.occupiedBy + '」·守土有责·惶惧待罪', '惧', 8, { stress: 10, loyalty: -2, reason: dv.name + '失守', mood: '惧' }); }
+    var born1 = 0;                   // ②籍贯此地官员(悲·imp7·本府封顶4防单省刷屏)
+    for (var b1 = 0; b1 < GM.chars.length && wrote < CAP && born1 < 4; b1++) {
+      var cc1 = GM.chars[b1];
+      if (!cc1 || cc1.alive === false || cc1.isPlayer || seen1[cc1.name] || !cc1.birthplace || !_sameLoc(cc1.birthplace, dv.name)) continue;
+      seen1[cc1.name] = 1; born1++;
+      _rem(cc1, '乡梓「' + dv.name + '」沦陷·忧思故里', '悲', 7);
+    }
+    _capitalHigh(4).forEach(function (c) { if (!seen1[c.name]) { seen1[c.name] = 1; _rem(c, '「' + dv.name + '」陷落·京师震动', '忧', 6); } });   // ③在京高品(忧·imp6·top4)
+  }
+
+  // ② 外患入寇 —— GM.armies 里 _borderInvasion===true 且 _createdTurn 近1回合(写口 tm-border-invasion.js:111/181)·幂等 army._invRippleReacted
+  var _armies = Array.isArray(GM.armies) ? GM.armies : [];
+  var _cmdNames = {};   // 统军将领名册(备战反应受众)
+  _armies.forEach(function (a) { if (a && a.commander) _cmdNames[a.commander] = 1; });
+  for (var ii = 0; ii < _armies.length && wrote < CAP; ii++) {
+    var am = _armies[ii];
+    if (!am || am._borderInvasion !== true || am._invRippleReacted || !_isNew(am._createdTurn)) continue;
+    am._invRippleReacted = true;
+    var loc2 = am.location || am.garrison || '';
+    var foe2 = am.sourceFacName || am.faction || '外寇';
+    var seen2 = {};
+    var g2 = _govOf(loc2);   // 目标区主官(惧·imp8·stress)
+    if (g2 && !seen2[g2.name]) { seen2[g2.name] = 1; _rem(g2, '「' + loc2 + '」边警告急·「' + foe2 + '」犯边·守土惶惧', '惧', 8, { stress: 10, mood: '惧' }); }
+    _capitalHigh(4).forEach(function (c) { if (!seen2[c.name]) { seen2[c.name] = 1; _rem(c, '「' + foe2 + '」大举犯边·边警告急', '忧', 6); } });   // 京中高品(忧·imp6·top4)
+    var cmd2 = 0;   // 有兵将领(奋起备战·怒/忧按 boldness·imp6·top3)
+    for (var m2 = 0; m2 < GM.chars.length && wrote < CAP && cmd2 < 3; m2++) {
+      var mc2 = GM.chars[m2];
+      if (!mc2 || mc2.alive === false || mc2.isPlayer || seen2[mc2.name] || !_cmdNames[mc2.name]) continue;
+      seen2[mc2.name] = 1; cmd2++;
+      _rem(mc2, '烽烟起·「' + foe2 + '」犯边·请缨备战', _bold(mc2) ? '怒' : '忧', 6);
+    }
+  }
+
+  // ③ 宣战/开战 —— GM.activeWars startTurn|turn|startedTurn 近1回合·仅牵涉玩家势力(排除起义军条目·民变归④)·幂等 war._rippleReacted
+  var _wars = Array.isArray(GM.activeWars) ? GM.activeWars : [];
+  for (var wi = 0; wi < _wars.length && wrote < CAP; wi++) {
+    var w = _wars[wi];
+    if (!w || w._rippleReacted) continue;
+    if (w.revoltId || /起义军/.test(String(w.enemy || ''))) continue;   // 起义军战事归④·防双反应
+    var wt = (typeof w.startTurn === 'number') ? w.startTurn : ((typeof w.turn === 'number') ? w.turn : w.startedTurn);
+    if (!_isNew(wt) || !_warPlayer(w)) continue;
+    w._rippleReacted = true;
+    var foe3 = w.attacker || w.defender || w.enemy || '邻敌';
+    _capitalHigh(6).forEach(function (c) {   // 京中高品(忧/怒分流·imp6-7·top6)
+      if (_bold(c)) _rem(c, '兵连祸结·「' + foe3 + '」开釁·请缨出师', '怒', 7);
+      else _rem(c, '兵连祸结·「' + foe3 + '」战事起·忧心国事', '忧', 6);
+    });
+  }
+
+  // ④ 民变首义 —— GM._activeRevolts startTurn|turn 近1回合(对象形状 tm-endturn-apply.js:2161)·幂等 revolt._upriseRippleReacted
+  var _revs = Array.isArray(GM._activeRevolts) ? GM._activeRevolts : [];
+  for (var ri = 0; ri < _revs.length && wrote < CAP; ri++) {
+    var rv = _revs[ri];
+    if (!rv || rv._upriseRippleReacted) continue;
+    var rt = (typeof rv.startTurn === 'number') ? rv.startTurn : rv.turn;
+    if (!_isNew(rt)) continue;
+    rv._upriseRippleReacted = true;
+    var rg = rv.region || '';
+    var seen4 = {};
+    var g4 = _govOf(rg);   // 起事省区主官(惧·imp8)
+    if (g4) { seen4[g4.name] = 1; _rem(g4, '「' + rg + '」民变首义·守土失职·惶惧', '惧', 8, { stress: 10, mood: '惧' }); }
+    _capitalHigh(4).forEach(function (c) { if (!seen4[c.name]) { seen4[c.name] = 1; _rem(c, '「' + rg + '」民变蜂起·京师忧惧', '忧', 6); } });   // 京中高品(忧·imp6·top4)
+  }
+
+  // ⑤ 拒抚背约 / 受抚招安 —— GM._activeRevolts 的 _amnestyRejectedTurn / history 招安条目(写口 tm-endturn-apply.js:2361/2366)
+  for (var xi = 0; xi < _revs.length && wrote < CAP; xi++) {
+    var xr = _revs[xi];
+    if (!xr) continue;
+    var who5 = xr.leaderName || xr.region || '义军';
+    // 拒抚背约(忧)·幂等记 turn 值(允许新一次拒抚再发·同回合不重复)
+    if (_isNew(xr._amnestyRejectedTurn) && xr._amnestyRippleTurn !== xr._amnestyRejectedTurn) {
+      xr._amnestyRippleTurn = xr._amnestyRejectedTurn;
+      _capitalHigh(4).forEach(function (c) { _rem(c, '抚局既败·战云再起·「' + who5 + '」拒抚愈炽', '忧', 6); });
+    }
+    // 受抚/招安(喜)·扫 history 近1回合 event 含「招安」且非 rejected·幂等 revolt._amnestyOkRippleReacted
+    if (!xr._amnestyOkRippleReacted && Array.isArray(xr.history)) {
+      var okAmnesty = xr.history.some(function (h) { return h && _isNew(h.turn) && /招安/.test(String(h.event || '')) && !/rejected|拒/.test(String(h.event || '')); });
+      if (okAmnesty) {
+        xr._amnestyOkRippleReacted = true;
+        _capitalHigh(4).forEach(function (c) { _rem(c, '「' + who5 + '」受抚罢兵·干戈暂息·朝野稍安', '喜', 6); });
+      }
+    }
+  }
+
+  // ⑥ 条约 —— GM.treaties turn|startTurn 近1回合(两形状:tm-faction-action-engine.js:679 用 turn·tm-faction-diplomacy.js:170 用 startTurn)·幂等 treaty._rippleReacted
+  var _treaties = Array.isArray(GM.treaties) ? GM.treaties : [];
+  for (var ti = 0; ti < _treaties.length && wrote < CAP; ti++) {
+    var tr = _treaties[ti];
+    if (!tr || tr._rippleReacted) continue;
+    var tt = (typeof tr.turn === 'number') ? tr.turn : tr.startTurn;
+    if (!_isNew(tt) || !_treatyPlayer(tr)) continue;
+    tr._rippleReacted = true;
+    var tText = String(tr.type || '') + '|' + String(tr.typeName || '') + '|' + String(tr.title || '');
+    var _indemRe = /岁币|纳贡|割地|赔款|称臣|进贡/;
+    var _allyRe = /结盟|同盟|互不侵犯|盟好|通好|和亲|alliance|nonaggression|joint/i;
+    var _isIndem = _indemRe.test(tText), _isAlly = _allyRe.test(tText);
+    // 保守策(2026-07-22 Codex 复审)：混合语义(同文含两组关键词)或否定/解除语义(拒/废/罢/解除/毁/绝/断/却)→整条跳过·
+    //   不反应——涟漪只对**明确正向成约**反应·否定语义的情绪(废约雪耻之快/毁盟之忧)交 AI 叙事层演绎。
+    if (_isIndem && _isAlly) {
+      /* 混合语义·跳过不反应 */
+    } else if (_isIndem && !_treatyNegated(tText, _indemRe)) {
+      _capitalHigh(4).forEach(function (c) {   // 岁币/纳贡/割地类·京中怒/忧(imp6-7·top4)
+        if (_bold(c)) _rem(c, '城下之盟·岁币纳贡·国耻难雪', '怒', 7);
+        else _rem(c, '屈己议和·城下签盟·忧愤难平', '忧', 6);
+      });
+    } else if (_isAlly && !_treatyNegated(tText, _allyRe)) {
+      _capitalHigh(3).forEach(function (c) { _rem(c, '结盟修好·边境暂安·可专力一面', '喜', 5); });   // 结盟/互不侵犯类·京中平/喜(imp5·top3)
+    }
+  }
+}
+if (typeof SettlementPipeline !== 'undefined' && typeof SettlementPipeline.register === 'function') {
+  SettlementPipeline.register('factionEventReact', '势力大事涟漪', function() { _factionEventRipple(); }, 90, 'perturn');
+}
+
+// ============================================================
+// 2.12: 势力覆灭涟漪（批丙·C2）——一方势力倾覆·在册成员树倒猢狲散·京师侧目。
+//   订阅 GameEventBus 两真 emitter：faction:defeated({name,reason}·tm-endturn-apply.js:1155)
+//   / faction:collapse({faction,leader}·tm-three-systems-ext.js:1054)。共享 fac._collapseRippleReacted
+//   幂等——两事件可同势力先后发(defeated=硬覆灭 strength≤0·collapse=_collapsing 软态)·先到先反应后到跳过。
+//   ★去重裁定(见验收单 C2)：faction:defeated 原在 tm-endturn-apply.js 内联给全体成员写「所属势力X覆灭·忧imp8」
+//     记忆·与本涟漪成员记忆重叠=双注入。已把成员反应收口进本单 chokepoint(该内联写已摘·见 apply.js 注释)。
+//     订阅在 emit 时同步跑·此刻成员 c.faction 尚未被 dissolveFaction 清·故仍能命中在册成员。
+//   只写人物反应层(remember/loyalty/stress/心绪)·跳过死者与玩家。
+// ============================================================
+function _factionCollapseRipple(facName) {
+  if (typeof GM === 'undefined' || !GM || !Array.isArray(GM.chars)) return;
+  if (typeof NpcMemorySystem === 'undefined' || typeof NpcMemorySystem.remember !== 'function') return;
+  facName = String(facName || '');
+  if (!facName) return;
+  var fac = Array.isArray(GM.facs) ? GM.facs.find(function (f) { return f && (f.name === facName || f.id === facName); }) : null;
+  if (fac) { if (fac._collapseRippleReacted) return; fac._collapseRippleReacted = true; }   // 幂等·两事件共享(fac 对象打标)
+  var capital = GM._capital || '京城';
+  var CAP = 24, wrote = 0;
+  function _rank(c) { try { return (typeof TMPromotion !== 'undefined' && TMPromotion.resolveRankLevel) ? TMPromotion.resolveRankLevel(c, GM) : 18; } catch (_) { return 18; } }
+  function _sameLoc(a, b) { try { return (typeof _isSameLocation === 'function') ? _isSameLocation(a, b) : (String(a || '') === String(b || '')); } catch (_) { return false; } }
+  var hostile = fac ? ((Number(fac.playerRelation) || 0) < 0) : false;   // 覆灭势力对玩家敌对→京中称快·否则唇亡齿寒
+
+  // ① 在册成员(活人·非玩家·top8)——树倒猢狲散(哀·imp7·loyalty-3·stress+8·心绪惧)
+  var members = GM.chars.filter(function (c) { return c && c.alive !== false && !c.isPlayer && c.faction === facName; }).slice(0, 8);
+  members.forEach(function (c) {
+    if (wrote >= CAP) return;
+    NpcMemorySystem.remember(c.name, '所属「' + facName + '」树倒猢狲散·惶惶无所依', '哀', 7, '');
+    wrote++;
+    c.stress = Math.min(100, (c.stress || 0) + 8);
+    if (typeof adjustCharacterLoyalty === 'function') adjustCharacterLoyalty(c, -3, '所属势力' + facName + '覆灭', { source: 'faction-collapse-ripple' });
+    c._mood = '惧';
+  });
+
+  // ② 京中高品(在京·rank≤8·活人·非玩家·非该势力成员·top4)——一方倾覆(敌覆=喜·友覆=忧·imp6)
+  var capHigh = GM.chars.filter(function (c) { return c && c.alive !== false && !c.isPlayer && c.faction !== facName && _sameLoc(c.location, capital) && _rank(c) <= 8; });
+  capHigh.sort(function (a, b) { return _rank(a) - _rank(b); });
+  capHigh.slice(0, 4).forEach(function (c) {
+    if (wrote >= CAP) return;
+    NpcMemorySystem.remember(c.name, '「' + facName + '」倾覆·' + (hostile ? '一劲敌灰飞烟灭·朝野称快' : '唇亡齿寒·京师侧目'), hostile ? '喜' : '忧', 6, '');
+    wrote++;
+  });
+}
+if (typeof GameEventBus !== 'undefined' && typeof GameEventBus.on === 'function') {
+  GameEventBus.on('faction:defeated', function (d) { if (d && d.name) _factionCollapseRipple(d.name); });
+  GameEventBus.on('faction:collapse', function (d) { if (d && (d.faction || d.name)) _factionCollapseRipple(d.faction || d.name); });
+}
+
 // 注册到结算流水线
 // 1.8: 时代进度分析（纯信息注入，不直接修改朝代阶段）
 // 评估编辑器配置的衰退/中兴规则，将满足的条件注入 GM._eraProgressReport

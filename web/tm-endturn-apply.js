@@ -1153,17 +1153,14 @@
               fac.destroyed = true;
               addEB('\u52BF\u529B\u52A8\u6001', fc.name + '\u5DF2\u8986\u706D\uFF1A' + (fc.reason || ''));
               if (typeof GameEventBus !== 'undefined') GameEventBus.emit('faction:defeated', { name: fc.name, reason: fc.reason || '' });
-              var _membersBefore = (GM.chars||[]).filter(function(c){return c.alive !== false && c.faction === fc.name;}).map(function(c){return c.name;});
+              // \u2605\u6279\u4E19 C2 \u53BB\u91CD\u88C1\u5B9A(2026-07-22)\uFF1A\u6210\u5458\u6811\u5012\u7300\u72F2\u6563\u53CD\u5E94(\u54C0 imp7+loyalty-3+stress+8\u00B7\u4EAC\u4E2D\u4FA7\u76EE)
+              //   \u5DF2\u6536\u53E3\u5230 _factionCollapseRipple(tm-endturn-helpers.js\u00B7faction:defeated \u8BA2\u9605\u00B7\u4E0A\u884C emit \u540C\u6B65\u8DD1)\u3002
+              //   \u539F\u6B64\u5904\u5185\u8054\u7ED9\u5168\u4F53\u6210\u5458\u5199\u300C\u6240\u5C5E\u52BF\u529B\u8986\u706D\u00B7\u5FE7imp8\u300D\u8BB0\u5FC6\u00B7\u4E0E\u6D9F\u6F2A\u6210\u5458\u8BB0\u5FC6\u91CD\u53E0=\u53CC\u6CE8\u5165\u00B7\u6545\u4E0D\u518D\u5185\u8054\u5199(\u5355 chokepoint\u6536\u53E3)\u3002
               if (typeof window !== 'undefined' && window.TM && TM.FactionMembership && TM.FactionMembership.dissolveFaction) {
                 TM.FactionMembership.dissolveFaction(fc.name, { reason: fc.reason || '\u5176\u529B\u8870\u7AF8', conqueror: fc.conqueror || '' });
               } else if (GM.chars) {
                 GM.chars.forEach(function(c) {
                   if (c.alive !== false && c.faction === fc.name) c.faction = '';
-                });
-              }
-              if (GM.chars && typeof NpcMemorySystem !== 'undefined') {
-                _membersBefore.forEach(function(_nm){
-                  NpcMemorySystem.remember(_nm, '\u6240\u5C5E\u52BF\u529B' + fc.name + '\u8986\u706D', '\u5FE7', 8);
                 });
               }
               if (GM.armies) {

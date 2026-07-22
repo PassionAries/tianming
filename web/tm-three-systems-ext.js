@@ -920,6 +920,11 @@
 
     // ─── 军事→势力 ───
     // 战败：faction strength-5·legitimacy-3·士气 morale-8
+    // ★批丙 C3 裁定(2026-07-22)：'army:defeat' 全库无 emitter=死链·本监听器从不触发。同一「战败方
+    //   实力/合法性/士气损」语义已由 tm-world-reactors.js WorldReactors.Military.onBattleResolved 承载
+    //   (同值 strength-5/legitimacy-3/morale-8·2026-07-22 默认 ON·真接线 tm-military.js:705·自带
+    //   _battleSettledFactions 双算护栏)。故此死链保持退役·不补 emitter——补则与 world-reactors 双扣同一账。
+    //   详见批丙验收单 C3 裁定书。
     global.GameEventBus.on('army:defeat', function(data) {
       if (!global.GM || !data || !data.owner) return;
       var f = (GM.facs||[]).find(function(x){return x.name === data.owner;});

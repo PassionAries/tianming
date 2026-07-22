@@ -45,3 +45,5 @@ web/tm-save-lifecycle.js whitespace=blank-at-eol,blank-at-eof,space-before-tab,c
 web/tm-faction-action-engine.js whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 # 批甲「开闸醒世界」(2026-07-22·Codex 三轮 A)触及的历史 CRLF(mixed) 文件：新增 lite conf 净化器 _tmLiteSafeConf + 两 lite 写口接线·同上契约(检查真行尾空格·不把 CR 误报为 trailing)。
 web/tm-utils.js whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+# 批丙「涟漪跨线」(2026-07-22)触及的历史 CRLF 文件：army:defeat 死链裁定注释(由 world-reactors 承载·保持退役)·同上契约(检查真行尾空格·不把 CR 误报为 trailing)。
+web/tm-three-systems-ext.js whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

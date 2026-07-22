@@ -53,14 +53,17 @@ CAPTURE_BLOCK = '''
                             with open(os.path.join(pack_dir, cover_name), "wb") as _cf:
                                 _cf.write(_craw)''' % MARK
 
-SQL_COLS_OLD = "INSERT INTO workshop_packs(id,title,version,author_id,author_name,description,type,tags,package_url,sha256,size,created_at,updated_at,downloads,status,file_name,flags)"
-SQL_COLS_NEW = "INSERT INTO workshop_packs(id,title,version,author_id,author_name,description,type,tags,package_url,sha256,size,created_at,updated_at,downloads,status,file_name,flags,release_notes,cover_name)"
-SQL_VALS_OLD = "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,'pending',?,?)"
-SQL_VALS_NEW = "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,'pending',?,?,?,?)"
-SQL_CONF_OLD = "updated_at=excluded.updated_at, status='pending', file_name=excluded.file_name, flags=excluded.flags"
+# v1.1（2026-07-22·按线上真身 sed 取样重刻）：线上 service.py 比 x.py 新——列清单多
+# assets,parent_id 两列·参数元组 scan_flags 后还有两值。v1.0 的 CONF/PARM 锚是子串碰巧
+# 命中·若非 COLS/VALS 失配触发整体回滚·新值会插进元组中段错列入库——全有或全无救了命。
+SQL_COLS_OLD = "INSERT INTO workshop_packs(id,title,version,author_id,author_name,description,type,tags,package_url,sha256,size,created_at,updated_at,downloads,status,file_name,flags,assets,parent_id)"
+SQL_COLS_NEW = "INSERT INTO workshop_packs(id,title,version,author_id,author_name,description,type,tags,package_url,sha256,size,created_at,updated_at,downloads,status,file_name,flags,assets,parent_id,release_notes,cover_name)"
+SQL_VALS_OLD = "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,'pending',?,?,?,?)"
+SQL_VALS_NEW = "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,'pending',?,?,?,?,?,?)"
+SQL_CONF_OLD = "updated_at=excluded.updated_at, status='pending', file_name=excluded.file_name, flags=excluded.flags, assets=excluded.assets, parent_id=excluded.parent_id"
 SQL_CONF_NEW = SQL_CONF_OLD + ", release_notes=excluded.release_notes, cover_name=excluded.cover_name"
-SQL_PARM_OLD = "json.dumps(scan_flags, ensure_ascii=False)"
-SQL_PARM_NEW = "json.dumps(scan_flags, ensure_ascii=False), release_notes, cover_name"
+SQL_PARM_OLD = "json.dumps(assets, ensure_ascii=False),\n                        parent_id\n                    ))"
+SQL_PARM_NEW = "json.dumps(assets, ensure_ascii=False),\n                        parent_id, release_notes, cover_name\n                    ))"
 BODY_OLD = "read_body(self, MAX_UPLOAD_BYTES + 2 * 1024 * 1024)"
 BODY_NEW = "read_body(self, MAX_UPLOAD_BYTES + 6 * 1024 * 1024)"
 
@@ -228,13 +231,20 @@ def main():
     if not migrate_db(files):
         say("数据库迁移未确认·为保上传不炸·代码一律不动·终止")
         sys.exit(1)
-    all_ok = all(patch_file(fn) for fn in files)
-    if all_ok:
-        say("全部完成。重启生效：systemctl restart tianming-online")
+    # v1.1：逐文件独立处理不连坐——x.py 等旧拷贝锚不合只记跳过（不影响运行体 service.py）
+    results = {}
+    for fn in files:
+        results[fn] = patch_file(fn)
+    ok_n = sum(1 for v in results.values() if v)
+    for fn, v in results.items():
+        say(("✓ " if v else "✗(旧拷贝锚不合·已回滚·不影响运行体) ") + fn)
+    if ok_n:
+        say("完成 %d/%d。重启生效：systemctl restart tianming-online" % (ok_n, len(files)))
         if "--restart" in sys.argv:
             os.system("systemctl restart tianming-online")
             say("已重启 tianming-online")
     else:
+        say("没有任何文件成功打上·请把上面输出贴回给助手")
         sys.exit(1)
 
 

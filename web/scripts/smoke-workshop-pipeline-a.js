@@ -141,11 +141,19 @@ function extractFn(src, header) {
   assert(catalogViewState({ catalog: { packs: [{ id: 'a' }] }, catalogError: null }) === 'list',
     'R4·R1: 无错误+有数据 → list');
 })();
-// 接线校验：browse 与 discover 两页都走 catalogViewState，并有 stale banner 分支（不靠文案串匹配）。
-assert((community.match(/catalogViewState\(state\)/g) || []).length >= 3,
-  'R4·R1: renderDiscover / renderBrowsePane 两页面须都调用 catalogViewState（+定义处）');
-assert(community.includes('catalogStaleBannerHtml(state)') && community.includes('catalogErrorCardHtml(state)'),
-  'R4·R1: 两页面须复用共享 stale-banner / error-card helper');
+// P1-2·按函数锁接线（extractFn 失配即红）：分别抽 renderDiscover / renderBrowsePane 源文，
+// 逐函数断言各自含 error 接线（vs === 'error' + catalogErrorCardHtml）与 stale 接线（vs === 'stale' +
+// catalogStaleBannerHtml）——防「删某页 stale-banner 行」或「把该页 vs === 'error' 改恒假」被文件级计数静默漏过。
+(function testPaneWiringPerFunction() {
+  [['renderDiscover', 'function renderDiscover()'], ['renderBrowsePane', 'function renderBrowsePane()']].forEach(function (pair) {
+    var name = pair[0], src = extractFn(community, pair[1]);
+    assert(src.includes('catalogViewState(state)'), 'R4·R1: ' + name + ' 须先取视图态 catalogViewState（据 state 标记分派·非文案串匹配）');
+    assert(/vs === 'error'/.test(src) && src.includes('catalogErrorCardHtml(state)'),
+      'R4·R1: ' + name + ' 须有 error 接线（vs === "error" → catalogErrorCardHtml）');
+    assert(/vs === 'stale'/.test(src) && src.includes('catalogStaleBannerHtml(state)'),
+      'R4·R1: ' + name + ' 须有 stale 接线（vs === "stale" → catalogStaleBannerHtml）');
+  });
+})();
 
 // ── R4·R2：立绘归并顺序纯 helper 真跑（确定可复述·portrait 恒优先 mod·同类型按 order）──
 (function testMergeOrder() {
@@ -168,11 +176,14 @@ assert(cm.includes('_waPortraitIdx = waMergePortraitIndex(results);'),
 (function testQuota() {
   var isQuotaError = new Function(extractFn(cm, 'function isQuotaError(e)') + '\nreturn isQuotaError;')();
   assert(isQuotaError({ name: 'QuotaExceededError' }) === true, 'R4·R3: QuotaExceededError 名 → true');
+  assert(isQuotaError({ name: 'NS_ERROR_DOM_QUOTA_REACHED' }) === true, 'R4·R3: Firefox NS_ERROR_DOM_QUOTA_REACHED 名 → true');
+  assert(isQuotaError(new Error('Persistent storage maximum size reached')) === true,
+    'R4·R3: Firefox「Persistent storage maximum size reached」(storage+maximum size) → true');
   assert(isQuotaError(new Error('quota exceeded')) === true, 'R4·R3: message 含 quota → true');
   assert(isQuotaError(new Error('存储空间不足')) === true, 'R4·R3: 含「存储空间」→ true');
   assert(isQuotaError(new Error('storage is full')) === true, 'R4·R3: storage+full 组合 → true');
   assert(isQuotaError(new Error('Maximum call stack size exceeded')) === false,
-    'R4·R3: "call stack size exceeded" 不得误判为配额（裸 exceeded 匹配已删）');
+    'R4·R3: "call stack size exceeded" 不得误判为配额（裸 exceeded 匹配已删·收紧不放宽）');
   assert(isQuotaError(new Error('network timeout')) === false, 'R4·R3: 无关错误 → false');
   assert(isQuotaError(null) === false, 'R4·R3: null → false');
 })();

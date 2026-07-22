@@ -2338,6 +2338,56 @@
     render();
   }
 
+  // ── B1（工坊全链修缮·批B）：页内打包器 ──────────────────────────────────────
+  // 普通创作者不会手写 manifest.json——本处理器把散文件按「商店分类」交 TMZipStore.planLoosePack
+  // 归一（纯计划·mod 组合包立绘落 portraits//音频落 music/·与批A识别约定对齐），再 buildZip
+  // 打成 store-zip，包一层 .tm-pack File 喂给现有 onPublishPackageFile（复用其校验与 state 落位）。
+  async function onPublishLooseFiles(input) {
+    capturePublishDraft();
+    var files = (input && input.files) ? Array.prototype.slice.call(input.files) : [];
+    if (!files.length) return;
+    if (!(window.TMZipStore && TMZipStore.buildZip && TMZipStore.planLoosePack)) { state.publishMessage = '页内打包模块未就绪。'; render(); return; }
+    var pt = state.pubType || 'mod';
+    var d = publishDraft();
+    var title = d.title || publishFileBaseName(files[0]) || '未命名内容包';
+    var metas = files.map(function (f, i) { return { name: f.name, size: f.size, index: i }; });
+    var plan = TMZipStore.planLoosePack(pt, title, d.version || '1.0.0', d.desc || '', metas);
+    if (!plan.targets.length) {
+      state.publishMessage = '没有可打包的受支持文件（仅收图片 / 音频 / JSON 等）。' + (plan.skipped.length ? '已跳过 ' + plan.skipped.length + ' 个不支持的文件。' : '');
+      render();
+      return;
+    }
+    if (plan.totalSize > TMZipStore.LOOSE_MAX_TOTAL) {
+      state.publishMessage = '⚠ 散文件总量 ' + formatBytes(plan.totalSize) + ' 超过 ' + formatBytes(TMZipStore.LOOSE_MAX_TOTAL) + '，网页安装端上限约 64MB。请拆分或压缩后再打包。';
+      render();
+      return;
+    }
+    state.publishMessage = '正在打包 ' + plan.targets.length + ' 个文件...';
+    render();
+    try {
+      var entries = [];
+      for (var i = 0; i < plan.targets.length; i++) {
+        var t = plan.targets[i];
+        var buf = await files[t.index].arrayBuffer();
+        entries.push({ name: t.path, data: new Uint8Array(buf) });
+      }
+      entries.unshift({ name: 'manifest.json', data: new TextEncoder().encode(JSON.stringify(plan.manifest, null, 2)) });
+      var zip = TMZipStore.buildZip(entries);
+      var blob = new Blob([zip], { type: 'application/zip' });
+      var packFile;
+      try { packFile = new File([blob], plan.slug + '.tm-pack', { type: 'application/zip' }); }
+      catch (e) { packFile = blob; try { packFile.name = plan.slug + '.tm-pack'; } catch (e2) {} }
+      onPublishPackageFile({ files: [packFile] });
+      var warn = plan.oversize.length ? '（含 ' + plan.oversize.length + ' 个大于 20MB 的大文件·网页安装可能较慢）' : '';
+      var skip = plan.skipped.length ? '·已跳过 ' + plan.skipped.length + ' 个不支持文件' : '';
+      state.publishMessage = '已打包 ' + plan.targets.length + ' 个文件为「' + packTypeLabel(pt) + '」投稿包（共 ' + formatBytes(zip.length) + '）' + warn + skip + '。填好商店信息即可提交。';
+      render();
+    } catch (e) {
+      state.publishMessage = '打包失败：' + (e && e.message || '未知错误');
+      render();
+    }
+  }
+
   function onPublishCoverFile(input) {
     capturePublishDraft();
     var file = input && input.files && input.files[0];
@@ -2785,6 +2835,7 @@
     webPublishAssetPack: webPublishAssetPack,
     onAssetFiles: onAssetFiles,
     onPublishPackageFile: onPublishPackageFile,
+    onPublishLooseFiles: onPublishLooseFiles,
     onPublishCoverFile: onPublishCoverFile,
     onPublishGalleryFiles: onPublishGalleryFiles,
     submitWorkshopPublication: submitWorkshopPublication,

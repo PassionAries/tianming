@@ -1723,6 +1723,12 @@
     state.pubType = pt;
     var d = publishDraft();
     var typeSel = '<select id="tm-pub-type" class="input" onchange="TMContentManager.switchPubType(this.value)">' + PACK_TYPES.filter(function(t){ return t.v; }).map(function(t){ return '<option value="' + t.v + '"' + (pt === t.v ? ' selected' : '') + '>' + esc(t.label) + '</option>'; }).join('') + '</select>';
+    // B1：页内打包器 accept——随「商店分类」过滤散文件类型（组合类 mod 收全部三类）。
+    var looseAccept = pt === 'portrait' ? 'image/*,.png,.jpg,.jpeg,.webp,.bmp'
+      : pt === 'music' ? 'audio/*,.mp3,.ogg,.wav'
+      : pt === 'map' ? '.json,.geojson,application/json,application/geo+json'
+      : pt === 'scenario' ? '.json,application/json'
+      : 'image/*,audio/*,.png,.jpg,.jpeg,.webp,.bmp,.mp3,.ogg,.wav,.json,.geojson';
     var canSubmit = !!(user && publishPackageReady());
     var fork = (state.forkSource && state.forkSource.id) ? '<div class="status">改编自「' + esc(state.forkSource.title || state.forkSource.id) + '」，发布后记入它的世界线。 <span style="cursor:pointer;color:var(--gold);text-decoration:underline;" onclick="TMContentManager.clearFork()">取消改编</span></div>' : '';
     return '<div class="sec-h"><h3>创作中心 · 发布申请</h3><span class="more">资源包 + 商店信息齐备后进入审核</span></div>' +
@@ -1740,6 +1746,11 @@
               '<div class="up-empty"><div class="up-ic">包</div><b>' + esc(state.publishPackageFile ? '已选择资源包' : '选择资源包') + '</b><small id="tm-package-file-name">' + esc(fileLine(state.publishPackageFile, '支持 .tm-pack / .zip，建议包含 manifest.json')) + '</small></div>' +
             '</div>' +
             '<input id="tm-publish-package-file" type="file" accept=".tm-pack,.zip,application/zip,application/x-zip-compressed" style="display:none;" onchange="TMContentManager.onPublishPackageFile(this)">' +
+            '<div class="pub-loose" style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--line,rgba(201,160,69,.25));">' +
+              '<button class="btn sm" type="button" onclick="var f=document.getElementById(\'tm-publish-loose-files\');if(f)f.click();">没有现成包？选散文件，我来打包</button>' +
+              '<small style="display:block;margin-top:6px;color:var(--ink-faint,#9a8f7d);">按当前商店分类挑选图片 / 音频 / JSON，页面自动生成 manifest 并打成 .tm-pack；组合类内容会按类归档（立绘入 portraits/、音乐入 music/）。</small>' +
+              '<input id="tm-publish-loose-files" type="file" multiple accept="' + esc(looseAccept) + '" style="display:none;" onchange="TMContentManager.onPublishLooseFiles(this)">' +
+            '</div>' +
             '<div class="pub-note">资源包会作为审核资源上传；包内 manifest、路径安全、资源类型由导入/审核链路校验。</div>' +
           '</section>' +
           '<section class="pub-card pub-store">' +

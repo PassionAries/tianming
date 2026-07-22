@@ -84,7 +84,70 @@
     return out;
   }
 
-  var api = { buildZip: buildZip, bytesToBase64: bytesToBase64, parseZip: parseZip, crc32: crc32 };
+  // B1（工坊全链修缮·批B）：把散文件按「商店分类」归一成一个 store-zip 投稿包的计划——
+  // 纯函数（不碰 DOM/state），产出 manifest + 各文件包内落位 + 守门信息，供页内打包器消费。
+  // 与 buildZip 同居本模块（工坊包 (de)序列化原语）：mod=混合资产组合包（图片落 portraits/、
+  // 音频落 music/·与 mod 立绘/音乐识别约定对齐）；单类型包平铺；scenario/map 补 entry 指向首个
+  // JSON。文件名去路径 + 非法字符清洗 + 同名去重。fileMetas=[{ name, size, index }]。
+  var LOOSE_MAX_SINGLE = 20 * 1024 * 1024;   // 单文件醒目提示阈值
+  var LOOSE_MAX_TOTAL = 60 * 1024 * 1024;    // 总量硬闸（网页安装端上限约 64MB）
+  function planLoosePack(type, title, version, description, fileMetas) {
+    type = String(type || 'mod');
+    var IMG = /\.(png|jpe?g|webp|bmp)$/i, AUD = /\.(mp3|ogg|wav)$/i, JSN = /\.(geo)?json$/i;
+    var OK = /\.(png|jpe?g|webp|bmp|mp3|ogg|wav|json|geojson|md|txt|csv|glb|gltf)$/i;
+    function clean(name) {
+      var b = String(name == null ? '' : name).replace(/^.*[\/\\]/, '');           // 去路径
+      b = b.replace(/[\x00-\x1f<>:"|?*\/\\]+/g, '_').replace(/\s+/g, ' ').trim();   // 非法字符清洗
+      return b || 'file';
+    }
+    function slugify(s) {
+      return String(s == null ? '' : s).trim().toLowerCase().replace(/[^a-z0-9_\-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+    }
+    function targetPath(cleanName) {
+      if (type === 'mod') {
+        if (IMG.test(cleanName)) return 'portraits/' + cleanName;
+        if (AUD.test(cleanName)) return 'music/' + cleanName;
+        return cleanName;
+      }
+      return cleanName;                                                            // 单类型包平铺
+    }
+    function assetKind(cleanName) {
+      if (IMG.test(cleanName)) return 'portrait';
+      if (AUD.test(cleanName)) return 'music';
+      if (JSN.test(cleanName)) return (type === 'map' ? 'map' : 'data');
+      return 'file';
+    }
+    var slug = slugify(title) || ('pack-' + Date.now().toString(36).slice(-6));
+    var targets = [], assets = [], skipped = [], oversize = [], seen = {}, total = 0;
+    (fileMetas || []).forEach(function (fm) {
+      var raw = clean(fm && fm.name);
+      if (!OK.test(raw)) { skipped.push(raw); return; }
+      var size = Number(fm && fm.size) || 0;
+      total += size;
+      if (size > LOOSE_MAX_SINGLE) oversize.push(raw);
+      var p = targetPath(raw), uniq = p, n = 2;
+      while (seen[uniq]) { uniq = p.replace(/(\.[^.\/]+)?$/, '-' + n + '$1'); n++; } // 同名去重
+      seen[uniq] = true;
+      targets.push({ path: uniq, index: (fm && fm.index != null) ? fm.index : targets.length, size: size });
+      assets.push({ name: raw.replace(/\.[^.]+$/, ''), file: uniq, type: assetKind(raw) });
+    });
+    var entry = '';
+    for (var i = 0; i < targets.length; i++) { if (JSN.test(targets[i].path)) { entry = targets[i].path; break; } }
+    var manifest = {
+      id: slug,
+      title: String(title == null ? '' : title).trim() || slug,
+      type: type,
+      version: String(version == null ? '' : version).trim() || '1.0.0',
+      description: String(description == null ? '' : description).trim(),
+      files: targets.map(function (t) { return t.path; }),
+      assets: assets
+    };
+    if (type === 'scenario' || type === 'map') manifest.entry = entry || (targets[0] && targets[0].path) || '';
+    return { slug: slug, manifest: manifest, targets: targets, assets: assets, skipped: skipped, oversize: oversize, totalSize: total };
+  }
+
+  var api = { buildZip: buildZip, bytesToBase64: bytesToBase64, parseZip: parseZip, crc32: crc32,
+    planLoosePack: planLoosePack, LOOSE_MAX_SINGLE: LOOSE_MAX_SINGLE, LOOSE_MAX_TOTAL: LOOSE_MAX_TOTAL };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (root) root.TMZipStore = api;
 })(typeof window !== 'undefined' ? window : null);

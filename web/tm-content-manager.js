@@ -1284,6 +1284,7 @@
     saveCatalogUrl(state.catalogUrl);
     state.catalogMessage = '正在载入在线工坊目录...';
     state.catalogLoading = true;
+    state.catalogError = null;
     render();
     try {
       var catalog;
@@ -1298,6 +1299,7 @@
       state.catalog = catalog || null;
       state.catalogMessage = '已载入 ' + ((catalog && catalog.packs && catalog.packs.length) || 0) + ' 个在线工坊包。' + (state.catalogQuery ? '（搜索：' + state.catalogQuery + '）' : '');
     } catch (e) {
+      state.catalogError = (e && e.message) || '未知错误';
       state.catalogMessage = '载入在线目录失败：' + (e && e.message || '未知错误');
     }
     state.catalogLoading = false;

@@ -510,7 +510,7 @@
         // full catalog URL given — fetch directly
         if (!doFetch) return Promise.reject(new Error('当前环境不支持 fetch'));
         return doFetch(url, { method: 'GET', mode: 'cors', cache: 'no-store', headers: { 'Accept': 'application/json' } })
-          .then(function (resp) { return resp.text(); })
+          .then(function (resp) { if (!resp.ok) throw new Error('HTTP ' + resp.status); return resp.text(); })
           .then(function (text) { return text ? JSON.parse(text) : { packs: [] }; })
           .then(normalizeCatalog);
       }

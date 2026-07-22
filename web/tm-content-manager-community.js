@@ -1143,7 +1143,9 @@
     var shown = (!featuredOn && ctype) ? base.filter(function(pp){ return String(pp.type || 'scenario') === ctype; }) : base;
     var grid = shown.length ? shown.map(mallCard).join('')
       : (state.catalogLoading ? mallSkeleton(8)
-        : '<div class="empty"><div class="glyph">坊</div><div class="t">' + (featuredOn ? '还没有被社区推荐的内容' : (packs.length ? '此类型下暂无内容' : '尚未载入在线目录')) + '</div><div>' + (packs.length ? '换个类型或来源看看' : '点右侧「刷新」从官方目录浏览') + '</div></div>');
+        : (state.catalogError
+          ? '<div class="empty err"><div class="glyph">⚠</div><div class="t">在线目录加载出错</div><div>' + esc(state.catalogError) + '</div><button class="btn sm primary" style="margin-top:10px;" onclick="TMContentManager.loadWorkshopCatalog()">重试</button></div>'
+          : '<div class="empty"><div class="glyph">坊</div><div class="t">' + (featuredOn ? '还没有被社区推荐的内容' : (packs.length ? '此类型下暂无内容' : '尚未载入在线目录')) + '</div><div>' + (packs.length ? '换个类型或来源看看' : '点右侧「刷新」从官方目录浏览') + '</div></div>'));
     var typeOpts = PACK_TYPES.map(function(t){
       var n = t.v ? packs.filter(function(pp){ return String(pp.type || 'scenario') === t.v; }).length : packs.length;
       return mallFopt(t.label, n, !featuredOn && ctype === t.v, 'TMContentManager.switchCatalogType(' + jsArg(t.v) + ')');

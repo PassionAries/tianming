@@ -496,6 +496,20 @@ var SchemeSystem = (function() {
     return (P.schemeConfig && P.schemeConfig.schemeTypes) || [];
   }
 
+  // 刀丁2·feudal 数值 scheme 独立账本 GM._feudalSchemes(不与叙事 activeSchemes 混居·根治 R-2 连坐)。
+  //   老档迁移(幂等)：把 activeSchemes 里 feudal 形数值 scheme(typeId+phase+数值 progress)搬入自家账本。
+  function _ensureFeudal() {
+    if (!Array.isArray(GM._feudalSchemes)) GM._feudalSchemes = [];
+    if (Array.isArray(GM.activeSchemes) && GM.activeSchemes.length) {
+      var moved = [];
+      GM.activeSchemes = GM.activeSchemes.filter(function(s) {
+        if (s && s.typeId && s.phase && typeof s.progress === 'number') { moved.push(s); return false; }
+        return true;
+      });
+      for (var _mi = 0; _mi < moved.length; _mi++) { if (!moved[_mi].origin) moved[_mi].origin = 'feudal'; GM._feudalSchemes.push(moved[_mi]); }
+    }
+  }
+
   /**
    * 发起阴谋
    */
@@ -532,6 +546,7 @@ var SchemeSystem = (function() {
 
     var scheme = {
       id: uid(),
+      origin: 'feudal',
       typeId: typeId,
       typeName: sType.name,
       schemer: schemerId,
@@ -553,8 +568,8 @@ var SchemeSystem = (function() {
       }
     };
 
-    if (!GM.activeSchemes) GM.activeSchemes = [];
-    GM.activeSchemes.push(scheme);
+    _ensureFeudal();
+    GM._feudalSchemes.push(scheme);
     DebugLog.log('scheme', schemerId, '发起', sType.name, '→', targetId,
       '成功率', scheme.successRate + '%', '阶段', '1/' + totalPhases);
     return {success:true, scheme:scheme};
@@ -564,13 +579,14 @@ var SchemeSystem = (function() {
    * 每回合推进所有活跃阴谋
    */
   function advanceAll() {
-    if (!GM.activeSchemes || !GM.activeSchemes.length) return;
+    _ensureFeudal();
+    if (!GM._feudalSchemes.length) return;
     if (!P.schemeConfig || !P.schemeConfig.enabled) return;
 
     var tr = (typeof getTimeRatio === 'function') ? getTimeRatio() : (1/12);
     var monthScale = tr * 12;
 
-    GM.activeSchemes.forEach(function(scheme) {
+    GM._feudalSchemes.forEach(function(scheme) {
       if (scheme.status !== 'active') return;
 
       // 2.4: 多阶段进度推进
@@ -667,7 +683,7 @@ var SchemeSystem = (function() {
     });
 
     // 清理已结算的 + 写入NPC记忆
-    var resolved = GM.activeSchemes.filter(function(s){return s.status!=='active';});
+    var resolved = GM._feudalSchemes.filter(function(s){return s.status!=='active';});
     if (!GM._turnSchemeResults) GM._turnSchemeResults = [];
     resolved.forEach(function(s){
       GM._turnSchemeResults.push(s);
@@ -694,14 +710,15 @@ var SchemeSystem = (function() {
         }
       }
     });
-    GM.activeSchemes = GM.activeSchemes.filter(function(s){return s.status==='active';});
+    GM._feudalSchemes = GM._feudalSchemes.filter(function(s){return s.status==='active';});
   }
 
   function getPromptInjection() {
+    _ensureFeudal();
     var lines = [];
-    if (GM.activeSchemes && GM.activeSchemes.length > 0) {
+    if (GM._feudalSchemes.length > 0) {
       lines.push('【进行中的阴谋】');
-      GM.activeSchemes.forEach(function(s) {
+      GM._feudalSchemes.forEach(function(s) {
         // 2.4: 显示阶段信息
         var phaseInfo = '';
         if (s.phase && s.phase.total > 1) {

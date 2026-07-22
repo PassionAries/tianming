@@ -51,3 +51,7 @@ web/tm-three-systems-ext.js whitespace=blank-at-eol,blank-at-eof,space-before-ta
 web/tm-endturn-ai.js whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 # 批己「谈判多轮状态机」(2026-07-22)触及的历史 CRLF(mixed·2610CRLF+59LF) 文件：使节回价钮 + _wdSettleNegotiation/_wdEnvoyCounter + _negotiationId 接线·新增行随邻行 CRLF·同上契约(检查真行尾空格·不把 CR 误报为 trailing)。
 web/tm-wendui.js whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+# 阴谋拓扑统一战役(刀丁1/3·2026-07-22)触及的历史 CRLF 文件：sc15 落库 origin/lastTurn + seedFromNarrative 接线·R-1 清理修·R-3 注入去重·同上契约(检查真行尾空格·不把 CR 误报为 trailing)。
+web/tm-endturn-followup.js whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+# 阴谋拓扑统一战役(刀丁2·2026-07-22)触及的历史 CRLF 文件：feudal 数值 scheme 迁独立 GM._feudalSchemes 自管账本·同上契约(检查真行尾空格·不把 CR 误报为 trailing)。
+web/tm-feudal-warfare.js whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

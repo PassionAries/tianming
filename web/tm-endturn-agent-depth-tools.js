@@ -492,7 +492,7 @@
     }
     if (p && Array.isArray(p.schemes)) {
       if (!Array.isArray(gm.activeSchemes)) gm.activeSchemes = [];
-      p.schemes.slice(0, 6).forEach(function (s) { if (!s || !s.schemer) return; gm.activeSchemes.push({ schemer: s.schemer, target: s.target || '', plan: String(s.plan || '').slice(0, 80), progress: s.progress || '萌芽', startTurn: turn, _agent: true }); scN++; });
+      p.schemes.slice(0, 6).forEach(function (s) { if (!s || !s.schemer) return; gm.activeSchemes.push({ schemer: s.schemer, target: s.target || '', plan: String(s.plan || '').slice(0, 80), progress: s.progress || '萌芽', startTurn: turn, lastTurn: turn, origin: 'agent', _agent: true }); scN++; });
       if (gm.activeSchemes.length > 30) gm.activeSchemes = gm.activeSchemes.slice(-30);
     }
     if ((applied || ucN || scN) && Array.isArray(gm._turnReport)) gm._turnReport.push({ type: 'change', path: '势力·动向', reason: '深析 ' + applied + ' 方势力·暗流' + ucN + '·阴谋' + scN, new: list.slice(0, 5).map(function (n) { return n.name + '(' + (n.intent || '').slice(0, 8) + ')'; }).join(' '), turn: turn, _agent: true, _op: 'deepen_factions' });

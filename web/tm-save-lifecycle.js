@@ -107,6 +107,7 @@ function _ensureGMDefaults() {
   // Phase 7 准备·成本面板 history·最近 20 回合
   if (!Array.isArray(GM._costHistory)) GM._costHistory = [];
   if (!GM.activeSchemes) GM.activeSchemes = [];
+  if (!Array.isArray(GM._feudalSchemes)) GM._feudalSchemes = [];   // 刀丁2·feudal 数值 scheme 独立账本
   // 批己·谈判多轮会话（招抚/议和/势力外交共用状态机·不加 mirror 跨存档丢）
   if (!Array.isArray(GM._negotiations)) GM._negotiations = [];
   if (GM._negotiationSeq === undefined) GM._negotiationSeq = 0;
@@ -397,6 +398,7 @@ function _prepareGMForSave() {
   if (GM.enYuanRecords) GM._savedEnYuanRecords = _safeClone(GM.enYuanRecords);
   if (GM.patronNetwork) GM._savedPatronNetwork = _safeClone(GM.patronNetwork);
   if (GM.activeSchemes) GM._savedActiveSchemes = _safeClone(GM.activeSchemes);
+  if (GM._feudalSchemes) GM._savedFeudalSchemes = _safeClone(GM._feudalSchemes);   // 刀丁2·feudal 账本 mirror
   // 批己·谈判会话 mirror
   if (GM._negotiations) GM._savedNegotiations = _safeClone(GM._negotiations);
   if (GM._negotiationSeq !== undefined) GM._savedNegotiationSeq = GM._negotiationSeq;
@@ -681,6 +683,7 @@ function _restoreSavedFields() {
   if (GM._savedEnYuanRecords) { GM.enYuanRecords = GM._savedEnYuanRecords; delete GM._savedEnYuanRecords; }
   if (GM._savedPatronNetwork) { GM.patronNetwork = GM._savedPatronNetwork; delete GM._savedPatronNetwork; }
   if (GM._savedActiveSchemes) { GM.activeSchemes = GM._savedActiveSchemes; delete GM._savedActiveSchemes; }
+  if (GM._savedFeudalSchemes) { GM._feudalSchemes = GM._savedFeudalSchemes; delete GM._savedFeudalSchemes; }   // 刀丁2·feudal 账本恢复
   // 批己·谈判会话恢复
   if (GM._savedNegotiations) { GM._negotiations = GM._savedNegotiations; delete GM._savedNegotiations; }
   if (GM._savedNegotiationSeq !== undefined) { GM._negotiationSeq = GM._savedNegotiationSeq; delete GM._savedNegotiationSeq; }

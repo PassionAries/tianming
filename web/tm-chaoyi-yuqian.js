@@ -524,6 +524,7 @@ function _yq2_decide(mode) {
         allies: CY._yq2.advisors.join('、'),
         startTurn: GM.turn,
         lastTurn: GM.turn,
+        origin: 'yuqian',
         source: 'yuqian2',
         secret: CY._yq2.record === 'secret'
       });

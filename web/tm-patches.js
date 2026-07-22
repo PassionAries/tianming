@@ -1144,6 +1144,7 @@ openSettings=function(){
       var _mechs = [
         ['worldReactorBattleEnabled','⚔️ 兵败牵动天下（默认启用）','开启后（默认），一方在会战中大败，其军事实力确定性受损，并联动编年记述天下反应；关闭则战败只走 AI 自由裁量，不自动折损实力。'],
         ['negotiationSessionsEnabled','🤝 谈判续谈·多轮回价（默认启用）','开启后（默认），民变招抚讨价、外患遣使议和、外藩势力提议都成为可多轮往复的谈判会话：使节求见时，除准奏/驳回/羁縻外多一枚「回价」——你递还价条款（可加银），对方据台面续演；招抚准奏按当前索银出帑真受抚，议和准奏真止战退兵（并按贡银条款出帑）。关闭则三者回到旧行为：招抚讨价只叙事、议和只落事件簿、势力提议只能一次性准驳，无回价。'],
+        ['conspiracyResolutionEnabled','⚖️ 逆案裁断·阴谋真发动（默认启用）','开启后（默认），朝中阴谋不再只是叙事摆设：叙事里「即将发动」且涉弑君/篡位/兵变/清君侧的密谋会被播种为确定性机械阴谋、逐回合酝酿；交 AI 演绎两回合仍无人收束者，引擎按主谋身份走五等发动出口——先过君威硬门（皇权或皇威够高则一律未遂就擒），过门后拥兵者兵变流亡、内竖谋宫变废立、图谋社稷者交裁决器定生死（有储君则继统续玩）、构陷政敌者诬敌下狱、聚众举义者化入民变渠帅；凡事发，同谋随主谋连坐下狱。关闭则阴谋交 AI 自由裁量、迁延自破、同谋不连坐（旧行为等价）。'],
         ['populationBottomUpEnabled','👥 人口自下而上（默认关）','开启后，人口增长发生在各叶级政区、按当地民心与承载力分别核算并写入地方户口；关闭则走全局粗粒度增长。'],
         ['cognitionFeedbackEnabled','🎭 认知反馈·忠诚（默认关·未充分实测）','开启后，臣子被贬则渐离心、受知遇则渐效忠——把「知遇/贬谪」从叙事落到忠诚数值动平衡；关闭则忠诚不因升降迁谪自动漂移。此项动平衡幅度未充分验证，酌情开启。'],
         ['agencyWatchEnabled','🕵 密探常侦（默认关）','开启后，常设的直属天子密探机构（治理面板可诏设，依机构独立性识别，台谏不算）逐回合暗中侦缉，确定性推高在酿阴谋的败露进度；衙门够力时，朝中百官暗动亦入耳目，以「密探风闻」呈御案（只报风闻类别，真相须下诏穷治）。机构腐败、缺员则侦缉效力打折，特务坐大另有反噬制衡。关闭则查案只靠陛下亲自下诏。'],
@@ -1164,7 +1165,7 @@ openSettings=function(){
       for (var _mi = 0; _mi < _mechs.length; _mi++) {
         var _m = _mechs[_mi];
         // worldReactorBattleEnabled/negotiationSessionsEnabled 默认 ON(显式 false 才关·勾选态须反映新默认);其余机制仍默认 OFF
-        var _mon = (_m[0] === 'worldReactorBattleEnabled' || _m[0] === 'negotiationSessionsEnabled') ? !(P && P.conf && P.conf[_m[0]] === false) : !!(P && P.conf && P.conf[_m[0]]);
+        var _mon = (_m[0] === 'worldReactorBattleEnabled' || _m[0] === 'negotiationSessionsEnabled' || _m[0] === 'conspiracyResolutionEnabled') ? !(P && P.conf && P.conf[_m[0]] === false) : !!(P && P.conf && P.conf[_m[0]]);
         _mh += '<label style="display:flex;align-items:flex-start;gap:0.5rem;padding:0.4rem 0;cursor:pointer;border-top:1px dotted var(--bdr);">' +
           '<input type="checkbox" ' + (_mon?'checked ':'') + 'onchange="_togglePConf(\'' + _m[0] + '\',this.checked)" style="margin-top:0.15rem;flex-shrink:0;">' +
           '<div style="flex:1;"><div style="font-size:0.82rem;color:var(--gold);font-weight:600;">' + _m[1] + '</div>' +

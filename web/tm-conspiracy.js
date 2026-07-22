@@ -119,6 +119,32 @@
   function _hasMilitary(ch) {
     return !!(ch && ((typeof ch.troops === 'number' && ch.troops > 0) || ch._commandsArmy || /将|帅|都督|总兵|提督|总兵官|参将|游击|宗室|藩王|郡王|亲王/.test(String(ch.role || ch.officialTitle || ch.title || ''))));
   }
+  // 内廷近侍(宦官/内官)判定——供刀丁3/4 palace_coup 分流(内竖劫主)。
+  function _isInnerCourt(ch) {
+    return !!(ch && /宦|内官|内侍|中官|太监|内廷|司礼|掌印|秉笔/.test(String(ch.role || ch.officialTitle || ch.title || ch.faction || '')));
+  }
+
+  // ─── 刀丁3/4/5 总闸：逆案裁断·阴谋真发动(flag conspiracyResolutionEnabled·默认 ON) ───
+  //   ON  → 叙事阴谋播种机械 plot(seedFromNarrative)·ripe 到期走五级发动出口(_resolveRipe)·suppressed 结局同谋连坐。
+  //   OFF → seedFromNarrative no-op·ripe 到期回旧「自破兜底」·_settle 只拿主谋 = 旧行为等价(零回归)。
+  function _resolutionOn() {
+    try { var P = global.P || {}; var conf = P.conf || {}; return !(conf.conspiracyResolutionEnabled === false); } catch (e) { return true; }
+  }
+  // 社稷类词(播种为机械阴谋的门槛)/ 民变类词(五级发动出口的民变 modifier)。
+  var SEED_PLAN_RE = /弑|篡|逆|政变|兵变|废立|清君侧|挟(?:天子|君|主|上|持)/;
+  var SEED_UPRISING_RE = /民变|义军|流民|流寇|揭竿|起义|乱民|聚众/;
+  // 解析叙事 allies 字符串(顿号/逗号分隔)→ 在册活人非玩家名单(≤5)。
+  function _parseAllies(G, alliesStr, ringleader) {
+    var out = [];
+    if (!alliesStr) return out;
+    String(alliesStr).split(/[、,，;；\s]+/).forEach(function (nm) {
+      nm = (nm || '').trim();
+      if (!nm || nm === ringleader || out.length >= 5 || out.indexOf(nm) >= 0) return;
+      var ch = _findChar(G, nm);
+      if (ch && !ch.isPlayer && _alive(ch)) out.push(nm);
+    });
+    return out;
+  }
 
   // 是否符合起意条件(野心/忠诚)
   function _eligibleRingleader(ch) {
@@ -144,8 +170,8 @@
     return plot && (plot.kind === 'coup' || plot.kind === 'regicide' || plot.kind === 'palace_coup');
   }
 
-  // ─── 落库 + 下狱(复用既有结构/护栏) ───
-  function _settle(G, plot, action, outcome, reason, qamGated) {
+  // ─── 落库(纯史录·不下狱·供得逞/流亡类结局用) ───
+  function _recordConspiracy(G, plot, action, outcome, reason, qamGated) {
     G._conspiracies.push({
       turn: G.turn || 0,
       action: action,
@@ -157,16 +183,34 @@
       _fromEngine: true,
       _qamGated: qamGated || undefined
     });
+    if (!G.turnChanges) G.turnChanges = {};
+    if (!Array.isArray(G.turnChanges.variables)) G.turnChanges.variables = [];
+    G.turnChanges.variables.push({ path: '_conspiracies', label: '谋逆·' + plot.ringleader + '·' + action + '/' + outcome, delta: 1, reason: reason || '阴谋推演' });
+  }
+  // ─── 落库 + 下狱(复用既有结构/护栏) ───
+  function _settle(G, plot, action, outcome, reason, qamGated) {
+    _recordConspiracy(G, plot, action, outcome, reason, qamGated);
     var inst = _findChar(G, plot.ringleader);
     if (inst && (outcome === 'suppressed' || outcome === 'failed')) {
       inst._imprisoned = true;
       inst._conspiracyConvicted = true;
       inst._imprisonedTurn = G.turn || 0;
       inst._imprisonReason = '谋逆事发·下诏狱待勘';
+      // 刀丁5·同谋牵连羁押(flag ON)：suppressed 族结局·同谋随主谋下狱(在册活人·非玩家·≤5·主谋 convicted 照旧)。
+      if (_resolutionOn()) {
+        var _coCnt = 0;
+        (plot.conspirators || []).forEach(function (nm) {
+          if (_coCnt >= 5) return;
+          var co = _findChar(G, nm);
+          if (!co || co === inst || co.isPlayer || !_alive(co)) return;
+          co._imprisoned = true;
+          co._imprisonedTurn = G.turn || 0;
+          co._imprisonReason = '逆案连坐';
+          _coCnt++;
+          try { if (typeof global.NpcMemorySystem !== 'undefined' && global.NpcMemorySystem.remember) global.NpcMemorySystem.remember(nm, '因' + plot.ringleader + '逆案牵连下狱', '惧', 6, plot.ringleader); } catch (_) {}
+        });
+      }
     }
-    if (!G.turnChanges) G.turnChanges = {};
-    if (!Array.isArray(G.turnChanges.variables)) G.turnChanges.variables = [];
-    G.turnChanges.variables.push({ path: '_conspiracies', label: '谋逆·' + plot.ringleader + '·' + action + '/' + outcome, delta: 1, reason: reason || '阴谋推演' });
   }
 
   // ─── 萌发新阴谋 ───
@@ -323,6 +367,7 @@
         return false;
       }
       if ((G.turn || 0) - plot._ripeSince >= CFG.ripeTimeout) {
+        if (_resolutionOn()) { _resolveRipe(G, plot); return true; }   // 刀丁4·五级发动出口(引擎定判)；flag OFF 落下方旧自破兜底(零回归)
         _settle(G, plot, crimeFail, 'failed', '事机不密·迁延败露', false);
         _eb('谋反', plot.ringleader + ' 谋事迁延，机泄事败，终就缚。');
         return true;
@@ -332,6 +377,176 @@
 
     plot.stage = 'brewing';
     return false;
+  }
+
+  // ─── 刀丁3·叙事→机械桥(单向+去重) ───
+  //   sc15/sc1c 落 activeSchemes 时·对「即将发动」且 plan 含社稷类词的条目·播种为机械 plot(_activePlots)：
+  //     同主谋已有活跃 plot → 只强化 momentum(+10 封顶)不重开；无则开新 plot(momentum 起 60·conspirators=allies 在册活人≤5)。
+  //   回标 scheme._seededPlotId(供 prompt 注入去重 R-3：机械账 aiContextBlock 已注入·不双喂)。flag OFF → 整体 no-op(零回归)。
+  function seedFromNarrative(scheme, G) {
+    G = G || _G();
+    if (!G || !scheme || !_resolutionOn()) return null;
+    ensure(G);
+    var plan = String(scheme.plan || '');
+    if (String(scheme.progress || '') !== '即将发动') return null;
+    if (!SEED_PLAN_RE.test(plan) && !SEED_UPRISING_RE.test(plan)) return null;
+    var schemer = scheme.schemer;
+    if (!schemer) return null;
+    var lead = _findChar(G, schemer);
+    if (!lead || lead.isPlayer || !_alive(lead)) return null;
+    // 去重：同主谋已有活跃 plot → 只强化不重开
+    var existing = null;
+    for (var i = 0; i < G._activePlots.length; i++) {
+      if (G._activePlots[i] && G._activePlots[i].ringleader === schemer) { existing = G._activePlots[i]; break; }
+    }
+    if (existing) {
+      if (existing._seedReinforcedTurn !== (G.turn || 0)) {
+        existing.momentum = clamp(existing.momentum + 10, 0, 140);
+        existing._seedReinforcedTurn = G.turn || 0;
+      }
+      if (existing._narrativePlan == null) existing._narrativePlan = plan;
+      scheme._seededPlotId = existing.id;
+      return existing;
+    }
+    if (G._activePlots.length >= CFG.maxActivePlots) return null;
+    // kind 判定(R-7)：拥兵→mutiny·内廷近侍→palace_coup·其余→coup(民变 modifier 在 _resolveRipe 按 plan 分流)。
+    var playerNm = _playerName(G);
+    var kind = _hasMilitary(lead) ? 'mutiny' : (_isInnerCourt(lead) ? 'palace_coup' : 'coup');
+    var plot = {
+      id: 'plot_seed_' + (G.turn || 0) + '_' + _hash(schemer + '|' + (G.turn || 0)).toString(36),
+      ringleader: schemer,
+      target: playerNm || scheme.target || '社稷',
+      kind: kind,
+      conspirators: _parseAllies(G, scheme.allies, schemer),
+      momentum: 60,
+      secrecy: CFG.secrecyStart,
+      exposure: 0,
+      stage: 'brewing',
+      startTurn: G.turn || 0,
+      _ripeSince: null,
+      _knownToPlayer: false,
+      reason: plan.slice(0, 40) || '叙事阴谋播种',
+      _fromNarrative: true,
+      _narrativePlan: plan,
+      _seedReinforcedTurn: G.turn || 0
+    };
+    G._activePlots.push(plot);
+    scheme._seededPlotId = plot.id;
+    _eb('暗流', schemer + ' 的密谋已成气候，机杼暗转。');
+    return plot;
+  }
+
+  // ─── 刀丁4·统一发动出口(引擎定判·AI 描红)·flag conspiracyResolutionEnabled(默认 ON) ───
+  //   ripe 到期(交 AI 两回合无人收束)改走确定性五级选择器：先过 P-QAM 硬门(君威盛→未遂下狱·镜像
+  //   tm-endturn-apply-stages.js:604·勿开第二得逞路)·过门后按 kind 分流。全部结局落 GM._conspiracies 带 _fromEngine(R-5)。
+  function _isUprisingPlan(plot) {
+    return SEED_UPRISING_RE.test(String(plot._narrativePlan || plot.reason || ''));
+  }
+  function _resolveRipe(G, plot) {
+    // 民变 modifier 优先(plan 含 民/义军/流)→ 交 revolt 实体系统
+    if (_isUprisingPlan(plot)) return _resolveUprising(G, plot);
+    var kind = plot.kind;
+    // 构陷政敌(非社稷之谋)→ 目标构陷入狱·无 P-QAM 门
+    if (kind === 'plot') return _resolvePlotFrame(G, plot);
+    // 社稷之谋：先过 P-QAM 硬门(君威盛→未遂下狱)
+    if (_throneStrong(G)) {
+      var hq = (G.huangquan && typeof G.huangquan.index === 'number') ? Math.round(G.huangquan.index) : 50;
+      var hw = (G.huangwei && typeof G.huangwei.index === 'number') ? Math.round(G.huangwei.index) : 50;
+      _settle(G, plot, 'coup_failed', 'suppressed', '皇权 ' + hq + '·皇威 ' + hw + ' 正盛·事败就擒（护栏·未遂·引擎发动）', true);
+      _eb('谋反', plot.ringleader + ' 谋逆至期，然君威正盛，事败就擒（确定性护栏·未遂）。');
+      return;
+    }
+    if (kind === 'mutiny') return _resolveMutiny(G, plot);
+    if (kind === 'palace_coup') return _resolvePalaceCoup(G, plot);
+    return _resolveCoupOnPlayer(G, plot);   // kind === 'coup'·目标=玩家
+  }
+  // 构陷政敌得逞：目标构陷下狱(主谋不下狱)。
+  function _resolvePlotFrame(G, plot) {
+    var target = _findChar(G, plot.target);
+    if (target && !target.isPlayer && _alive(target)) {
+      target._imprisoned = true;
+      target._imprisonedTurn = G.turn || 0;
+      target._imprisonReason = '为' + plot.ringleader + '构陷·下狱待勘';
+      _eb('构陷', plot.ringleader + ' 构陷 ' + plot.target + ' 得逞，' + plot.target + ' 被诬下狱。');
+      try {
+        if (typeof global.NpcMemorySystem !== 'undefined' && global.NpcMemorySystem.remember) {
+          global.NpcMemorySystem.remember(plot.target, '为' + plot.ringleader + '构陷下狱', '恨', 8, plot.ringleader);
+          global.NpcMemorySystem.remember(plot.ringleader, '构陷' + plot.target + '得逞', '喜', 5, plot.target);
+        }
+      } catch (_) {}
+    }
+    _recordConspiracy(G, plot, 'plot_succeeded', 'succeeded', '构陷' + plot.target + '得逞', false);
+  }
+  // 拥兵者兵变：emit army:mutinyRisk(前瞻·当前无监听)+主谋军队 morale 冲击+主谋流亡(_fled)。
+  function _resolveMutiny(G, plot) {
+    var lead = _findChar(G, plot.ringleader);
+    try {
+      var army = (G.armies || []).find(function (a) { return a && (a._commander === plot.ringleader || a.leader === plot.ringleader || a.commander === plot.ringleader); });
+      if (army) {
+        if (typeof army.morale === 'number') army.morale = Math.max(0, army.morale - 25);
+        if (typeof global.GameEventBus !== 'undefined' && global.GameEventBus.emit) global.GameEventBus.emit('army:mutinyRisk', { army: army.name, risk: 90, owner: army.faction || (lead && lead.faction) || '' });
+      }
+    } catch (_) {}
+    if (lead) { lead._fled = true; lead._missing = true; lead._fledTurn = G.turn || 0; lead._fledReason = '兵变事泄·畏罪出奔'; }
+    _eb('兵变', plot.ringleader + ' 举兵而事不果，军心离散，遂拥众出奔，亡命江湖。');
+    try { if (typeof global.NpcMemorySystem !== 'undefined' && global.NpcMemorySystem.remember) global.NpcMemorySystem.remember(plot.ringleader, '举兵败露·流亡', '惧', 8, ''); } catch (_) {}
+    _recordConspiracy(G, plot, 'mutiny', 'failed', '兵变事泄·主谋流亡', false);
+  }
+  // 内廷近侍宫变：仅君威严重衰微(镜像 authority-complete:247 controlLevel>0.9 语境)方成废帝·不足降级未遂下狱。
+  function _resolvePalaceCoup(G, plot) {
+    var lead = _findChar(G, plot.ringleader);
+    var hw = (G.huangwei && typeof G.huangwei.index === 'number') ? G.huangwei.index : 50;
+    var hq = (G.huangquan && typeof G.huangquan.index === 'number') ? G.huangquan.index : 50;
+    var authC = global.AuthorityComplete;
+    if (hw < 30 && hq < 40 && authC && typeof authC.powerMinisterEndgame === 'function') {
+      // 复用 R1d 废帝(_powerMinisterEndgame·非终局·玩家角色不死则续玩)·勿在此另起弑君终局。
+      authC.powerMinisterEndgame({ name: plot.ringleader, innerCourt: _isInnerCourt(lead) }, 'usurpation', { turn: G.turn || 0 });
+      _recordConspiracy(G, plot, 'palace_coup', 'succeeded', '宫变废立·' + (_isInnerCourt(lead) ? '挟主' : '禅代') + '得逞', false);
+      _eb('国变', plot.ringleader + ' 宫变得逞，废立之局成。');
+    } else {
+      _settle(G, plot, 'coup_failed', 'suppressed', '宫变将发·君威未至倾覆·事败就擒（未遂·引擎发动）', false);
+      _eb('宫变', plot.ringleader + ' 谋宫变，然事机不熟，反为所擒，下诏狱。');
+    }
+  }
+  // 图谋社稷·目标=玩家：构造 record_conspiracy_events 同形事件·走 apply-stages 同一 sink(P-QAM 门+regicide→adjudicatePlayerDeath)·带 _fromEngine。
+  function _resolveCoupOnPlayer(G, plot) {
+    var playerNm = _playerName(G);
+    var ev = {
+      action: 'regicide', outcome: 'succeeded',
+      instigator: plot.ringleader, target: playerNm || plot.target || '',
+      conspirators: (plot.conspirators || []).slice(),
+      reason: String(plot._narrativePlan || plot.reason || '逆谋弑君').slice(0, 60)
+    };
+    var sink = global.TM && global.TM.Endturn && global.TM.Endturn.AI && global.TM.Endturn.AI.apply;
+    if (sink && typeof sink._applyOneConspiracyEvent === 'function') {
+      sink._applyOneConspiracyEvent(ev, { fromEngine: true });   // 抽公共函数两处调·君威盛→未遂下狱·君威衰→裁决器定生死
+    } else {
+      _settle(G, plot, 'coup_failed', 'suppressed', 'sink 缺失兜底·未遂下狱', true);
+    }
+    _eb('谋反', plot.ringleader + ' 谋逆至期，图穷匕见（引擎发动·交裁决器定生死）。');
+  }
+  // 涉民变：ClassMinxinBridge 播种候选 + 主谋交 revolt 实体系统当渠帅候选(revoltEntityEnabled 默认 ON·身份行为交 AI 演绎)。
+  function _resolveUprising(G, plot) {
+    var lead = _findChar(G, plot.ringleader);
+    try {
+      var bridge = global.TM && global.TM.ClassMinxinBridge;
+      if (bridge && typeof bridge.spawnUprisingCandidates === 'function') bridge.spawnUprisingCandidates(G, { turn: G.turn || 0, source: 'conspiracy_' + plot.ringleader });
+    } catch (_) {}
+    try {
+      var _r2On = !(global.P && global.P.conf && global.P.conf.revoltEntityEnabled === false);
+      if (_r2On && G.minxin) {
+        if (!Array.isArray(G.minxin.revolts)) G.minxin.revolts = [];
+        var region = (lead && lead.location) || '畿辅';
+        G.minxin.revolts.push({ id: 'revolt_consp_' + (G.turn || 0) + '_' + _hash(plot.ringleader + '|' + (G.turn || 0)).toString(36), turn: G.turn || 0, region: region, scale: 'medium', level: 3, status: 'ongoing', leader: plot.ringleader, _fromConspiracy: true });
+        if (G.minxin.revolts.length > 30) G.minxin.revolts = G.minxin.revolts.slice(-30);
+        if (lead) { lead._joinedRevolt = true; lead._revoltLeaderCandidate = true; }
+        _eb('民变', plot.ringleader + ' 揭竿聚众，啸聚为乱，自号渠帅。');
+      } else {
+        _eb('民变', plot.ringleader + ' 煽动流民，乱象已萌。');
+      }
+    } catch (_) {}
+    try { if (typeof global.NpcMemorySystem !== 'undefined' && global.NpcMemorySystem.remember) global.NpcMemorySystem.remember(plot.ringleader, '举义聚众为乱', '平', 7, ''); } catch (_) {}
+    _recordConspiracy(G, plot, 'uprising', 'succeeded', '聚众举义·入民变渠帅候选', false);
   }
 
   // ─── 主入口:每回合 tick ───
@@ -388,7 +603,7 @@
     return activePlots(G).filter(function (p) { return p._knownToPlayer; });
   }
 
-  function _kindCN(k) { return ({ coup: '图谋社稷', regicide: '弑君', palace_coup: '宫变', plot: '构陷政敌' })[k] || '阴谋'; }
+  function _kindCN(k) { return ({ coup: '图谋社稷', regicide: '弑君', palace_coup: '宫变', mutiny: '兵变', plot: '构陷政敌' })[k] || '阴谋'; }
   function _heatCN(p) {
     if (p.stage === 'ripe') return '将发';
     if (p.momentum >= 70) return '酝酿已深';
@@ -612,10 +827,16 @@
     scanCounterIntel: scanCounterIntel,
     investigate: investigate,
     applyPlayerCounterIntel: applyPlayerCounterIntel,
+    seedFromNarrative: seedFromNarrative,
     // 测试 / 内部
     _spawn: _spawn,
     _advance: _advance,
     _resolve: _resolve,
+    _resolveRipe: _resolveRipe,
+    _settle: _settle,
+    _recordConspiracy: _recordConspiracy,
+    _resolutionOn: _resolutionOn,
+    _isInnerCourt: _isInnerCourt,
     _makeRng: _makeRng,
     _eligibleRingleader: _eligibleRingleader,
     _throneStrong: _throneStrong,

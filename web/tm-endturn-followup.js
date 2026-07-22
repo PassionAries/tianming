@@ -333,15 +333,21 @@
             if (!sc2.schemer || !sc2.plan) return;
             // 查找是否有已存在的同一阴谋
             var existing = GM.activeSchemes.find(function(s) { return s.schemer === sc2.schemer && s.target === sc2.target; });
+            var _sc15scheme;
             if (existing) {
               // 更新进度
               existing.plan = sc2.plan;
               existing.progress = sc2.progress || existing.progress;
               existing.allies = sc2.allies || existing.allies;
               existing.lastTurn = GM.turn;
+              if (!existing.origin) existing.origin = 'sc15';
+              _sc15scheme = existing;
             } else {
-              GM.activeSchemes.push({ schemer: sc2.schemer, target: sc2.target || '', plan: sc2.plan, progress: sc2.progress || '酝酿中', allies: sc2.allies || '', startTurn: GM.turn, lastTurn: GM.turn });
+              _sc15scheme = { origin: 'sc15', schemer: sc2.schemer, target: sc2.target || '', plan: sc2.plan, progress: sc2.progress || '酝酿中', allies: sc2.allies || '', startTurn: GM.turn, lastTurn: GM.turn };
+              GM.activeSchemes.push(_sc15scheme);
             }
+            // 刀丁3·叙事→机械桥：「即将发动」且社稷类 plan 播种为机械 plot(flag conspiracyResolutionEnabled OFF 时 no-op)
+            try { if (typeof ConspiracyEngine !== 'undefined' && ConspiracyEngine.seedFromNarrative) ConspiracyEngine.seedFromNarrative(_sc15scheme, GM); } catch (_seedE) {}
             // 记入阴谋者记忆
             if (typeof NpcMemorySystem !== 'undefined') {
               NpcMemorySystem.remember(sc2.schemer, '暗中谋划：' + sc2.plan, '平', 4, sc2.target || '');
@@ -351,6 +357,10 @@
           // 清理过期阴谋（超过5回合未更新的视为放弃）
           GM.activeSchemes = GM.activeSchemes.filter(function(s) {
             var keepTurns = (typeof turnsForMonths === 'function') ? turnsForMonths(5) : 5;
+            // R-1·无 lastTurn 的旧档/异形条目：补戳不删（免 NaN<keepTurns 恒 false 误删 sc1c/yuqian/feudal/agent/legacy）
+            if (typeof s.lastTurn !== 'number' || !isFinite(s.lastTurn)) { s.lastTurn = GM.turn; return true; }
+            // R-1·此清理属 sc15 领地：只清 sc15 自产（或无 origin 的历史 sc15 形）且过期条目·他源各管自家生命周期不连坐
+            if (s.origin && s.origin !== 'sc15') return true;
             return GM.turn - s.lastTurn < keepTurns;
           });
         }
@@ -2733,7 +2743,7 @@
         }
         // 进行中阴谋
         if (Array.isArray(GM.activeSchemes) && GM.activeSchemes.length > 0) {
-          _cogCtx += '\n\u3010\u9634\u8C0B\u3011\n' + GM.activeSchemes.slice(-8).map(function(s){return '\u00B7 '+(s.schemer||'')+'\u8C0B'+(s.target||'')+' ['+(s.progress||'')+']';}).join('\n') + '\n';
+          _cogCtx += '\n\u3010\u9634\u8C0B\u3011\n' + GM.activeSchemes.filter(function(_s){return !_s._seededPlotId;}).slice(-8).map(function(s){return '\u00B7 '+(s.schemer||'')+'\u8C0B'+(s.target||'')+' ['+(s.progress||'')+']';}).join('\n') + '\n';
         }
 
         var _cogNpcList = _cogTargets.map(function(c){
@@ -3137,7 +3147,7 @@
         var _schemesStr = '';
         if (Array.isArray(GM.activeSchemes) && GM.activeSchemes.length > 0) {
           _schemesStr = '【活跃阴谋（含玩家不可见）】\n';
-          GM.activeSchemes.slice(-15).forEach(function(s) {
+          GM.activeSchemes.filter(function(_s){return !_s._seededPlotId;}).slice(-15).forEach(function(s) {
             _schemesStr += '  T' + (s.startTurn||'?') + ' ' + (s.schemer||'?') + '→' + (s.target||'?') + '：' + String(s.plan||'').slice(0, 60) + '（' + (s.progress||'酝酿') + '·' + (s.allies||'独行') + '）\n';
           });
         }

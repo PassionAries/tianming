@@ -14,15 +14,15 @@ function assert(c, m) { N++; if (!c) { console.error('ASSERT FAIL [' + N + ']:',
 
 // ── 切片：_patch.conspiracy_events.forEach(function(e) { ... }) 的回调体 ──
 const src = fs.readFileSync(path.join(ROOT, 'tm-endturn-apply-stages.js'), 'utf8');
-const marker = '_patch.conspiracy_events.forEach(function(e) {';
+// 刀丁4：conspiracy_events 应用逻辑已抽成 ns._applyOneConspiracyEvent(e, opts)（apply-stages reconcile 与 ConspiracyEngine 五级出口共用）·切此统一 sink 函数体
+const marker = 'ns._applyOneConspiracyEvent = function(e, opts) {';
 const mi = src.indexOf(marker);
-assert(mi > 0, '① 切片锚在位(conspiracy_events 应用块)');
-let j = src.indexOf('{', mi + marker.length - 1 - 1); // 回调体开括号=marker 末尾的 {
-j = mi + marker.length - 1; // 指向 {
+assert(mi > 0, '① 切片锚在位(_applyOneConspiracyEvent 统一 sink)');
+let j = mi + marker.length - 1; // 指向函数体开括号 {
 let d = 0;
 for (let k = j; k < src.length; k++) { const c = src[k]; if (c === '{') d++; else if (c === '}') { d--; if (d === 0) { j = k + 1; break; } } }
-const cbBody = src.slice(mi + marker.length, j - 1); // 去头去尾=纯回调体
-const fnSrc = 'function applyConspiracyEvent(e) {' + cbBody + '}';
+const cbBody = src.slice(mi + marker.length, j - 1); // 去头去尾=纯函数体
+const fnSrc = 'function applyConspiracyEvent(e, opts) {' + cbBody + '}';
 
 function mkCtx(over) {
   const ctx = { console: { log() {}, warn() {}, error() {} }, Math, JSON, String, Number, Array, Object, parseInt, parseFloat, isFinite, isNaN };

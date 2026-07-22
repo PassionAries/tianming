@@ -1314,7 +1314,7 @@ async function _ty2_afterOverride(groups, direction) {
           ch.stress = Math.min(100, (ch.stress||0) + 20);
         } else if (r.type === 'plot') {
           if (!GM.activeSchemes) GM.activeSchemes = [];
-          GM.activeSchemes.push({ schemer: r.name, target: '皇帝', plan: '因廷议被压制而暗结同党', progress: '酝酿中', allies: '', startTurn: GM.turn, lastTurn: GM.turn });
+          GM.activeSchemes.push({ schemer: r.name, target: '皇帝', plan: '因廷议被压制而暗结同党', progress: '酝酿中', allies: '', startTurn: GM.turn, lastTurn: GM.turn, origin: 'yuqian' });
           if (typeof adjustCharacterLoyalty === 'function') adjustCharacterLoyalty(ch, -10, '\u5EF7\u8BAE\u88AB\u538B\u5236\u800C\u5BC6\u7ED3\u540C\u515A\uFF1A' + CY._ty2.topic, { source:'tinyi-minority-plot' });
           else ch.loyalty = Math.max(0, ((typeof ch.loyalty === 'number' && isFinite(ch.loyalty)) ? ch.loyalty : 50) - 10);
           ch.ambition = Math.min(100, (ch.ambition||40) + 5);

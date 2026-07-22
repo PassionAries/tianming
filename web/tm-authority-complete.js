@@ -1568,6 +1568,8 @@
     tickOfficeTenure: _tickOfficeTenure,
     detectPowerMinister: _detectPowerMinister,
     isPowerMinisterEnabled: _powerMinisterEnabled,
+    powerMinisterEndgame: _powerMinisterEndgame,   // 刀丁4·供 ConspiracyEngine palace_coup 复用 R1d 废帝(usurpation)·勿另起终局路
+
     REVOLT_LEVELS: REVOLT_LEVELS,
     HEAVEN_SIGNS: HEAVEN_SIGNS,
     AUSPICIOUS_SIGNS: AUSPICIOUS_SIGNS,

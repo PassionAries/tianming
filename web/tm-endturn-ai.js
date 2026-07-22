@@ -2869,7 +2869,7 @@
           tp1 += '  ※ 密谋推进应合乎逻辑——需行动者、需时机、需风险；可能暴露或成败\n';
         }
         // P6.3 修：注入 NPC 阴谋（非御前密议·sc1c 之外的全部）·主 sc1 应知朝中暗流
-        var _npcSchemes = GM.activeSchemes.filter(function(s){ return s.source !== 'yuqian2' && (!s.progress || s.progress !== '完成'); });
+        var _npcSchemes = GM.activeSchemes.filter(function(s){ return !s._seededPlotId && s.source !== 'yuqian2' && (!s.progress || s.progress !== '完成'); });
         if (_npcSchemes.length > 0) {
           tp1 += '\n\n【朝中阴谋·非公开（仅 AI 知晓·影响 hidden_moves 演绎）】\n';
           _npcSchemes.slice(-10).forEach(function(s) {
@@ -4673,7 +4673,7 @@
               if (!GM.activeSchemes) GM.activeSchemes = [];
               p1c.npc_schemes.forEach(function(s){
                 if (!s || !s.schemer || !s.target || !s.plan) return;
-                GM.activeSchemes.push({
+                var _sc1cScheme = {
                   id: 'scheme_T' + GM.turn + '_' + Math.random().toString(36).slice(2,6),
                   schemer: s.schemer, target: s.target,
                   plan: s.plan, progress: s.progress || '\u915D\u917F\u4E2D',
@@ -4688,8 +4688,10 @@
                   secrecy: String(s.secrecy || '').slice(0, 12),
                   winCondition: String(s.winCondition || '').slice(0, 60),
                   allies: s.allies || '',
-                  startTurn: GM.turn
-                });
+                  startTurn: GM.turn, lastTurn: GM.turn, origin: 'sc1c'
+                };
+                GM.activeSchemes.push(_sc1cScheme);
+                try { if (typeof ConspiracyEngine !== 'undefined' && ConspiracyEngine.seedFromNarrative) ConspiracyEngine.seedFromNarrative(_sc1cScheme, GM); } catch (_seedE) {}
                 addEB('\u9634\u8C0B', s.schemer + ' \u9488\u5BF9 ' + s.target + '\uFF1A' + String(s.plan).slice(0,40) + ' [' + (s.progress||'\u915D\u917F\u4E2D') + ']');
               });
             }

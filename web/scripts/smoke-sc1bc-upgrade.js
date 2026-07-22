@@ -63,7 +63,7 @@ ok(/motive: String\(s\.motive/.test(ai) && /method: String\(s\.method/.test(ai) 
 ok(/motive:"/.test(ai) && /method:"/.test(ai) && /winCondition:"/.test(ai), 'C4 schema 让模型输出这四维');
 
 // ── Codex 审查修 F1-F4 ──
-ok(/Codex 审查修·F1|feudal 数值 progress scheme/.test(ap) && /if \(typeof scheme\.progress === 'string'\)/.test(ap), 'F1 consumer 按 progress 类型分流(feudal 数值不覆写成字符串)');
+ok(/撤 typeof 数值分流|feudal 数值 scheme 已迁 GM\._feudalSchemes/.test(ap) && !/if \(typeof scheme\.progress === 'string'\)/.test(ap) && /scheme\.progressPct = _pctA/.test(ap), 'F1(刀丁2) feudal 迁 GM._feudalSchemes 自管·scheme_actions 撤 typeof 分流·叙事 scheme 直推 progressPct(不再数值分流)');
 ok(/s\.status === 'active' \|\| s\.status == null/.test(ap), 'F2 缺 status 视作 active(旧存档阴谋可推进)');
 ok(/var _af = Number\(r\.affinity\)/.test(ai) && /aff: isFinite\(_af\)/.test(ai), 'F3 ai.js _cogRelCueSC affinity 用 isFinite(0 死敌不当中性)');
 ok(/aff: isFinite\(_af\)/.test(fu) && /trust: isFinite\(_tr\)/.test(fu), 'F3 followup.js sc07 S1 关系 affinity/trust 用 isFinite');

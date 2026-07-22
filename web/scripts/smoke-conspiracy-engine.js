@@ -97,8 +97,9 @@ const doneR = E5._resolve(ctx5.GM, plotR);
 assert(doneR === true && ctx5.GM._conspiracies[0].action === 'coup_failed', '⑤ 君威盛→coup_failed');
 assert(ctx5.GM._conspiracies[0]._qamGated === true && ctx5.GM._conspiracies[0].outcome === 'suppressed', '⑤ 护栏标记·未遂下狱');
 
-// ── ⑥ 将发·君威衰微→不擅自得逞·标 ripe 交 AI·超时自破 ──
+// ── ⑥ 将发·君威衰微→不擅自得逞·标 ripe 交 AI·超时自破（flag OFF 旧行为；默认 ON 走五级发动出口见 smoke-conspiracy-unification）──
 const ctx6 = makeCtx();
+ctx6.P.conf.conspiracyResolutionEnabled = false;   // 本用例验证 conspiracyResolutionEnabled OFF 的自破兜底
 ctx6.GM = { turn: 12, chars: [char('枭雄', { ambition: 99, loyalty: 5 })], _activePlots: [], _conspiracies: [], huangquan: { index: 20 }, huangwei: { index: 25 } };
 const E6 = ctx6.ConspiracyEngine;
 const plotW = { ringleader: '枭雄', target: '崇祯', kind: 'coup', conspirators: ['党羽'], momentum: 110, secrecy: 50, exposure: 40, stage: 'brewing', _ripeSince: null };

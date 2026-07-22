@@ -15,9 +15,9 @@
     ],
     "pFactories": []
   },
-  "updatedAt": "2026-07-11T09:27:28.737Z",
+  "updatedAt": "2026-07-22T10:21:16.021Z",
   "totals": {
-    "gm": 4496,
+    "gm": 4499,
     "p": 733
   },
   "files": {
@@ -212,10 +212,10 @@
       "gm": 10,
       "p": 0,
       "roots": {
+        "gm:_aiWeakWriteHints": 3,
         "gm:_charInteractionCount": 4,
         "gm:_charInteractionCountTurn": 1,
-        "gm:_memoryArchiveFull": 2,
-        "gm:_aiWeakWriteHints": 3
+        "gm:_memoryArchiveFull": 2
       }
     },
     "tm-mechanics-world.js": {
@@ -335,10 +335,9 @@
       }
     },
     "tm-wendui.js": {
-      "gm": 89,
+      "gm": 83,
       "p": 0,
       "roots": {
-        "gm:_pendingAudiences": 8,
         "gm:_pendingLetterTo": 1,
         "gm:wenduiTarget": 2,
         "gm:wenduiHistory": 18,
@@ -349,6 +348,7 @@
         "gm:_wdAudienceMode": 4,
         "gm:jishiRecords": 4,
         "gm:_edictSuggestions": 6,
+        "gm:_pendingAudiences": 2,
         "gm:_pendingOvernightReq": 3,
         "gm:_wdRefusedCounsel": 3,
         "gm:chars": 2,
@@ -694,13 +694,14 @@
       }
     },
     "tm-feudal-warfare.js": {
-      "gm": 20,
+      "gm": 22,
       "p": 0,
       "roots": {
         "gm:activeWars": 4,
         "gm:treaties": 4,
+        "gm:_feudalSchemes": 4,
+        "gm:activeSchemes": 1,
         "gm:schemeCooldowns": 3,
-        "gm:activeSchemes": 3,
         "gm:_turnSchemeResults": 2,
         "gm:armies": 1,
         "gm:_marchReport": 1,
@@ -1056,11 +1057,12 @@
       "p": 3,
       "roots": {
         "gm:_unappliedChanges": 6,
+        "gm:_conspiracies": 2,
+        "gm:turnChanges": 48,
         "gm:_needsReconcile": 1,
         "gm:_aiAuthCapTurn": 1,
         "gm:_aiAuthAcc": 1,
         "gm:<dynamic>": 2,
-        "gm:turnChanges": 48,
         "gm:activeWars": 2,
         "gm:minxin": 3,
         "gm:activeDisasters": 2,
@@ -1073,7 +1075,6 @@
         "gm:activeProjects": 4,
         "gm:omens": 2,
         "gm:_marriageBirthHistory": 2,
-        "gm:_conspiracies": 2,
         "gm:currency": 4,
         "gm:religions": 3,
         "gm:_reconcilePatchLog": 3,
@@ -1884,7 +1885,7 @@
       }
     },
     "tm-save-lifecycle.js": {
-      "gm": 382,
+      "gm": 391,
       "p": 77,
       "roots": {
         "gm:shijiHistory": 1,
@@ -1935,6 +1936,9 @@
         "gm:_lastSc28Snapshot": 1,
         "gm:_costHistory": 1,
         "gm:activeSchemes": 2,
+        "gm:_feudalSchemes": 2,
+        "gm:_negotiations": 2,
+        "gm:_negotiationSeq": 2,
         "gm:_edictTracker": 2,
         "gm:_plotThreads": 2,
         "gm:_decisionEchoes": 2,
@@ -2033,6 +2037,9 @@
         "gm:_savedEnYuanRecords": 2,
         "gm:_savedPatronNetwork": 2,
         "gm:_savedActiveSchemes": 2,
+        "gm:_savedFeudalSchemes": 2,
+        "gm:_savedNegotiations": 2,
+        "gm:_savedNegotiationSeq": 2,
         "gm:_savedYearlyChronicles": 2,
         "gm:_savedMonthlyChronicles": 2,
         "gm:_savedAiMemorySummaries": 2,
@@ -2852,10 +2859,10 @@
       }
     },
     "tm-ai-change-applier.js": {
-      "gm": 56,
+      "gm": 52,
       "p": 0,
       "roots": {
-        "gm:dynamicInstitutions": 5,
+        "gm:dynamicInstitutions": 1,
         "gm:_aiStructuredPolicyActions": 3,
         "gm:_turnReport": 26,
         "gm:guoku": 4,
@@ -2942,10 +2949,9 @@
       }
     },
     "phase8-formal-rightrail.js": {
-      "gm": 23,
+      "gm": 21,
       "p": 0,
       "roots": {
-        "gm:_pendingAudiences": 2,
         "gm:wenduiHistory": 4,
         "gm:_edictSuggestions": 2,
         "gm:wenduiTarget": 3,

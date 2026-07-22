@@ -58,6 +58,68 @@
     try { if (typeof global.recordAIDiagnostic === 'function') global.recordAIDiagnostic('write_gate', { label:kind, ref:ref, reason:reason }); } catch (_) {}
     return false;
   }
+
+  // 刀丁4·单个 record_conspiracy_event 处理出口(P-QAM 硬门+落库+下狱+regicide→adjudicatePlayerDeath)。
+  //   reconcile 补录与 ConspiracyEngine 五级发动出口共用此 sink(抽公共函数两处调)。
+  //   opts.fromEngine=true(引擎发动)→落 _fromEngine(与 tick 剪枝握手 R-5)·缺省(AI 补录)→落 _autoFromReconcile(旧行为等价)。
+  ns._applyOneConspiracyEvent = function(e, opts) {
+                if (!GM._conspiracies) GM._conspiracies = [];
+                // P-QAM·政变/弑君得逞硬门：AI 凭空坐实"政变成功/弑君/宫变"前，确定性读皇权皇威——
+                //   君威正盛(皇权或皇威≥阈值)时这类得逞不合理 → 降为"未遂(suppressed/coup_failed)"、主谋下狱、邸报留痕。
+                //   不夺 AI 编情节自由(失败/败露的阴谋照常坐实)，只挡"凭空得逞"。阈值机制参数·owner 可调。
+                var _action = e.action, _outcome = e.outcome || 'suppressed';
+                var _isSuccess = (_outcome === 'succeeded') || _action === 'coup_succeeded' || _action === 'regicide' || _action === 'palace_coup';
+                var _qamGated = false;
+                if (_isSuccess) {
+                  var _hq = (GM.huangquan && typeof GM.huangquan.index === 'number') ? GM.huangquan.index : 50;
+                  var _hw = (GM.huangwei && typeof GM.huangwei.index === 'number') ? GM.huangwei.index : 50;
+                  var _qdC = ({narrative:'narrative',standard:'standard',hardcore:'hardcore','简单':'narrative','普通':'standard','中等':'standard','困难':'hardcore','地狱':'hardcore'})[(typeof P!=='undefined'&&P.conf&&P.conf.difficulty)||'']||'standard';
+                  var P_QAM_COUP_HQ = _qdC==='narrative'?45:(_qdC==='hardcore'?75:60), P_QAM_COUP_HW = P_QAM_COUP_HQ; // 皇权或皇威≥此驳回凭空政变·按难度:叙事45(稍强即拦护玩家)/标准60/硬核75(更易政变)
+                  if (_hq >= P_QAM_COUP_HQ || _hw >= P_QAM_COUP_HW) {
+                    _qamGated = true;
+                    _action = 'coup_failed';
+                    _outcome = 'suppressed';
+                    if (typeof addEB === 'function') addEB('谋反', (e.instigator||'某人') + ' 谋' + ({coup_succeeded:'变',regicide:'弑君',palace_coup:'宫变'}[e.action]||'逆') + '，然皇权 ' + Math.round(_hq) + '·皇威 ' + Math.round(_hw) + ' 正盛，事败就擒（确定性护栏·未遂）');
+                  }
+                }
+                GM._conspiracies.push({ turn: GM.turn||0, action: _action, instigator: e.instigator, target: e.target||'', outcome: _outcome, conspirators: e.conspirators||[], reason: e.reason||'', _autoFromReconcile: !(opts && opts.fromEngine), _fromEngine: !!(opts && opts.fromEngine), _qamGated: _qamGated || undefined });
+                // 主谋通常应受惩·登记 NPC 状态（被门降级的得逞→按未遂同样下狱）
+                var inst = (GM.chars||[]).find(function(c){return c && c.name === e.instigator;});
+                if (inst && (_outcome === 'suppressed' || _action === 'plot_failed' || _action === 'coup_failed')) {
+                  inst._imprisoned = true;
+                  inst._conspiracyConvicted = true;
+inst._imprisonedTurn = GM.turn||0;
+                  inst._imprisonReason = '谋逆事发·下诏狱待勘';
+                }
+                // 鼎革R1c(2026-07-07)：弑君得逞不再只记史册(勘察D静默杀漏洞②——AI 判 regicide
+                //   succeeded 此前只 push 一条史录·玩家角色照活照玩)。过 P-QAM 硬门的弑君是
+                //   「玩家角色被杀」这一具体事件：标死+走 R1a 裁决器(有储君继统续玩/绝嗣终局)。
+                //   palace_coup/coup_succeeded 得逞≠必弑君(废立/挟持)·归 R1d 废帝态·此处不越界。
+                if (!_qamGated && _action === 'regicide' && _outcome === 'succeeded') {
+                  var _pcName = (typeof P !== 'undefined' && P && P.playerInfo && P.playerInfo.characterName) || '';
+                  var _sov = (GM.chars || []).find(function (c) { return c && (c.isPlayer || (_pcName && c.name === _pcName)); });
+                  if (!_sov) {
+                    _stageSemanticFailure('conspiracy_events.regicide', _pcName || '(player)', 'player character not found');
+                  } else if (_sov.alive !== false && !_sov.dead) {
+                    var _regicideReason = '为' + (e.instigator || '逆党') + '所弑';
+                    var _regicideRouteFailed = false;
+                    try {
+                      if (typeof global.applyOneDeath === 'function') global.applyOneDeath({ name:_sov.name, reason:_regicideReason });
+                      else if (typeof global.applyCharacterDeaths === 'function') global.applyCharacterDeaths({ character_deaths:[{ name:_sov.name, reason:_regicideReason }] });
+                      else { _regicideRouteFailed = true; _stageSemanticFailure('conspiracy_events.regicide', _sov.name, 'death pipeline unavailable'); }
+                    } catch (_regicideE) {
+                      _regicideRouteFailed = true;
+                      _stageSemanticFailure('conspiracy_events.regicide', _sov.name, 'death pipeline exception: ' + ((_regicideE && _regicideE.message) || _regicideE));
+                    }
+                    if (!_regicideRouteFailed && _sov.alive !== false && !_sov.dead) _stageSemanticFailure('conspiracy_events.regicide', _sov.name, 'death pipeline did not apply');
+                    if ((_sov.alive === false || _sov.dead) && typeof addEB === 'function') addEB('国变', (_sov.name || '天子') + '为' + (e.instigator || '逆党') + '所弑·大行崩逝，天下震动', { credibility: 'high' });
+                  }
+                }
+                if (!GM.turnChanges) GM.turnChanges = {};
+                if (!GM.turnChanges.variables) GM.turnChanges.variables = [];
+                GM.turnChanges.variables.push({ path: '_conspiracies', label: '谋反·' + e.instigator + '·' + _action + '/' + _outcome, delta: 1, reason: e.reason || '一致性补录' });
+  };
+
   function _stageSetPartyLeader(party, ref, reason) {
     var raw = String(ref == null ? '' : ref).trim();
     var ch = (typeof GM !== 'undefined' && GM && Array.isArray(GM.chars)) ? GM.chars.find(function(c) {
@@ -588,63 +650,7 @@
                 GM.turnChanges.variables.push({ path: 'family.' + e.target, label: '家事·' + e.target + '·' + e.action, delta: 0, reason: e.reason || '一致性补录' });
               });
               // 谋反·政变 补录
-              _patch.conspiracy_events.forEach(function(e) {
-                if (!GM._conspiracies) GM._conspiracies = [];
-                // P-QAM·政变/弑君得逞硬门：AI 凭空坐实"政变成功/弑君/宫变"前，确定性读皇权皇威——
-                //   君威正盛(皇权或皇威≥阈值)时这类得逞不合理 → 降为"未遂(suppressed/coup_failed)"、主谋下狱、邸报留痕。
-                //   不夺 AI 编情节自由(失败/败露的阴谋照常坐实)，只挡"凭空得逞"。阈值机制参数·owner 可调。
-                var _action = e.action, _outcome = e.outcome || 'suppressed';
-                var _isSuccess = (_outcome === 'succeeded') || _action === 'coup_succeeded' || _action === 'regicide' || _action === 'palace_coup';
-                var _qamGated = false;
-                if (_isSuccess) {
-                  var _hq = (GM.huangquan && typeof GM.huangquan.index === 'number') ? GM.huangquan.index : 50;
-                  var _hw = (GM.huangwei && typeof GM.huangwei.index === 'number') ? GM.huangwei.index : 50;
-                  var _qdC = ({narrative:'narrative',standard:'standard',hardcore:'hardcore','简单':'narrative','普通':'standard','中等':'standard','困难':'hardcore','地狱':'hardcore'})[(typeof P!=='undefined'&&P.conf&&P.conf.difficulty)||'']||'standard';
-                  var P_QAM_COUP_HQ = _qdC==='narrative'?45:(_qdC==='hardcore'?75:60), P_QAM_COUP_HW = P_QAM_COUP_HQ; // 皇权或皇威≥此驳回凭空政变·按难度:叙事45(稍强即拦护玩家)/标准60/硬核75(更易政变)
-                  if (_hq >= P_QAM_COUP_HQ || _hw >= P_QAM_COUP_HW) {
-                    _qamGated = true;
-                    _action = 'coup_failed';
-                    _outcome = 'suppressed';
-                    if (typeof addEB === 'function') addEB('谋反', (e.instigator||'某人') + ' 谋' + ({coup_succeeded:'变',regicide:'弑君',palace_coup:'宫变'}[e.action]||'逆') + '，然皇权 ' + Math.round(_hq) + '·皇威 ' + Math.round(_hw) + ' 正盛，事败就擒（确定性护栏·未遂）');
-                  }
-                }
-                GM._conspiracies.push({ turn: GM.turn||0, action: _action, instigator: e.instigator, target: e.target||'', outcome: _outcome, conspirators: e.conspirators||[], reason: e.reason||'', _autoFromReconcile: true, _qamGated: _qamGated || undefined });
-                // 主谋通常应受惩·登记 NPC 状态（被门降级的得逞→按未遂同样下狱）
-                var inst = (GM.chars||[]).find(function(c){return c && c.name === e.instigator;});
-                if (inst && (_outcome === 'suppressed' || _action === 'plot_failed' || _action === 'coup_failed')) {
-                  inst._imprisoned = true;
-                  inst._conspiracyConvicted = true;
-inst._imprisonedTurn = GM.turn||0;
-                  inst._imprisonReason = '谋逆事发·下诏狱待勘';
-                }
-                // 鼎革R1c(2026-07-07)：弑君得逞不再只记史册(勘察D静默杀漏洞②——AI 判 regicide
-                //   succeeded 此前只 push 一条史录·玩家角色照活照玩)。过 P-QAM 硬门的弑君是
-                //   「玩家角色被杀」这一具体事件：标死+走 R1a 裁决器(有储君继统续玩/绝嗣终局)。
-                //   palace_coup/coup_succeeded 得逞≠必弑君(废立/挟持)·归 R1d 废帝态·此处不越界。
-                if (!_qamGated && _action === 'regicide' && _outcome === 'succeeded') {
-                  var _pcName = (typeof P !== 'undefined' && P && P.playerInfo && P.playerInfo.characterName) || '';
-                  var _sov = (GM.chars || []).find(function (c) { return c && (c.isPlayer || (_pcName && c.name === _pcName)); });
-                  if (!_sov) {
-                    _stageSemanticFailure('conspiracy_events.regicide', _pcName || '(player)', 'player character not found');
-                  } else if (_sov.alive !== false && !_sov.dead) {
-                    var _regicideReason = '为' + (e.instigator || '逆党') + '所弑';
-                    var _regicideRouteFailed = false;
-                    try {
-                      if (typeof global.applyOneDeath === 'function') global.applyOneDeath({ name:_sov.name, reason:_regicideReason });
-                      else if (typeof global.applyCharacterDeaths === 'function') global.applyCharacterDeaths({ character_deaths:[{ name:_sov.name, reason:_regicideReason }] });
-                      else { _regicideRouteFailed = true; _stageSemanticFailure('conspiracy_events.regicide', _sov.name, 'death pipeline unavailable'); }
-                    } catch (_regicideE) {
-                      _regicideRouteFailed = true;
-                      _stageSemanticFailure('conspiracy_events.regicide', _sov.name, 'death pipeline exception: ' + ((_regicideE && _regicideE.message) || _regicideE));
-                    }
-                    if (!_regicideRouteFailed && _sov.alive !== false && !_sov.dead) _stageSemanticFailure('conspiracy_events.regicide', _sov.name, 'death pipeline did not apply');
-                    if ((_sov.alive === false || _sov.dead) && typeof addEB === 'function') addEB('国变', (_sov.name || '天子') + '为' + (e.instigator || '逆党') + '所弑·大行崩逝，天下震动', { credibility: 'high' });
-                  }
-                }
-                if (!GM.turnChanges) GM.turnChanges = {};
-                if (!GM.turnChanges.variables) GM.turnChanges.variables = [];
-                GM.turnChanges.variables.push({ path: '_conspiracies', label: '谋反·' + e.instigator + '·' + _action + '/' + _outcome, delta: 1, reason: e.reason || '一致性补录' });
-              });
+              _patch.conspiracy_events.forEach(function(e) { ns._applyOneConspiracyEvent(e); });
               // 货币·币值 补录
               _patch.currency_events.forEach(function(e) {
                 if (!GM.currency) GM.currency = {};

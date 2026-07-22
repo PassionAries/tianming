@@ -5128,30 +5128,25 @@
             });
             if (!scheme) return;
             // 【sc1c 升级·C1 + Codex 审查修·F1】progress 双表征:sc1c=字符串阶段(ChronicleTracker 读)+数值 progressPct(推进);
-            //   ★但 feudal 阴谋(tm-feudal.js)用**数值** progress·绝不可覆写成字符串(否则其数值运算变 NaN 损坏)——按 progress 类型分流。
+            //   ★feudal 阴谋(数值 progress)已迁 GM._feudalSchemes 自管(刀丁2)·此账本只余叙事字符串 scheme·故不再按 progress 类型分流。
             var _stagePctC1 = { '长期布局':15, '酝酿中':35, '即将发动':70, '已发':90 };
             var _pctToStageC1 = function(p){ return p < 25 ? '长期布局' : (p < 55 ? '酝酿中' : (p < 85 ? '即将发动' : '已发')); };
             var _tnC1 = scheme.typeName || '密谋';
             if (sa.action === 'advance') {
               var _advAmt = Math.abs(parseInt(sa.amount) || 20);
-              if (typeof scheme.progress === 'string') {   // sc1c 字符串阶段 scheme
-                var _pctA = (typeof scheme.progressPct === 'number') ? scheme.progressPct : (_stagePctC1[scheme.progress] || 30);
-                _pctA = Math.min(100, _pctA + Math.min(_advAmt, 50));
-                scheme.progressPct = _pctA; scheme.progress = _pctToStageC1(_pctA);
-              } else {                                      // feudal 数值 progress scheme·直接数值加减·勿覆写成字符串
-                scheme.progress = Math.min(100, (Number(scheme.progress) || 0) + Math.min(_advAmt, 50));
-              }
+              // 刀丁2·feudal 数值 scheme 已迁 GM._feudalSchemes(自家账本自管)·此处只余叙事字符串 scheme·撤 typeof 数值分流
+              var _pctA = (typeof scheme.progressPct === 'number') ? scheme.progressPct : (_stagePctC1[scheme.progress] || 30);
+              _pctA = Math.min(100, _pctA + Math.min(_advAmt, 50));
+              scheme.progressPct = _pctA; scheme.progress = _pctToStageC1(_pctA);
+              scheme.lastTurn = GM.turn;   // 刀丁1·advance 刷新 lastTurn
               addEB('阴谋', scheme.schemer + '的' + _tnC1 + '被推进(' + sa.reason + ')');
               if (typeof NpcMemorySystem !== 'undefined') NpcMemorySystem.remember(scheme.schemer, _tnC1 + '计划推进顺利', '喜', 5, scheme.target);
             } else if (sa.action === 'disrupt') {
               var _disAmt = Math.abs(parseInt(sa.amount) || 30);
-              if (typeof scheme.progress === 'string') {
-                var _pctD = (typeof scheme.progressPct === 'number') ? scheme.progressPct : (_stagePctC1[scheme.progress] || 30);
-                _pctD = Math.max(0, _pctD - Math.min(_disAmt, 50));
-                scheme.progressPct = _pctD; scheme.progress = _pctToStageC1(_pctD);
-              } else {
-                scheme.progress = Math.max(0, (Number(scheme.progress) || 0) - Math.min(_disAmt, 50));
-              }
+              var _pctD = (typeof scheme.progressPct === 'number') ? scheme.progressPct : (_stagePctC1[scheme.progress] || 30);
+              _pctD = Math.max(0, _pctD - Math.min(_disAmt, 50));
+              scheme.progressPct = _pctD; scheme.progress = _pctToStageC1(_pctD);
+              scheme.lastTurn = GM.turn;   // 刀丁1·disrupt 刷新 lastTurn
               addEB('阴谋', scheme.schemer + '的' + _tnC1 + '受阻(' + sa.reason + ')');
               if (typeof NpcMemorySystem !== 'undefined') NpcMemorySystem.remember(scheme.schemer, _tnC1 + '计划受阻：' + (sa.reason || ''), '忧', 6, scheme.target);
             } else if (sa.action === 'abort') {

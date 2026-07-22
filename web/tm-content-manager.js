@@ -2419,6 +2419,13 @@
     };
   }
 
+  // B2（批B）：上传进度节流判定（纯函数便于测试）——距上次重渲 ≥500ms 或 百分比变化 ≥5
+  // 才重渲（防打字/滚动时高频 render 抖动）；100% 必渲（收尾态不吞）。
+  function uploadProgressShouldRender(pct, lastPct, sinceMs) {
+    if (pct >= 100) return true;
+    return sinceMs >= 500 || Math.abs(pct - lastPct) >= 5;
+  }
+
   async function submitWorkshopPublication() {
     var userOk = !!(window.TM && TM.OnlineClient && TM.OnlineClient.isLoggedIn && TM.OnlineClient.isLoggedIn());
     var d = capturePublishDraft();
@@ -2454,9 +2461,22 @@
         galleryImages: gallery
       };
       if (state.forkSource && state.forkSource.id) meta.parentId = state.forkSource.id;
-      state.publishMessage = '正在提交发布申请...';
+      // B2：大包（>30MB）提醒勿关页；上传进度经纯函数节流后回写 publishMessage。
+      var bigPack = bytes.length > 30 * 1024 * 1024;
+      var bigNote = bigPack ? '（大包上传可能较久，请勿关闭页面）' : '';
+      state.publishMessage = '正在提交发布申请...' + bigNote;
       render();
-      var res = await TM.OnlineClient.uploadPack(meta, bytesToBase64Local(bytes), state.onlineApiUrl || undefined);
+      var lastRenderAt = 0, lastPct = -1;
+      var onUploadProgress = function (p) {
+        if (!p || !p.total) return;
+        var pct = Math.max(0, Math.min(100, Math.round((p.loaded / p.total) * 100)));
+        var now = Date.now();
+        if (!uploadProgressShouldRender(pct, lastPct, now - lastRenderAt)) return;
+        lastRenderAt = now; lastPct = pct;
+        state.publishMessage = '正在上传投稿包… ' + pct + '%' + bigNote;
+        render();
+      };
+      var res = await TM.OnlineClient.uploadPack(meta, bytesToBase64Local(bytes), state.onlineApiUrl || undefined, onUploadProgress);
       if (res && res.success) {
         state.forkSource = null;
         autoPostPublish((res.pack && res.pack.title) || d.title, type, res.pack && res.pack.id);

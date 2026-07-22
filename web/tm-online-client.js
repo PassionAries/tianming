@@ -66,6 +66,8 @@
     opts = opts || {};
     var storage = makeStorage(opts.storage);
     var doFetch = opts.fetch || (typeof fetch !== 'undefined' ? fetch.bind(typeof window !== 'undefined' ? window : null) : null);
+    // B2（批B）：上传进度需 XMLHttpRequest（fetch 无原生上传进度事件）。可注入便于测试。
+    var XHR = opts.XMLHttpRequest || (typeof XMLHttpRequest !== 'undefined' ? XMLHttpRequest : null);
     var defaultApiUrl = normalizeApiUrl(opts.apiUrl || DEFAULT_API_URL);
 
     function readSession() {
@@ -551,8 +553,44 @@
       return btoa(unescape(encodeURIComponent(str)));
     }
 
+    // B2（批B）：投稿包上传——有 onProgress 回调且 XHR 可用时改走 XMLHttpRequest 报上传
+    // 进度（xhr.upload.onprogress 的 loaded/total）；否则回落 request() 的 fetch 路（行为
+    // 不变）。鉴权头/URL/body 构造与 request() 逐字一致（Accept + Content-Type + Bearer）。
+    function sendUpload(payload, apiUrl, token, onProgress) {
+      if (typeof onProgress === 'function' && XHR) {
+        var base = normalizeApiUrl(apiUrl || getApiUrl());
+        if (!base) return Promise.reject(new Error('缺少在线服务地址'));
+        var url = joinUrl(base, 'workshop/upload');
+        var bodyStr = JSON.stringify(payload);
+        return new Promise(function (resolve, reject) {
+          var xhr = new XHR();
+          xhr.open('POST', url, true);
+          xhr.setRequestHeader('Accept', 'application/json');
+          xhr.setRequestHeader('Content-Type', 'application/json');
+          if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+          if (xhr.upload) xhr.upload.onprogress = function (e) {
+            if (e && e.lengthComputable) { try { onProgress({ loaded: e.loaded, total: e.total }); } catch (_) {} }
+          };
+          xhr.onload = function () {
+            var text = xhr.responseText || '';
+            var data = null;
+            if (text) { try { data = JSON.parse(text); } catch (e2) { data = null; } }
+            if (data == null) {
+              if (xhr.status < 200 || xhr.status >= 300) { reject(new Error('在线服务返回 ' + xhr.status)); return; }
+              resolve({}); return;
+            }
+            resolve(data);
+          };
+          xhr.onerror = function () { reject(new Error('上传请求失败')); };
+          xhr.send(bodyStr);
+        });
+      }
+      // 回落 fetch 路（与原 request() 调用逐字一致）。
+      return request('POST', 'workshop/upload', { body: payload, apiUrl: apiUrl, token: token });
+    }
+
     // 上传一个纯文本剧本到工坊（落服务器自持存储 -> pending 待审）。
-    function uploadScenario(meta, content, apiUrl) {
+    function uploadScenario(meta, content, apiUrl, onProgress) {
       meta = meta || {};
       var json = (typeof content === 'string') ? content : JSON.stringify(content);
       var tags = Array.isArray(meta.tags) ? meta.tags : String(meta.tags || '').split(/[，,;；\s]+/).filter(Boolean);
@@ -572,12 +610,12 @@
       if (meta.coverImage && meta.coverImage.contentBase64) payload.coverImage = meta.coverImage;
       if (Array.isArray(meta.galleryImages) && meta.galleryImages.length) payload.galleryImages = meta.galleryImages.slice(0, 6);
       var session = readSession();
-      return request('POST', 'workshop/upload', { body: payload, apiUrl: apiUrl || session.apiUrl, token: session.token })
+      return sendUpload(payload, apiUrl || session.apiUrl, session.token, onProgress)
         .then(function (res) { return Object.assign({ success: false }, res || {}); });
     }
 
     // P1-S2b：通用资产包上传（立绘/音乐/地图/MOD）。contentBase64 已是 base64（客户端打包二进制 → base64）。
-    function uploadPack(meta, contentBase64, apiUrl) {
+    function uploadPack(meta, contentBase64, apiUrl, onProgress) {
       meta = meta || {};
       var t = String(meta.type || 'scenario').trim();
       var tags = Array.isArray(meta.tags) ? meta.tags : String(meta.tags || '').split(/[，,;；\s]+/).filter(Boolean);
@@ -598,7 +636,7 @@
         contentBase64: String(contentBase64 || '')
       };
       var session = readSession();
-      return request('POST', 'workshop/upload', { body: payload, apiUrl: apiUrl || session.apiUrl, token: session.token })
+      return sendUpload(payload, apiUrl || session.apiUrl, session.token, onProgress)
         .then(function (res) { return Object.assign({ success: false }, res || {}); });
     }
 

@@ -1,0 +1,523 @@
+/* 天命启动页三案皮肤 · 只接管 #launch 的视觉层，沿用原按钮与动作绑定。 */
+html[data-tm-home-ui="desk"] {
+  --tm-home-art: url("assets/ui/home/home-ui-desk-v3-4k.webp");
+  --tm-home-ring: rgba(236, 202, 115, 0.86);
+  --tm-home-fill: rgba(199, 156, 70, 0.10);
+  --tm-home-focus: rgba(247, 218, 143, 0.96);
+}
+html[data-tm-home-ui="map"] {
+  --tm-home-art: url("assets/ui/home/home-ui-map-v3-4k.webp");
+  --tm-home-ring: rgba(171, 83, 55, 0.92);
+  --tm-home-fill: rgba(145, 70, 45, 0.11);
+  --tm-home-focus: rgba(224, 192, 125, 0.98);
+}
+html[data-tm-home-ui="gate"] {
+  --tm-home-art: url("assets/ui/home/home-ui-gate-v3-4k.webp");
+  --tm-home-ring: rgba(206, 150, 67, 0.90);
+  --tm-home-fill: rgba(155, 63, 34, 0.13);
+  --tm-home-focus: rgba(241, 202, 116, 0.98);
+}
+
+html[data-tm-home-ui] { --tm-home-view-h: 100vh; }
+@supports (height: 100dvh) {
+  html[data-tm-home-ui] { --tm-home-view-h: 100dvh; }
+}
+
+html[data-tm-home-ui] #launch {
+  background: #050403;
+}
+html[data-tm-home-ui] .home-stage {
+  position: relative;
+  width: 100%;
+  height: var(--tm-home-view-h);
+  min-height: var(--tm-home-view-h);
+  padding: 0;
+  overflow: hidden;
+  background: #050403;
+  isolation: isolate;
+}
+html[data-tm-home-ui] .home-stage::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  inset: auto;
+  top: 50%;
+  left: 50%;
+  width: min(100vw, calc(var(--tm-home-view-h) * 1.777778));
+  height: min(var(--tm-home-view-h), calc(100vw / 1.777778));
+  transform: translate(-50%, -50%);
+  background: var(--tm-home-art) center / 100% 100% no-repeat;
+  box-shadow: 0 0 34px 10px rgba(3, 2, 1, 0.72);
+  opacity: 1;
+  pointer-events: none;
+  transition: opacity 220ms ease;
+}
+html[data-tm-home-ui] .home-stage::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: -3%;
+  background:
+    radial-gradient(ellipse at center, rgba(15, 11, 7, 0.02) 34%, rgba(4, 3, 2, 0.30) 100%),
+    var(--tm-home-art) center / cover no-repeat;
+  filter: blur(12px) brightness(0.58) saturate(0.72);
+  mix-blend-mode: normal;
+  opacity: 1;
+  pointer-events: none;
+  transform: scale(1.03);
+  transition: opacity 220ms ease;
+}
+html[data-tm-home-ui] .home-ylian { display: none; }
+html[data-tm-home-ui] .home-main {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  left: 50%;
+  display: block;
+  width: min(100vw, calc(var(--tm-home-view-h) * 1.777778));
+  height: min(var(--tm-home-view-h), calc(100vw / 1.777778));
+  max-width: none;
+  margin: 0;
+  transform: translate(-50%, -50%);
+  opacity: 1;
+  transition: opacity 180ms ease;
+}
+html[data-tm-home-ui][data-tm-home-ui-loading="1"] .home-stage::before,
+html[data-tm-home-ui][data-tm-home-ui-loading="1"] .home-stage::after,
+html[data-tm-home-ui][data-tm-home-ui-loading="1"] .home-main { opacity: 0; }
+html[data-tm-home-ui][data-tm-home-ui-loading="1"] .home-main { pointer-events: none; }
+
+html[data-tm-home-ui] .tm-home-loading {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 10px;
+  color: rgba(234, 213, 155, 0.9);
+  font-family: "STKaiti", "KaiTi", "楷体", serif;
+  font-size: clamp(12px, 1vw, 16px);
+  letter-spacing: 0.16em;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  transition: opacity 150ms ease;
+}
+html[data-tm-home-ui] .tm-home-loading[hidden] { display: none; }
+html[data-tm-home-ui] .tm-home-loading::before {
+  content: "";
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(215, 177, 89, 0.28);
+  border-top-color: rgba(237, 207, 132, 0.92);
+  border-radius: 50%;
+  animation: tm-home-loading-turn 900ms linear infinite;
+}
+html[data-tm-home-ui][data-tm-home-ui-loading="1"] .tm-home-loading { opacity: 1; }
+@keyframes tm-home-loading-turn { to { transform: rotate(360deg); } }
+
+html[data-tm-home-ui] .home-axis {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+html[data-tm-home-ui] .home-menu,
+html[data-tm-home-ui] .home-side,
+html[data-tm-home-ui] .home-panel,
+html[data-tm-home-ui] .home-recent,
+html[data-tm-home-ui] .home-tools {
+  display: contents !important;
+}
+html[data-tm-home-ui] .home-panel::before,
+html[data-tm-home-ui] .home-panel::after { display: none; }
+html[data-tm-home-ui] .home-panel-title { display: none; }
+
+html[data-tm-home-ui] .home-card,
+html[data-tm-home-ui] .home-card.c-new,
+html[data-tm-home-ui] .home-tools > button {
+  position: absolute;
+  z-index: 4;
+  left: var(--tm-home-x);
+  top: var(--tm-home-y);
+  width: var(--tm-home-w);
+  height: var(--tm-home-h);
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  box-shadow: none;
+  color: transparent;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transform: none;
+  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 170ms ease, filter 150ms ease, transform 110ms ease;
+}
+html[data-tm-home-ui] .home-card > * { opacity: 0 !important; }
+html[data-tm-home-ui] .home-card::before,
+html[data-tm-home-ui] .home-card::after { display: none; }
+html[data-tm-home-ui] .home-tools > button {
+  font-size: 0;
+  letter-spacing: 0;
+}
+html[data-tm-home-ui] .home-card:hover,
+html[data-tm-home-ui] .home-card:focus-visible,
+html[data-tm-home-ui] .home-tools > button:hover,
+html[data-tm-home-ui] .home-tools > button:focus-visible {
+  outline: none;
+  border-color: var(--tm-home-ring);
+  background: var(--tm-home-fill);
+  box-shadow: inset 0 0 24px rgba(246, 214, 137, 0.09), 0 0 18px rgba(20, 10, 4, 0.38);
+  backdrop-filter: brightness(1.13) saturate(1.04);
+  transform: none;
+}
+html[data-tm-home-ui] .home-card:focus-visible,
+html[data-tm-home-ui] .home-tools > button:focus-visible {
+  border-color: var(--tm-home-focus);
+  box-shadow: 0 0 0 2px rgba(12, 7, 3, 0.88), 0 0 0 4px var(--tm-home-ring), inset 0 0 26px rgba(247, 219, 143, 0.12);
+}
+html[data-tm-home-ui] .home-card:active,
+html[data-tm-home-ui] .home-tools > button:active { transform: scale(0.985); }
+html[data-tm-home-ui="map"] .home-card:hover,
+html[data-tm-home-ui="map"] .home-card:focus-visible { border-left-width: 3px; }
+html[data-tm-home-ui] .home-tools .tm-cl-dot {
+  top: 8%;
+  right: 8%;
+  width: clamp(5px, 0.55vw, 9px);
+  height: clamp(5px, 0.55vw, 9px);
+  opacity: 1;
+}
+
+html[data-tm-home-ui] .tm-home-save {
+  position: absolute;
+  z-index: 5;
+  left: var(--tm-home-x);
+  top: var(--tm-home-y);
+  display: grid;
+  width: var(--tm-home-w);
+  height: var(--tm-home-h);
+  min-width: 0;
+  min-height: 0;
+  padding: 0.45% 1.1%;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(5px, 0.65vw, 11px);
+  border-radius: 1px;
+  font-family: "STKaiti", "KaiTi", "楷体", serif;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 150ms ease, filter 150ms ease, transform 110ms ease, box-shadow 150ms ease;
+}
+html[data-tm-home-ui="desk"] .tm-home-save {
+  border: 1px solid transparent;
+  color: #24160b;
+  background: transparent;
+  box-shadow: none;
+}
+html[data-tm-home-ui="map"] .tm-home-save {
+  border: 1px solid rgba(188, 143, 69, 0.48);
+  color: #e4c788;
+  background: linear-gradient(180deg, rgb(28, 20, 12), rgb(13, 10, 7));
+  box-shadow: inset 0 0 16px rgba(197, 153, 74, 0.06);
+}
+html[data-tm-home-ui="gate"] .tm-home-save {
+  border: 1px solid transparent;
+  color: #ead5a1;
+  background: transparent;
+  box-shadow: none;
+}
+html[data-tm-home-ui="desk"] .tm-home-save::before,
+html[data-tm-home-ui="gate"] .tm-home-save::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 8%;
+  left: 14%;
+  width: 67%;
+  height: 84%;
+  pointer-events: none;
+}
+html[data-tm-home-ui="desk"] .tm-home-save::before {
+  background: linear-gradient(90deg, rgb(154, 120, 70), rgb(164, 130, 75) 58%, rgb(151, 113, 63));
+  box-shadow: 0 0 8px rgba(79, 44, 17, 0.08);
+}
+html[data-tm-home-ui="gate"] .tm-home-save::before {
+  left: 15%;
+  width: 72%;
+  background: linear-gradient(90deg, rgb(65, 42, 25), rgb(52, 35, 21) 72%, rgb(39, 27, 18));
+  box-shadow: 0 0 8px rgba(8, 5, 3, 0.14);
+}
+html[data-tm-home-ui] .tm-home-save:not(:disabled):hover,
+html[data-tm-home-ui] .tm-home-save:not(:disabled):focus-visible {
+  outline: none;
+  border-color: var(--tm-home-focus);
+  filter: brightness(1.08) saturate(1.03);
+  box-shadow: 0 0 0 2px rgba(10, 6, 3, 0.68), 0 0 0 3px var(--tm-home-ring), inset 0 0 18px rgba(245, 209, 124, 0.1);
+}
+html[data-tm-home-ui] .tm-home-save:not(:disabled):active { transform: scale(0.99); }
+html[data-tm-home-ui] .tm-home-save:disabled { cursor: default; }
+html[data-tm-home-ui] .tm-home-save-seal {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: clamp(18px, 2.2vw, 34px);
+  aspect-ratio: 1;
+  place-items: center;
+  border: 1px solid rgba(244, 208, 145, 0.4);
+  border-radius: 50%;
+  color: #ffe7c0;
+  background: linear-gradient(145deg, #b74d3b, #77251f);
+  box-shadow: inset 0 0 8px rgba(255, 231, 190, 0.12);
+  font-size: clamp(8px, 1vw, 15px);
+}
+html[data-tm-home-ui="desk"] .tm-home-save-seal {
+  border-color: rgba(91, 46, 24, 0.48);
+  color: #f7d8aa;
+}
+html[data-tm-home-ui] .tm-home-save-copy {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.18;
+}
+html[data-tm-home-ui] .tm-home-save-name {
+  overflow: hidden;
+  font-size: clamp(10px, 1.03vw, 16px);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html[data-tm-home-ui] .tm-home-save-meta,
+html[data-tm-home-ui] .tm-home-save-empty {
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  margin-top: clamp(1px, 0.28vw, 4px);
+  color: currentColor;
+  font-size: clamp(9px, 0.78vw, 12px);
+  letter-spacing: 0.05em;
+  opacity: 0.68;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html[data-tm-home-ui] .tm-home-save-empty { grid-column: 2; }
+html[data-tm-home-ui="map"] .tm-home-save {
+  padding: 0.36% 0.72%;
+  gap: clamp(4px, 0.48vw, 8px);
+}
+html[data-tm-home-ui="map"] .tm-home-save-seal { width: clamp(16px, 1.8vw, 28px); }
+html[data-tm-home-ui="map"] .tm-home-save-name { font-size: clamp(10px, 0.88vw, 14px); }
+html[data-tm-home-ui="map"] .tm-home-save-meta { font-size: clamp(9px, 0.68vw, 11px); }
+html[data-tm-home-ui="gate"] .tm-home-save-name { font-size: clamp(10px, 0.85vw, 14px); }
+html[data-tm-home-ui="gate"] .tm-home-save-meta { font-size: clamp(9px, 0.66vw, 11px); }
+
+html[data-tm-home-ui] .tm-home-version {
+  position: absolute;
+  z-index: 6;
+  left: 1.15%;
+  bottom: 0.35%;
+  display: flex;
+  width: 8.8%;
+  height: 3.8%;
+  align-items: center;
+  padding-left: 0.4%;
+  color: rgba(219, 187, 111, 0.86);
+  background: linear-gradient(90deg, rgba(5, 4, 3, 0.98) 76%, transparent);
+  font-family: "STKaiti", "KaiTi", "楷体", serif;
+  font-size: clamp(9px, 0.82vw, 13px);
+  letter-spacing: 0.1em;
+  pointer-events: none;
+}
+html[data-tm-home-ui] #launch > .home-foot { display: none; }
+
+/* 设置 → 主页 UI */
+.tm-home-ui-intro,
+.tm-home-ui-hint {
+  color: var(--txt-d);
+  font-size: clamp(0.78rem, 1.25vw, 0.86rem);
+  line-height: 1.65;
+}
+.tm-home-ui-intro { margin: -0.2rem 0 0.7rem; }
+.tm-home-ui-hint { margin-top: 0.65rem; }
+.tm-home-ui-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+.tm-home-ui-choice {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  isolation: isolate;
+  grid-template-columns: 1fr auto;
+  border: 1px solid rgba(138, 106, 47, 0.36);
+  border-radius: 4px;
+  color: #4a3418;
+  background: linear-gradient(180deg, #fffdf7, #eee1c3);
+  box-shadow: 0 2px 7px rgba(75, 48, 18, 0.08);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 120ms ease;
+}
+.tm-home-ui-choice:active { transform: scale(0.995); }
+.tm-home-ui-choice:hover,
+.tm-home-ui-choice:focus-visible {
+  outline: none;
+  border-color: #8a6a2f;
+  box-shadow: 0 0 0 1px rgba(138, 106, 47, 0.25), 0 5px 16px rgba(76, 48, 18, 0.16);
+  transform: translateY(-2px);
+}
+.tm-home-ui-choice.active {
+  border-color: #96392d;
+  box-shadow: 0 0 0 1px #96392d, 0 5px 16px rgba(91, 43, 25, 0.16);
+}
+.tm-home-ui-choice-check {
+  position: absolute;
+  z-index: 3;
+  top: 7px;
+  right: 7px;
+  display: none;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid rgba(241, 206, 130, 0.68);
+  border-radius: 50%;
+  color: #f4dda9;
+  background: rgba(132, 43, 32, 0.92);
+  box-shadow: 0 2px 8px rgba(24, 10, 4, 0.32);
+  font-size: 0.72rem;
+}
+.tm-home-ui-choice.active .tm-home-ui-choice-check { display: grid; }
+.tm-home-ui-choice img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  grid-column: 1 / -1;
+  background: #080604;
+  user-select: none;
+}
+.tm-home-ui-choice.active img { filter: saturate(1.04) brightness(1.02); }
+.tm-home-ui-choice-no {
+  position: absolute;
+  z-index: 2;
+  top: 7px;
+  left: 7px;
+  padding: 3px 7px;
+  border: 1px solid rgba(228, 192, 111, 0.48);
+  color: #ead49d;
+  background: rgba(8, 5, 3, 0.82);
+  font-size: 0.63rem;
+  letter-spacing: 0.12em;
+}
+.tm-home-ui-choice-copy {
+  display: flex;
+  min-width: 0;
+  padding: 0.55rem 0.4rem 0.58rem 0.62rem;
+  flex-direction: column;
+}
+.tm-home-ui-choice-copy b {
+  color: #4a3418;
+  font-family: "STKaiti", "KaiTi", "楷体", serif;
+  font-size: 0.88rem;
+  letter-spacing: 0.08em;
+}
+.tm-home-ui-choice-copy small {
+  display: -webkit-box;
+  margin-top: 0.16rem;
+  overflow: hidden;
+  color: #7a6440;
+  font-size: 0.66rem;
+  line-height: 1.35;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.tm-home-ui-choice-state {
+  align-self: center;
+  margin-right: 0.58rem;
+  padding: 0.2rem 0.42rem;
+  border: 1px solid rgba(138, 106, 47, 0.26);
+  border-radius: 999px;
+  color: #8a6a2f;
+  background: rgba(255, 252, 241, 0.48);
+  font-size: 0.65rem;
+  white-space: nowrap;
+}
+.tm-home-ui-choice.is-loading .tm-home-ui-choice-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.34rem;
+}
+.tm-home-ui-choice.is-loading .tm-home-ui-choice-state::before {
+  content: "";
+  width: 0.68rem;
+  height: 0.68rem;
+  border: 1px solid rgba(138, 106, 47, 0.32);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: tm-home-loading-turn 760ms linear infinite;
+}
+.tm-home-ui-choice.active .tm-home-ui-choice-state {
+  border-color: rgba(150, 57, 45, 0.34);
+  color: #96392d;
+  background: rgba(150, 57, 45, 0.07);
+  font-weight: 700;
+}
+
+@media (max-width: 920px) {
+  .tm-home-ui-grid { grid-template-columns: 1fr; }
+  .tm-home-ui-choice { grid-template-columns: minmax(150px, 42%) 1fr auto; align-items: center; }
+  .tm-home-ui-choice img { grid-column: 1; grid-row: 1; }
+  .tm-home-ui-choice-copy { grid-column: 2; grid-row: 1; }
+  .tm-home-ui-choice-state { grid-column: 3; grid-row: 1; }
+}
+@media (max-width: 560px) {
+  .tm-home-ui-choice {
+    grid-template-columns: minmax(120px, 42%) minmax(0, 1fr);
+    grid-template-rows: auto auto;
+  }
+  .tm-home-ui-choice img { grid-column: 1; grid-row: 1 / span 2; }
+  .tm-home-ui-choice-copy { grid-column: 2; grid-row: 1; padding-bottom: 0.3rem; }
+  .tm-home-ui-choice-state {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: start;
+    margin: 0 0 0.55rem 0.62rem;
+    min-height: 28px;
+  }
+}
+@media (max-height: 600px), (pointer: coarse) {
+  html[data-tm-home-ui] .home-stage::after {
+    filter: blur(8px) brightness(0.54) saturate(0.68);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-tm-home-ui] .home-card,
+  html[data-tm-home-ui] .home-tools > button,
+  html[data-tm-home-ui] .tm-home-save,
+  html[data-tm-home-ui] .home-stage::before,
+  html[data-tm-home-ui] .home-stage::after,
+  html[data-tm-home-ui] .home-main,
+  .tm-home-ui-choice { transition: none !important; }
+  html[data-tm-home-ui] .tm-home-loading::before,
+  .tm-home-ui-choice.is-loading .tm-home-ui-choice-state::before { animation: none !important; }
+}

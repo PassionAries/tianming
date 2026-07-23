@@ -313,7 +313,7 @@ function _settingsBuildTabs() {
   // 左栏分组（2026-07-01·治「19 项平铺、顺序随意、标签截断」）：按标题归类·组内保持原顺序·
   // 只重排左栏 tab 顺序 + 插组标题·pane 仍按原顺序(只按 key 切换·顺序无关)·不动任何 section 内容。
   var _settingsGroups = [
-    { name: '常用',      re: /界面显示|声乐|主题|字号|文风|游戏模式|回合读取/ },
+    { name: '常用',      re: /主页|界面显示|声乐|主题|字号|文风|游戏模式|回合读取/ },
     { name: 'AI · 模型', re: /API|次要|性能|成本|高级|预算|档位|模型|记忆|生成字数|提示词/ },
     { name: '玩法机制',  re: /御驾|战斗|玩法机制|人物志/ },
     // 2026-07-04 设置重置：「实验·进阶」组退役——实验模式并入「系统·更新与实验」·组空即不渲染
@@ -1190,6 +1190,7 @@ openSettings=function(){
 
     _renderSettingsAudioSection()+
     _renderSettingsThemeFontSection()+
+    ((window.TM && TM.HomeUI && typeof TM.HomeUI.renderSettingsSection==='function') ? TM.HomeUI.renderSettingsSection() : '')+
 
     // 回合读取
     "<div class=\"settings-section\"><h4>\u56DE\u5408\u8BFB\u53D6</h4>"+

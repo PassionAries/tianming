@@ -1420,7 +1420,7 @@
     return '<div class="sec-h"><h3>百工榜</h3><span class="more">只按正式目录实际字段排序</span></div>' +
       '<div class="cols atelier-rank-columns" style="grid-template-columns:1fr 1fr 1fr;">' +
         '<div class="rail"><h4>下载榜</h4>' + rankList(byDown, function(p){ return '↓' + esc(String(p.downloads)); }, '正式目录没有返回下载量字段。') + '</div>' +
-        '<div class="rail"><h4>口碑榜</h4>' + rankList(byRate, function(p){ return '★' + Number(p.rating).toFixed(1) + ' · ' + esc(String(p.ratingCount)) + ' 人'; }, '正式目录没有返回有效评分与评分人数。') + '</div>' +
+        '<div class="rail"><h4>口碑榜</h4>' + rankList(byRate, function(p){ return '★' + Number(p.rating).toFixed(1) + ' · ' + esc(String(p.ratingCount)) + ' 人'; }, '暂无有效评分——首个评分从你开始。') + '</div>' +
         '<div class="rail"><h4>社区推荐榜</h4>' + rankList(byEnd, function(p){ return '✦' + esc(String(p.endorsements)); }, '正式目录没有返回推荐量字段。') + '</div>' +
       '</div>';
   }

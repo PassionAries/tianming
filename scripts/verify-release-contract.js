@@ -31,6 +31,7 @@ function main() {
   ok(limits.problems.length === 0, 'web 源体积/文件数在闸内：' + limits.problems.join('; '));
   const sourcePaths = new Set(sourceTree.kept.map(row => row.rel));
   ok(sourcePaths.has('preview/scenario-editor-reset-app.js') && sourcePaths.has('preview/img/east-asia-basemap-data.js'), '发布树保留 preview 运行时与 preview/img（目录探针不可误杀整树）');
+  ok(!sourcePaths.has('_game-entry-shot.png') && !Array.from(sourcePaths).some((rel) => /^_ingame.*\.png$/i.test(rel)), '发布树排除根目录游戏截图');
 
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const mobileVersion = JSON.parse(fs.readFileSync(path.join(ROOT, 'mobile', 'release-version.json'), 'utf8'));

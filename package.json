@@ -85,6 +85,8 @@
       "!web/**/*.bak*",
       "!web/**/*.log",
       "!web/**/*.yml",
+      "!web/**/_game-entry-shot.png",
+      "!web/**/_ingame*.png",
       "!web/preview/shots/**",
       "!web/preview/shots/**/*",
       "!web/preview/*verify*.png",

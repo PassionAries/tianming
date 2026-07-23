@@ -2,7 +2,7 @@
   "type": "tianming-hot-update",
   "version": "1.3.4.11",
   "entry": "index.html",
-  "generatedAt": "2026-07-23T04:35:38.656Z",
+  "generatedAt": "2026-07-23T04:42:56.328Z",
   "files": [
     {
       "path": "_app_main.js",
@@ -13,31 +13,6 @@
       "path": "_app_preload.js",
       "sha256": "bc697bf24532f9331df50cc653d6c2c5a3841fc73baf1b0cff09ecf6f2e769ba",
       "size": 7576
-    },
-    {
-      "path": "_game-entry-shot.png",
-      "sha256": "a3aa287c6bb1db320629fcba420e46e87ce7d6880303e0790c32809ae0494ab3",
-      "size": 500113
-    },
-    {
-      "path": "_ingame-full.png",
-      "sha256": "aa966364c9bcce87a9cca5d55fa3aaa068c8c4c9a63709fca61318adfbda93f5",
-      "size": 429359
-    },
-    {
-      "path": "_ingame-panel.png",
-      "sha256": "1f33f3761fb1d4b23dc65813ca7e8363ddd394ac8eb66bfb7c1d23e8aa8991c4",
-      "size": 868974
-    },
-    {
-      "path": "_ingame-time.png",
-      "sha256": "d55310553f50771aaaf0da97d8de9ecd9e2c3b429396718b20d2faac848bcb3b",
-      "size": 434100
-    },
-    {
-      "path": "_ingame-topbar.png",
-      "sha256": "a34f6b4fedf4f929d34cdc2a5d7af74f937d84ebfc07b72d424fbc09d206191c",
-      "size": 60636
     },
     {
       "path": "_preview_map.json",

@@ -2,7 +2,8 @@
 # its .tm-release-manifest.json. Read-only; suitable before Android Studio builds.
 param(
   [string]$WebDir = "",
-  [string]$TargetDir = "$PSScriptRoot\..\www"
+  [string]$TargetDir = "$PSScriptRoot\..\www",
+  [switch]$CapacitorNative
 )
 $ErrorActionPreference = 'Stop'
 function Resolve-TianmingRepoRoot {
@@ -28,5 +29,7 @@ if (-not $WebDir) { $WebDir = Join-Path $repoRoot 'web' }
 $stageScript = Join-Path $repoRoot 'scripts\stage-web-release.js'
 $source = (Resolve-Path -LiteralPath $WebDir).Path
 if (-not (Test-Path -LiteralPath $TargetDir)) { throw "待验证 staging 不存在: $TargetDir" }
-& node $stageScript --repo-root $repoRoot --source $source --target $TargetDir --verify --label mobile-www
+$verifyArgs = @($stageScript, '--repo-root', $repoRoot, '--source', $source, '--target', $TargetDir, '--verify', '--label', 'mobile-www')
+if ($CapacitorNative) { $verifyArgs += '--capacitor-native' }
+& node @verifyArgs
 if ($LASTEXITCODE -ne 0) { throw "staging 校验失败·exit=$LASTEXITCODE" }

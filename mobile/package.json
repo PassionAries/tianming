@@ -6,7 +6,7 @@
   "scripts": {
     "stage": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stage-web-for-cap.ps1",
     "verify:staging": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-staged-web.ps1",
-    "verify:native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-staged-web.ps1 -TargetDir android/app/src/main/assets/public",
+    "verify:native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-staged-web.ps1 -TargetDir android/app/src/main/assets/public -CapacitorNative",
     "dryrun": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-staging-dryrun.ps1",
     "sync": "npm run stage && cap sync android && npm run verify:native",
     "copy": "npm run stage && cap copy android && npm run verify:native",

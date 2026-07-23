@@ -10,11 +10,13 @@ function arg(name, fallback) {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
 }
 function flag(name) { return process.argv.includes('--' + name); }
+const CAPACITOR_NATIVE_EXTRAS = Object.freeze(['cordova.js', 'cordova_plugins.js']);
 
 const repoRoot = path.resolve(arg('repo-root', path.resolve(__dirname, '..')));
 const sourceRoot = path.resolve(arg('source', path.join(repoRoot, 'web')));
 const targetArg = arg('target', '');
 const label = arg('label', 'web-release');
+const allowedExtraPaths = flag('capacitor-native') ? CAPACITOR_NATIVE_EXTRAS : [];
 // --tracked-only(默认关·opt-in)：只 stage git 跟踪文件·供 OTA(Capgo 安卓热更)用；
 // 全量安装包(APK/Pages)不传此旗标·行为不变·继续带 assets/vendor 等未跟踪运行素材。
 const trackedOnly = flag('tracked-only');
@@ -34,8 +36,9 @@ try {
   if (!targetArg) throw new Error('--target is required unless --dry-run is used');
   const targetRoot = path.resolve(targetArg);
   if (flag('verify')) {
-    const result = releaseTree.verifyTree({ repoRoot, sourceRoot, targetRoot });
-    console.log('[release-tree] verify PASS · files=' + result.fileCount + ' bytes=' + result.totalBytes + ' sha256=' + result.treeSha256);
+    const result = releaseTree.verifyTree({ repoRoot, sourceRoot, targetRoot, allowedExtraPaths });
+    console.log('[release-tree] verify PASS · files=' + result.fileCount + ' bytes=' + result.totalBytes
+      + ' allowedExtra=' + result.allowedExtraCount + ' sha256=' + result.treeSha256);
   } else {
     const result = releaseTree.stageTree({ repoRoot, sourceRoot, targetRoot, label, trackedOnly });
     console.log('[release-tree] stage PASS · files=' + result.manifest.fileCount + ' bytes=' + result.manifest.totalBytes + ' sha256=' + result.manifest.sourceTreeSha256);

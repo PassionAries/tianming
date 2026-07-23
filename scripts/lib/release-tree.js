@@ -273,6 +273,22 @@ function stageTree(options) {
   return { tree, manifest };
 }
 
+function splitTargetExtras(sourceMap, targetEntries, allowedExtraPaths) {
+  const allowedNames = new Set((allowedExtraPaths || []).map(normalizeRel).filter(Boolean));
+  const comparable = [];
+  const allowed = [];
+  const forbidden = [];
+  for (const row of targetEntries) {
+    const rel = normalizeRel(row.rel);
+    if (!sourceMap.has(rel) && allowedNames.has(rel)) allowed.push(row);
+    else {
+      comparable.push(row);
+      if (!sourceMap.has(rel)) forbidden.push(rel);
+    }
+  }
+  return { comparable, allowed, forbidden };
+}
+
 function verifyTree(options) {
   const safe = assertSafeTarget(options.sourceRoot, options.targetRoot);
   const configInfo = loadConfig(options.repoRoot);
@@ -284,10 +300,12 @@ function verifyTree(options) {
 
   const sourceMap = new Map(source.kept.map((row) => [row.rel, row]));
   const targetMap = new Map(target.kept.map((row) => [row.rel, row]));
+  const targetSplit = splitTargetExtras(sourceMap, target.kept, options.allowedExtraPaths);
   for (const rel of sourceMap.keys()) if (!targetMap.has(rel)) problems.push('staged file missing: ' + rel);
-  for (const rel of targetMap.keys()) if (!sourceMap.has(rel)) problems.push('staged file extra/forbidden: ' + rel);
+  for (const rel of targetSplit.forbidden) problems.push('staged file extra/forbidden: ' + rel);
 
-  const targetHashed = hashEntries(target.kept);
+  const targetHashed = hashEntries(targetSplit.comparable);
+  const comparableLimits = enforceLimits(targetSplit.comparable, configInfo.config);
   const targetHashMap = new Map(targetHashed.map((row) => [row.path, row]));
   for (const [rel, sourceRow] of sourceMap) {
     const targetRow = targetHashMap.get(rel);
@@ -304,15 +322,21 @@ function verifyTree(options) {
     if (manifest) {
       if (manifest.releaseExcludesSha256 !== configInfo.sha256) problems.push('staging manifest exclusion hash stale');
       if (manifest.sourceTreeSha256 !== treeHash(targetHashed)) problems.push('staging manifest tree hash stale');
-      if (manifest.fileCount !== targetHashed.length || manifest.totalBytes !== limits.totalBytes) problems.push('staging manifest counts stale');
+      if (manifest.fileCount !== targetHashed.length || manifest.totalBytes !== comparableLimits.totalBytes) problems.push('staging manifest counts stale');
     }
   }
   if (problems.length) throw new Error('release staging gate failed:\n  - ' + problems.join('\n  - '));
-  return { source, target, totalBytes: limits.totalBytes, fileCount: target.kept.length, treeSha256: treeHash(targetHashed) };
+  return {
+    source, target,
+    totalBytes: comparableLimits.totalBytes,
+    fileCount: targetHashed.length,
+    allowedExtraCount: targetSplit.allowed.length,
+    treeSha256: treeHash(targetHashed)
+  };
 }
 
 module.exports = {
   MANIFEST_NAME, normalizeRel, sha256, sha256File, loadConfig, excludedReason,
   trackedRelSet, walkTree, localIndexReferences, validateSource, enforceLimits, hashEntries,
-  treeHash, assertSafeTarget, assertSafeStageTarget, stageTree, verifyTree
+  treeHash, assertSafeTarget, assertSafeStageTarget, stageTree, splitTargetExtras, verifyTree
 };

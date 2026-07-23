@@ -32,6 +32,8 @@ function main() {
   const sourcePaths = new Set(sourceTree.kept.map(row => row.rel));
   ok(sourcePaths.has('preview/scenario-editor-reset-app.js') && sourcePaths.has('preview/img/east-asia-basemap-data.js'), '发布树保留 preview 运行时与 preview/img（目录探针不可误杀整树）');
   ok(!sourcePaths.has('_game-entry-shot.png') && !Array.from(sourcePaths).some((rel) => /^_ingame.*\.png$/i.test(rel)), '发布树排除根目录游戏截图');
+  const rootDevFiles = ['_audit_deadhandlers.py', 'analyze_globals.py', 'final_scan.sh', 'scan.sh', 'start-server.bat', 'tm-tools.d.ts', 'types.d.ts'];
+  ok(rootDevFiles.every((rel) => !sourcePaths.has(rel)), '发布树排除根目录开发脚本与类型声明');
 
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const mobileVersion = JSON.parse(fs.readFileSync(path.join(ROOT, 'mobile', 'release-version.json'), 'utf8'));
@@ -62,9 +64,28 @@ function main() {
 
   const capConfig = JSON.parse(fs.readFileSync(path.join(ROOT, 'mobile', 'capacitor.config.json'), 'utf8'));
   const mobilePkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'mobile', 'package.json'), 'utf8'));
+  const nativeVerify = fs.readFileSync(path.join(ROOT, 'mobile', 'scripts', 'verify-staged-web.ps1'), 'utf8');
+  const stageWebSource = fs.readFileSync(path.join(ROOT, 'scripts', 'stage-web-release.js'), 'utf8');
   ok(capConfig.webDir === 'www', 'Capacitor 只读取派生 www');
   ok(/npm run stage.*cap sync android.*verify:native/.test(mobilePkg.scripts.sync), 'npm sync 强制 stage→cap sync→native hash verify');
   ok(mobilePkg.scripts.open.startsWith('npm run sync') && mobilePkg.scripts.run.startsWith('npm run sync'), 'open/run 不可绕过 sync gate');
+  ok(mobilePkg.scripts['verify:native'].includes('-CapacitorNative')
+    && !mobilePkg.scripts['verify:staging'].includes('-CapacitorNative')
+    && nativeVerify.includes("'--capacitor-native'")
+    && stageWebSource.includes("Object.freeze(['cordova.js', 'cordova_plugins.js'])"),
+  'native 仅容忍 Capacitor 两个注入文件');
+  const extraFixture = releaseTree.splitTargetExtras(
+    new Map([['index.html', {}]]),
+    [
+      { rel: 'index.html' }, { rel: 'cordova.js' }, { rel: 'cordova_plugins.js' },
+      { rel: 'evil.js' }, { rel: 'nested/cordova.js' }
+    ],
+    ['cordova.js', 'cordova_plugins.js']
+  );
+  ok(extraFixture.allowed.length === 2 && extraFixture.forbidden.length === 2
+    && extraFixture.forbidden.includes('evil.js') && extraFixture.forbidden.includes('nested/cordova.js')
+    && extraFixture.comparable.length === 3,
+  'native extra allowlist 仅放两项，其余仍 fail-closed');
 
   const ignore = fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8');
   ok(ignore.includes('mobile/www/') && ignore.includes('web/bundled-scenarios/*.json'), '派生目录已 ignore');

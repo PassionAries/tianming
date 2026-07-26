@@ -692,7 +692,7 @@ openSettings=function(){
             '<div style="flex:1;">' +
               '<div style="font-size:0.82rem;color:var(--gold);font-weight:600;">📱 回合推演并发档位（安卓提速关键）</div>' +
               '<div style="font-size:0.7rem;color:var(--txt-d);line-height:1.55;margin-top:0.15rem;">过回合时 AI 子调用同时并发几路。安卓平台默认串行（防低内存机型闪退）·<b>安卓机内存充裕者调到 2-3 可显著缩短过回合等待</b>·若过回合闪退请调回默认。桌面端默认 3·一般无需改。</div>' +
-              '<select onchange="if(window._setAiSubcallConcurrency)_setAiSubcallConcurrency(this.value)" style="margin-top:0.3rem;background:var(--bg-d,#1a1a1a);color:var(--txt);border:1px solid var(--bdr);border-radius:4px;padding:0.2rem 0.4rem;">' + _sel + '</select>' +
+              '<select onchange="if(window._setAiSubcallConcurrency)_setAiSubcallConcurrency(this.value)" style="margin-top:0.3rem;">' + _sel + '</select>' +
             '</div>' +
           '</div>' +
           '<label style="display:flex;align-items:flex-start;gap:0.5rem;padding:0.4rem 0;border-bottom:1px dotted var(--bdr);cursor:pointer;">' +
@@ -933,7 +933,7 @@ openSettings=function(){
               '<div style="flex:1;">' +
                 '<div style="font-size:0.8rem;color:var(--gold);font-weight:600;">记忆深度（回合）</div>' +
                 '<div style="font-size:0.68rem;color:var(--txt-d);line-height:1.55;margin-top:0.12rem;">近 N 回合喂"细节"·更早的自动压缩为综合脉络（压缩≠删·agent 仍可主动调取查全）。模型上下文越大可设越高（更全·更耗上下文）。' +
-                  '<select onchange="if(window._setAgentMemoryDepth)_setAgentMemoryDepth(this.value)" style="margin-top:0.3rem;background:var(--bg-d,#1a1a1a);color:var(--txt);border:1px solid var(--bdr);border-radius:4px;padding:0.2rem 0.4rem;">' +
+                  '<select onchange="if(window._setAgentMemoryDepth)_setAgentMemoryDepth(this.value)" style="margin-top:0.3rem;">' +
                     '<option value="4"' + (_memDepth===4?' selected':'') + '>4 · 精简(省上下文/弱模型)</option>' +
                     '<option value="6"' + (_memDepth===6?' selected':'') + '>6 · 标准(默认)</option>' +
                     '<option value="10"' + (_memDepth===10?' selected':'') + '>10 · 丰富(强模型)</option>' +
@@ -955,7 +955,7 @@ openSettings=function(){
               '<div style="flex:1;">' +
                 '<div style="font-size:0.8rem;color:var(--gold);font-weight:600;">工作上下文窗口（轮 · 省 token）</div>' +
                 '<div style="font-size:0.68rem;color:var(--txt-d);line-height:1.55;margin-top:0.12rem;">多轮推演时·上下文保留最近 N 轮的工具明细全文·更早的折叠为一行摘要（token 不随轮数膨胀）。越大越连贯·越耗 token。' +
-                  '<select onchange="if(window._setAgentTranscriptRounds)_setAgentTranscriptRounds(this.value)" style="margin-top:0.3rem;background:var(--bg-d,#1a1a1a);color:var(--txt);border:1px solid var(--bdr);border-radius:4px;padding:0.2rem 0.4rem;">' +
+                  '<select onchange="if(window._setAgentTranscriptRounds)_setAgentTranscriptRounds(this.value)" style="margin-top:0.3rem;">' +
                     '<option value="1"' + (_transRounds===1?' selected':'') + '>1 · 极省</option>' +
                     '<option value="2"' + (_transRounds===2?' selected':'') + '>2 · 标准(默认)</option>' +
                     '<option value="3"' + (_transRounds===3?' selected':'') + '>3 · 宽</option>' +

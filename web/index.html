@@ -72,11 +72,19 @@
 /* 界面字号·早期应用（2026-06-10·治玩家双端「字太小」）。档位存 localStorage（设备本地偏好·
    不进存档），设置面板「界面显示」可调。--text-* token 全是 rem → 改 html 根字号即全局生效。
    在 head 同步应用，避免首屏先渲染小字再跳大。
-   未设置时出厂默认 1.2「大」（owner 2026-06-10 二次拍板再调大）；玩家显式选回「标准」存 1。 */
+   未设置时出厂默认按屏幕宽自适应（2026-08-10·治 2K 高分屏玩家字小反馈·只生效不落盘）：
+   屏幕宽 ≥2400 CSS px（2K 2560@100% 缩放、4K@150% 等）取 1.35「特大」，否则 1.2「大」（owner 2026-06-10
+   二次拍板再调大）；玩家显式选过任何档（含选回「标准」存 1）永远以存值为准。
+   自适应取值与 tm-patches.js _tmUiFontScaleDefault 一字不差（那处是高亮 fallback·两处须同步改）。 */
 (function(){
   try {
     var s = parseFloat(localStorage.getItem('tm.uiFontScale'));
-    if (!s || s < 0.8 || s > 1.6) s = 1.2;
+    if (!s || s < 0.8 || s > 1.6) {
+      // 取屏幕宽而非窗口宽：Electron 冷启动按存档窗口尺寸（出厂 1440×900）建窗，
+      // 本块在 ready-to-show 全屏化之前执行，innerWidth 拿到的是旧窗口宽→2K 首启拿不到特大
+      var w = 0; try { w = (window.screen && window.screen.availWidth) || window.innerWidth || 0; } catch(_) {}
+      s = (w >= 2400) ? 1.35 : 1.2;
+    }
     if (s !== 1) document.documentElement.style.fontSize = (16 * s) + 'px';
   } catch (_) {}
 })();
@@ -687,8 +695,8 @@ console.log('天命游戏脚本开始加载...');
 <script src="tm-endturn-progress.js?v=20260620-agentbeats"></script>
 <script src="tm-endturn-loading.js?v=20260620-agentbeats"></script>
 <script src="tm-theme-font.js?v=20260520-theme-font-scopes"></script>
-<script src="tm-patches.js?v=20260723-homeui10"></script>
-<script src="tm-patches-start.js?v=20260723-homeui10"></script><!-- 立项拆分：剧本启动链(_tmStart*/开场仪典/startGame/doActualStart)·紧挨 patches 之后保序·勿动位置 -->
+<script src="tm-patches.js?v=20260810-hidpi"></script>
+<script src="tm-patches-start.js?v=20260810-hidpi"></script><!-- 立项拆分：剧本启动链(_tmStart*/开场仪典/startGame/doActualStart)·紧挨 patches 之后保序·勿动位置 -->
 <!-- R17-R22: 从 tm-patches.js 抽离的子模块（加载在 patches 之后覆盖原版） -->
 <script src="tm-military-ui.js?v=2026042714"></script>
 <script src="tm-world-view.js?v=2026042714"></script>

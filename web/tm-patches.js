@@ -449,6 +449,16 @@ window._settingsFilter = function(q) {
 // ── 界面显示设置（2026-06-10·治玩家「双端字太小」反馈）─────────────────
 // 字号档：html 根 font-size 缩放。--text-* token 全是 rem → 全局即时生效。
 // 设备本地偏好（localStorage·不进存档）；index.html head 有同 key 的早期应用块。
+// 高分屏自适应出厂档（2026-08-10·治 2K 高分屏玩家字小反馈）：玩家从未显式选过档时按屏幕宽取默认——
+// 屏幕宽 ≥2400 CSS px（2K 2560@100% 缩放、4K@150% 等）→ 1.35「特大」·其余 → 1.2「大」（owner 2026-06-10 拍板）。
+// 只生效不落盘（不写 tm.uiFontScale）——换显示器/窗口后重按当时宽度取默认；玩家一旦显式点档才写存值且永远优先。
+// 取屏幕宽（availWidth）而非窗口宽：Electron 冷启动按存档窗口尺寸建窗、early-apply 在全屏化前执行，
+// innerWidth 拿到的是旧窗口宽（出厂 1440×900）→ 2K 首启拿不到特大；屏幕宽与启动窗口尺寸无关。
+// index.html head early-apply 块内联同一套取值（那处无法引用本函数·两处须一字不差·同步改）。
+function _tmUiFontScaleDefault(){
+  var w = 0; try { w = (window.screen && window.screen.availWidth) || window.innerWidth || 0; } catch(_) {}
+  return (w >= 2400) ? 1.35 : 1.2;
+}
 window._tmSetUiFontScale = function(v, btn){
   // 顺手清旧键 tianming_font_size（tm-audio-theme.js 旧 A+/A- 面板遗留）——它曾在开局时把根字号改回旧值
   try { localStorage.setItem('tm.uiFontScale', String(v)); localStorage.removeItem('tianming_font_size'); } catch(_){}
@@ -553,10 +563,11 @@ openSettings=function(){
   var b=_$("sb2");
   b.innerHTML=
     // 界面显示（2026-06-10·玩家反馈双端字太小）·字号即时生效·分辨率（fit 舞台）改后重载生效
-    // 出厂默认（owner 二次拍板再调大）：字号 1.2「大」·APK 分辨率 1477×831「标准」——读档 fallback
+    // 出厂默认：字号自适应（2026-08-10·高分屏 ≥2400px 宽出厂即 1.35「特大」·其余 1.2「大」·不落盘·显式选择优先）·
+    // APK 分辨率 1477×831「标准」——读档 fallback
     // 须与 index.html early-apply / tm-fixed-fit.js 的默认一致，否则高亮档错位。
     (function(){
-      var _fs = 1.2; try { _fs = parseFloat(localStorage.getItem('tm.uiFontScale')) || 1.2; } catch(_){}
+      var _fs = _tmUiFontScaleDefault(); try { _fs = parseFloat(localStorage.getItem('tm.uiFontScale')) || _fs; } catch(_){}
       function pill(v, label){
         var on = Math.abs(_fs - v) < 0.01;
         return '<button class="bt ' + (on ? 'bp' : 'bs') + ' bsm" onclick="_tmSetUiFontScale(' + v + ',this)" style="flex:1;">' + label + '</button>';

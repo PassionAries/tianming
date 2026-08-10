@@ -6,13 +6,13 @@
   "files": [
     {
       "path": "_app_main.js",
-      "sha256": "8e652786f135f019b8ae1747afb6fbd106047285537a7bed74fbd8537f4a7290",
-      "size": 141590
+      "sha256": "038b602ef7c2cabaa4f161b4264a1522766235cf3eccf0d08887f82eef1b0f10",
+      "size": 143400
     },
     {
       "path": "_app_preload.js",
-      "sha256": "bc697bf24532f9331df50cc653d6c2c5a3841fc73baf1b0cff09ecf6f2e769ba",
-      "size": 7576
+      "sha256": "9581af09928f738e2920bfd90c316d56b96ee99acb0bcd8213dedba8cd3f44e8",
+      "size": 7762
     },
     {
       "path": "_preview_map.json",
@@ -2016,8 +2016,8 @@
     },
     {
       "path": "editor-authoring-agent.js",
-      "sha256": "09d93ff634fa49070a0d1e1b6048a1b942646d979df9e8f6db570a6b8da77bb9",
-      "size": 260662
+      "sha256": "6c159b1b204b37574602d57f3950965bf7b40744d5f57943c0094f21a03a205b",
+      "size": 261637
     },
     {
       "path": "editor-core.js",
@@ -2136,8 +2136,8 @@
     },
     {
       "path": "index.html",
-      "sha256": "cd741cd75af940f6e2697a1775cc4e96c06278986e5ce879769dcaf13b3fde0c",
-      "size": 67476
+      "sha256": "3050ee5acc89745b46420e8960ea69340e19e29308e4d32df81d5ad9618f8398",
+      "size": 67491
     },
     {
       "path": "INDEX.md",
@@ -3311,8 +3311,8 @@
     },
     {
       "path": "preview/scenario-editor-reset-app.js",
-      "sha256": "4443cd0fa98161ac11a1a9f83b8f5a095f599a52910683fb64303c5159f02521",
-      "size": 1388973
+      "sha256": "ff4125895fc7b72cfa2ca364578e3f32e92b91136e125546c60ec2c893da39fa",
+      "size": 1393079
     },
     {
       "path": "preview/scenario-editor-reset-data.js",
@@ -4326,8 +4326,8 @@
     },
     {
       "path": "tm-fixed-fit.js",
-      "sha256": "b8389ca46a89cd691cf007a1439d8a5d43f638dcf6175dc7ccab36dbd1420abc",
-      "size": 15410
+      "sha256": "bb5a1e75c5115a7b413b7ee47ca82318b6718fb2217779b82e2f565ffbc7da45",
+      "size": 16248
     },
     {
       "path": "tm-game-loop-wentian-hardchange.js",

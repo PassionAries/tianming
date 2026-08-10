@@ -162,7 +162,8 @@
     sc[SANDBOX_FLAG] = true;
     ROW_KEYS.forEach(function(key) {
       if (!Array.isArray(sc[key])) return;
-      sc[key] = sc[key].map(function(row) {
+      // 与 normalizeRuntimeScenario/installRows 同款：先归一（字符串条目 parse·垃圾丢弃）再赋 sid·防污染草稿炸沙盒启动
+      sc[key] = _sanitizeRowEntries(sc[key]).map(function(row) {
         var next = clone(row);
         next.sid = sc.id;
         next[SANDBOX_FLAG] = true;

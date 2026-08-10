@@ -1495,16 +1495,34 @@
   }
 
   /** 派发单个工具调用到 S1 工具，返回喂回模型的结果对象。 */
-  // C2 \u00b7 \u6e90\u7801\u8bfb\u53d6\uff08\u6d4f\u89c8\u5668 fetch\uff1bnode/\u65e0 fetch \u4f18\u96c5\u964d\u7ea7\uff09\u3002\u8ba9\u56fd\u5e08\u80fd\u8bfb\u6574\u4e2a\u4ee3\u7801\u5e93\u3002
+  // C2 · 源码读取（双通道：桌面 Electron 走 readWebFile IPC·浏览器走相对路径 fetch；node/无通道优雅降级）。让国师能读整个代码库。
   function _safeSrcPath(p) {
     // 拆 path 段、丢掉 '..'/'.'/空段再重组：堵路径穿越 + 前导 '//' 协议相对 URL 逃逸，保留合法文件名。
     return String(p || '').replace(/\\/g, '/').split('/').filter(function (x) { return x && x !== '..' && x !== '.'; }).join('/');
+  }
+  // 双通道「伪 Response」：桌面有 preload 桥（window.tianming.readWebFile·主进程代读热更感知的 web 根）就走 IPC
+  // （编辑器跑在 file:// origin·Chromium fetch 机制性失败）；浏览器走相对路径 fetch（兼治 Pages 子路径托管 404）。
+  // 返回 { ok, status, text(), json() } 最小 Response 形状，四个源码工具内部逻辑两通道共用。
+  function _srcFetchLike(rel) {
+    if (typeof window !== 'undefined' && window.tianming && typeof window.tianming.readWebFile === 'function') {
+      return window.tianming.readWebFile(rel).then(function (res) {
+        var ok = !!(res && res.success);
+        var text = ok ? String(res.text || '') : '';
+        return {
+          ok: ok,
+          status: ok ? 200 : 404,
+          text: function () { return Promise.resolve(text); },
+          json: function () { return Promise.resolve(JSON.parse(text)); }
+        };
+      });
+    }
+    return fetch(rel);
   }
   function _readSourceTool(p, offset, limit) {
     if (typeof fetch !== 'function') return Promise.resolve({ ok: false, reason: '\u5f53\u524d\u73af\u5883\u4e0d\u652f\u6301\u8bfb\u6e90\u7801\uff08\u4ec5\u7f16\u8f91\u5668\u6d4f\u89c8\u5668\u5185\u53ef\u7528\uff09' });
     var safe = _safeSrcPath(p);
     if (!safe) return Promise.resolve({ ok: false, reason: '\u9700\u8981 path' });
-    return fetch('/' + safe).then(function (r) {
+    return _srcFetchLike(safe).then(function (r) {
       if (!r.ok) return { ok: false, reason: '\u8bfb\u53d6\u5931\u8d25 HTTP ' + r.status + '\uff1a' + safe };
       return r.text().then(function (txt) {
         var lines = txt.split('\n');
@@ -1517,7 +1535,7 @@
   }
   function _listSourceTool(filter) {
     if (typeof fetch !== 'function') return Promise.resolve({ ok: false, reason: '\u4ec5\u6d4f\u89c8\u5668\u5185\u53ef\u7528' });
-    return fetch('/source-manifest.json').then(function (r) {
+    return _srcFetchLike('source-manifest.json').then(function (r) {
       if (!r.ok) return { ok: false, reason: '\u65e0\u6e90\u7801\u6e05\u5355\uff08source-manifest.json \u7f3a\u5931\uff09' };
       return r.json().then(function (m) {
         var files = (m && m.files) || [];
@@ -1533,14 +1551,14 @@
     var maxFiles = Math.min(80, Math.max(1, Number(opts.maxFiles) || 40));
     var glob = opts.glob ? String(opts.glob).toLowerCase() : '';
     var q = String(query);
-    return fetch('/source-manifest.json').then(function (r) { return r.ok ? r.json() : { files: [] }; }).then(function (m) {
+    return _srcFetchLike('source-manifest.json').then(function (r) { return r.ok ? r.json() : { files: [] }; }).then(function (m) {
       var files = ((m && m.files) || []);
       if (glob) files = files.filter(function (f) { return f.toLowerCase().indexOf(glob) >= 0; });
       var scan = files.slice(0, maxFiles), hits = [];
       return scan.reduce(function (chain, f) {
         return chain.then(function () {
           if (hits.length >= 50) return;
-          return fetch('/' + f).then(function (rr) { return rr.ok ? rr.text() : ''; }).then(function (txt) {
+          return _srcFetchLike(f).then(function (rr) { return rr.ok ? rr.text() : ''; }).then(function (txt) {
             var ls = txt.split('\n');
             for (var i = 0; i < ls.length && hits.length < 50; i++) { if (ls[i].indexOf(q) >= 0) hits.push({ file: f, line: i + 1, text: ls[i].trim().slice(0, 180) }); }
           }).catch(function () {});
@@ -1557,7 +1575,7 @@
       ? '\uff08\u6ce8\u610f\uff1a\u672c\u5267\u672c\u662f\u3010\u865a\u6784/\u67b6\u7a7a\u4e16\u754c\u89c2\u3011\u3002\u4ee5\u4e0a\u8303\u5f0f\u6309\u53f2\u5b9e\u5267\u672c\u5199\u5c31\uff0c\u4f60\u53ea\u501f\u9274\u5176\u5b57\u6bb5\u5f62\u72b6\u3001\u8bbe\u5b9a\u6df1\u5ea6\u3001\u6570\u503c\u533a\u95f4\uff1b\u5176\u4e2d\u300c\u51e1\u300a\u4e8c\u5341\u56db\u53f2\u300b\u6709\u4f20\u2192type\u5fc5\u987bhistorical\u300d\u300cbio\u987b\u5f15\u6b63\u53f2\u53f2\u6599\u300d\u300c\u6570\u503c\u5fc5\u987b\u57fa\u4e8e\u53f2\u5b9e\u300d\u7b49\u771f\u5b9e\u5386\u53f2\u8003\u636e\u8981\u6c42\u4e00\u5f8b\u5ffd\u7565\u2014\u2014\u4eba\u7269\u6309\u539f\u521b\u521b\u4f5c\u3001type \u4e00\u5f8b\u586b "fictional"\u3001\u6570\u503c\u6309\u8be5\u4e16\u754c\u8bbe\u5b9a\u81ea\u6d3d\u8bc4\u4f30\u3001bio \u5199\u539f\u521b\u5c0f\u4f20\u4e0d\u5fc5\u5f15\u53f2\u6599\u3002\uff09'
       : '';
     function deU(x) { return String(x == null ? '' : x).replace(/\\u([0-9a-fA-F]{4})/g, function (_, h) { return String.fromCharCode(parseInt(h, 16)); }); }
-    return fetch('/editor-fullgen.js').then(function (r) { return r.ok ? r.text() : ''; }).then(function (text) {
+    return _srcFetchLike('editor-fullgen.js').then(function (r) { return r.ok ? r.text() : ''; }).then(function (text) {
       if (!text) return { ok: false, reason: '\u8bfb\u4e0d\u5230 editor-fullgen.js' };
       var re = /\{\s*key\s*:\s*['"]([^'"]+)['"]\s*,\s*label\s*:\s*['"]([^'"]+)['"]/g, m, steps = [];
       while ((m = re.exec(text))) steps.push({ key: m[1], label: deU(m[2]), idx: m.index });

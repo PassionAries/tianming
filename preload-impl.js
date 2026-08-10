@@ -94,6 +94,10 @@ contextBridge.exposeInMainWorld('tianming', {
   quitApp: () =>
     ipcRenderer.invoke('app-quit'),
 
+  // === 读 web 目录文本文件（国师源码工具·file:// 下 fetch 不可用的桌面通道）===
+  readWebFile: (relPath) =>
+    ipcRenderer.invoke('read-web-file', relPath),
+
   // === 窗口显示模式（全屏 / 窗口）===
   setFullScreen: (flag) =>
     ipcRenderer.invoke('set-fullscreen', flag),

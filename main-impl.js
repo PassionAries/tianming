@@ -2328,6 +2328,35 @@ ipcMain.handle('app-quit', () => {
 });
 
 // ============================================================
+//  读 web 目录文本文件（国师源码工具·桌面端 IPC 通道）
+//  编辑器在桌面端跑在 file:// origin，Chromium fetch 不支持 file: scheme，
+//  故由主进程代读 getActiveWebRoot()（热更感知的 web 根）下的文本文件。
+//  防穿越：拆段丢 '..'/'.'/空段（与编辑器 _safeSrcPath 同款思路）
+//  + 扩展名白名单 + 8MB 上限 + isInsideDir 复核。
+// ============================================================
+const READ_WEB_FILE_MAX_BYTES = 8 * 1024 * 1024;
+const READ_WEB_FILE_EXTS = ['.js', '.json', '.html', '.css', '.md', '.txt'];
+ipcMain.handle('read-web-file', async (event, relPath) => {
+  try {
+    const safe = String(relPath || '').replace(/\\/g, '/').split('/')
+      .filter(x => x && x !== '..' && x !== '.').join('/');
+    if (!safe) return { success: false, error: '需要相对路径' };
+    const ext = path.extname(safe).toLowerCase();
+    if (READ_WEB_FILE_EXTS.indexOf(ext) < 0) return { success: false, error: '不允许的文件类型 ' + (ext || '(无扩展名)') };
+    const root = path.resolve(getActiveWebRoot());
+    const target = path.resolve(root, safe);
+    if (!isInsideDir(root, target)) return { success: false, error: '路径越界 ' + safe };
+    if (!fs.existsSync(target)) return { success: false, error: '文件不存在 ' + safe };
+    const st = fs.statSync(target);
+    if (!st.isFile()) return { success: false, error: '不是普通文件 ' + safe };
+    if (st.size > READ_WEB_FILE_MAX_BYTES) return { success: false, error: '文件超过 8MB 上限 ' + safe };
+    return { success: true, path: safe, text: fs.readFileSync(target, 'utf-8') };
+  } catch (e) {
+    return { success: false, error: e && e.message || String(e) };
+  }
+});
+
+// ============================================================
 //  窗口显示模式：全屏 / 窗口 切换（设置·界面显示）
 //  注：窗口为无边框（frame:false），窗口模式给一个居中的合理尺寸，
 //      玩家可拖动边缘缩放、用应用内「退出」按钮关闭，或切回全屏。

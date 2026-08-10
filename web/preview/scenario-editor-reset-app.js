@@ -11183,6 +11183,27 @@
     return payload;
   }
 
+  // ── 写回条目归一（治污染草稿装死）──
+  // 污染草稿的数组字段可能混入 JSON 字符串条目（如 classes:['{"name":"士绅",…}']），
+  // 旧代码只查 Array.isArray 不查元素类型，clone(字符串) 后赋 next.sid 同步抛 TypeError，写回载荷完全不落地。
+  // 语义：对象→原样；字符串→先走 jsonCandidateFromText 同款容错再 JSON.parse，parse 出对象→用对象（计 repaired）；
+  // parse 失败或 parse 出非对象→丢弃该条（计 dropped）。绝不抛错。
+  var _lastReturnSanitize = { repaired: 0, dropped: 0 };
+  function _sanitizeRowEntries(arr) {
+    var rows = [], repaired = 0, dropped = 0;
+    (Array.isArray(arr) ? arr : []).forEach(function(row) {
+      if (isObject(row) || Array.isArray(row)) { rows.push(row); return; }
+      if (typeof row === 'string') {
+        try {
+          var parsed = JSON.parse(jsonCandidateFromText(row));
+          if (isObject(parsed)) { rows.push(parsed); repaired++; return; }
+        } catch (_) {}
+      }
+      dropped++;
+    });
+    return { rows: rows, repaired: repaired, dropped: dropped };
+  }
+
   function buildRuntimeReturnScenario() {
     var sc = clone(state.scenario || {});
     sc.id = sc.id || uniqueId('scenario');
@@ -11191,9 +11212,16 @@
     sc.role = sc.role || (sc.playerInfo && sc.playerInfo.playerRole) || '';
     sc.background = sc.background || sc.overview || sc.desc || '';
     sc.active = sc.active !== false;
+    _lastReturnSanitize = { repaired: 0, dropped: 0 };
     ['characters', 'factions', 'parties', 'classes', 'items', 'relations', 'events', 'rigidHistoryEvents', 'timeline', 'families'].forEach(function(field) {
       if (!Array.isArray(sc[field])) return;
-      sc[field] = sc[field].map(function(row) {
+      var sane = _sanitizeRowEntries(sc[field]);
+      if (sane.repaired || sane.dropped) {
+        console.warn('[scenario-editor] 写回字段 ' + field + ' 条目归一：自动修复 ' + sane.repaired + ' 条/跳过 ' + sane.dropped + ' 条');
+        _lastReturnSanitize.repaired += sane.repaired;
+        _lastReturnSanitize.dropped += sane.dropped;
+      }
+      sc[field] = sane.rows.map(function(row) {
         var next = clone(row);
         next.sid = sc.id;
         delete next._scenarioEditorSandbox;
@@ -11232,7 +11260,10 @@
       }
       state.runtimeReturn = { id: payload.id, createdAt: payload.createdAt, scenarioName: scenario.name, storage: manifest.storage };
       writeStoredDraft();
-      setStatus(idbOk ? ('已准备写回正式页：' + scenario.name + '（大剧本走本地库）') : ('已准备写回正式页：' + scenario.name), 'good');
+      var fixNote = (_lastReturnSanitize.repaired || _lastReturnSanitize.dropped)
+        ? ('·已自动修复 ' + _lastReturnSanitize.repaired + ' 条格式异常条目/跳过 ' + _lastReturnSanitize.dropped + ' 条')
+        : '';
+      setStatus((idbOk ? ('已准备写回正式页：' + scenario.name + '（大剧本走本地库）') : ('已准备写回正式页：' + scenario.name)) + fixNote, 'good');
       return clone(payload);
     });
   }
@@ -21992,7 +22023,11 @@
     if (command === 'run-quick-test') buildQuickTestReport();
     if (command === 'launch-sandbox-test') launchFormalSandbox();
     if (command === 'launch-quicktest-run') launchFormalSandbox({ quickTest: true });   // 刀④乙·快测一键体检(默认3回合+四类体检·烧数轮 AI·玩家显式触发)
-    if (command === 'return-to-formal-runtime') returnToFormalRuntime();
+    // 写回正式页：归一后仍可能同步抛（如 localStorage 配额），兜住走状态条，别让按钮装死
+    if (command === 'return-to-formal-runtime') {
+      try { returnToFormalRuntime(); }
+      catch (err) { setStatus('写回正式页失败：' + (err && err.message || err), 'error'); }
+    }
     if (command === 'refresh-release-notes') {
       renderReleaseNotes();
       setStatus('发布说明已刷新。', 'good');

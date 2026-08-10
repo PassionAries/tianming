@@ -172,6 +172,41 @@
     return sc;
   }
 
+  // 与编辑器侧 jsonCandidateFromText 同款容错：剥 ```json 围栏/截取首尾括号（对象优先于数组）
+  function jsonCandidateFromText(text) {
+    var trimmed = String(text == null ? '' : text).trim();
+    var fenced = trimmed.match(/^```(?:json|javascript|js)?\s*([\s\S]*?)\s*```$/i);
+    if (fenced) return fenced[1].trim();
+    var firstObject = trimmed.indexOf('{');
+    var lastObject = trimmed.lastIndexOf('}');
+    var firstArray = trimmed.indexOf('[');
+    var lastArray = trimmed.lastIndexOf(']');
+    if (firstObject >= 0 && lastObject > firstObject && (firstArray < 0 || firstObject < firstArray)) return trimmed.slice(firstObject, lastObject + 1);
+    if (firstArray >= 0 && lastArray > firstArray) return trimmed.slice(firstArray, lastArray + 1);
+    return trimmed;
+  }
+
+  // 写回/沙盒载荷条目归一：污染草稿数组字段可能混入 JSON 字符串条目（编辑器侧同源 bug），
+  // 旧代码 clone(字符串) 后赋 next.sid 同步抛 TypeError 导致整个写回/安装中断。
+  // 对象→原样；字符串→走 jsonCandidateFromText 容错后 JSON.parse，parse 出对象→用之；否则丢弃。绝不抛错。
+  function _sanitizeRowEntries(arr) {
+    var rows = [], repaired = 0, dropped = 0;
+    (Array.isArray(arr) ? arr : []).forEach(function(row) {
+      if (isObject(row) || Array.isArray(row)) { rows.push(row); return; }
+      if (typeof row === 'string') {
+        try {
+          var parsed = JSON.parse(jsonCandidateFromText(row));
+          if (isObject(parsed)) { rows.push(parsed); repaired++; return; }
+        } catch (_) {}
+      }
+      dropped++;
+    });
+    if (repaired || dropped) {
+      console.warn('[ScenarioSandboxBridge] 条目归一：自动修复 ' + repaired + ' 条/跳过 ' + dropped + ' 条');
+    }
+    return rows;
+  }
+
   function normalizeRuntimeScenario(input, id) {
     var sc = clone(input || {});
     sc.id = id || sc.id || ('scenario-editor-return-' + Date.now().toString(36));
@@ -183,7 +218,7 @@
     delete sc[SANDBOX_FLAG];
     ROW_KEYS.forEach(function(key) {
       if (!Array.isArray(sc[key])) return;
-      sc[key] = sc[key].map(function(row) {
+      sc[key] = _sanitizeRowEntries(sc[key]).map(function(row) {
         var next = clone(row);
         next.sid = sc.id;
         delete next[SANDBOX_FLAG];
@@ -199,7 +234,7 @@
     global.P[key] = (global.P[key] || []).filter(function(row) {
       return row && row.sid !== sid && !row[SANDBOX_FLAG];
     });
-    global.P[key] = global.P[key].concat(rows.map(function(row) {
+    global.P[key] = global.P[key].concat(_sanitizeRowEntries(rows).map(function(row) {
       var next = clone(row);
       next.sid = sid;
       if (opts.sandbox !== false) next[SANDBOX_FLAG] = true;

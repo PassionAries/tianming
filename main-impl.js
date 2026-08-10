@@ -1704,6 +1704,8 @@ function cleanupHotUpdateArtifacts() {
 //  主窗口
 // ============================================================
 let mainWindow = null;
+// 2026-08-10·display-metrics-changed 监听只注册一次（createWindow 在 macOS activate 时会重入）
+let displayFitHooked = false;
 
 function createWindow() {
   // 尝试读取上次关闭时的窗口位置和大小
@@ -1714,6 +1716,24 @@ function createWindow() {
       if (saved.window) winState = saved.window;
     }
   } catch (e) { /* 第一次启动没有配置文件，忽略 */ }
+
+  // 2026-08-10·防御：保存的窗口位置整体落在当前所有显示器可视区外（显示器拔了/分辨率降了）
+  //   就丢弃保存值回默认居中——反正 ready-to-show 会 setFullScreen(true)，这只是兜底
+  try {
+    if (winState.x != null && winState.y != null) {
+      const { screen } = require('electron');
+      const r = {
+        x: winState.x, y: winState.y,
+        width: winState.width || 1440, height: winState.height || 900
+      };
+      const onAnyDisplay = screen.getAllDisplays().some(d => {
+        const wa = d.workArea;
+        return r.x < wa.x + wa.width && r.x + r.width > wa.x
+          && r.y < wa.y + wa.height && r.y + r.height > wa.y;
+      });
+      if (!onAnyDisplay) winState = { width: 1440, height: 900 };
+    }
+  } catch (_) {}
 
   // 创建浏览器窗口
   mainWindow = new BrowserWindow({
@@ -1772,6 +1792,53 @@ function createWindow() {
       fs.writeFileSync(CONFIG_FILE, JSON.stringify(Object.assign({}, prev, { window: bounds }), null, 2), 'utf-8');
     } catch (e) { /* 忽略 */ }
   });
+
+  // 2026-08-10·运行中切换系统显示分辨率时重新贴合新显示边界。
+  //   无边框全屏窗口（frame:false + fullscreen）在 Windows 下不跟踪分辨率变更，
+  //   窗口滞留旧尺寸 → 右侧界面被切到屏外（玩家实测 2K→1080p 顶栏/内帑面板出屏·不该要重启）。
+  //   screen 只能在 app ready 后 require；分辨率切换会连发多个事件，去抖 200ms 收敛成一次。
+  if (!displayFitHooked) {
+    displayFitHooked = true;
+    try {
+      const { screen } = require('electron');
+      let refitTimer = null;
+      screen.on('display-metrics-changed', () => {
+        if (refitTimer) clearTimeout(refitTimer);
+        refitTimer = setTimeout(() => {
+          refitTimer = null;
+          try {
+            if (!mainWindow || mainWindow.isDestroyed()) return;
+            if (mainWindow.isFullScreen()) {
+              // 全屏滞留旧尺寸的标准修法：退出全屏紧接着再进全屏，窗口即贴合新显示边界；
+              // 退出/重进会改写正常档边界，先存下、事后 set 回去（失败就居中）
+              const normalBounds = mainWindow.getNormalBounds();
+              mainWindow.setFullScreen(false);
+              mainWindow.setFullScreen(true);
+              try {
+                if (normalBounds) mainWindow.setBounds(normalBounds);
+              } catch (_) {
+                try { mainWindow.center(); } catch (_) {}
+              }
+            } else {
+              // 窗口模式：把窗口夹进所在显示器的工作区（超宽就缩·出界就拉回）
+              const b = mainWindow.getBounds();
+              const wa = screen.getDisplayMatching(b).workArea;
+              let { x, y, width, height } = b;
+              width = Math.min(width, wa.width);
+              height = Math.min(height, wa.height);
+              if (x + width > wa.x + wa.width) x = wa.x + wa.width - width;
+              if (y + height > wa.y + wa.height) y = wa.y + wa.height - height;
+              if (x < wa.x) x = wa.x;
+              if (y < wa.y) y = wa.y;
+              if (x !== b.x || y !== b.y || width !== b.width || height !== b.height) {
+                mainWindow.setBounds({ x, y, width, height });
+              }
+            }
+          } catch (_) {}
+        }, 200);
+      });
+    } catch (_) {}
+  }
 
   // 设置菜单栏
   createMenu();

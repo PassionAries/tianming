@@ -449,15 +449,26 @@ window._settingsFilter = function(q) {
 // ── 界面显示设置（2026-06-10·治玩家「双端字太小」反馈）─────────────────
 // 字号档：html 根 font-size 缩放。--text-* token 全是 rem → 全局即时生效。
 // 设备本地偏好（localStorage·不进存档）；index.html head 有同 key 的早期应用块。
-// 高分屏自适应出厂档（2026-08-10·治 2K 高分屏玩家字小反馈）：玩家从未显式选过档时按屏幕宽取默认——
-// 屏幕宽 ≥2400 CSS px（2K 2560@100% 缩放、4K@150% 等）→ 1.35「特大」·其余 → 1.2「大」（owner 2026-06-10 拍板）。
+// 高分屏自适应出厂档（2026-08-10·治高分屏玩家字小反馈）：玩家从未显式选过档时自适应取默认——
+// ①按屏幕宽定档：≥3400 CSS px（4K@100% 等）→ 1.6·≥2400（2K 2560@100%、4K@150% 等）→ 1.35「特大」·其余 → 1.2「大」（owner 2026-06-10 拍板）。
+//   取屏幕宽（availWidth）而非窗口宽：Electron 冷启动按存档窗口尺寸建窗、early-apply 在全屏化前执行，
+//   innerWidth 拿到的是旧窗口宽（出厂 1440×900）→ 2K 首启拿不到特大；屏幕宽与启动窗口尺寸无关。
+// ②防双重放大：桌面显式选了「渲染分辨率」固定舞台且舞台整体放大（stg>1）时，字号默认 ÷舞台放大率折算
+//   （夹 0.9~1.6·取两位小数）——舞台缩放已把界面字图一起拉大，再叠字号档字会顶出面板；舞台缩小
+//   （APK 手机 stg<1）不折算，维持 ①的基础档（owner 拍板的 APK 出厂行为不变）。stg 按屏幕算（加载早期窗口未全屏·innerWidth 不可信）。
 // 只生效不落盘（不写 tm.uiFontScale）——换显示器/窗口后重按当时宽度取默认；玩家一旦显式点档才写存值且永远优先。
-// 取屏幕宽（availWidth）而非窗口宽：Electron 冷启动按存档窗口尺寸建窗、early-apply 在全屏化前执行，
-// innerWidth 拿到的是旧窗口宽（出厂 1440×900）→ 2K 首启拿不到特大；屏幕宽与启动窗口尺寸无关。
 // index.html head early-apply 块内联同一套取值（那处无法引用本函数·两处须一字不差·同步改）。
 function _tmUiFontScaleDefault(){
-  var w = 0; try { w = (window.screen && window.screen.availWidth) || window.innerWidth || 0; } catch(_) {}
-  return (w >= 2400) ? 1.35 : 1.2;
+  var w = 0, sh = 0; try { w = (window.screen && window.screen.availWidth) || window.innerWidth || 0; sh = (window.screen && window.screen.availHeight) || window.innerHeight || 0; } catch(_) {}
+  var s = (w >= 3400) ? 1.6 : (w >= 2400) ? 1.35 : 1.2;
+  try {
+    var res = localStorage.getItem('tm.fitResolution'), m = res && /^(\d{3,4})x(\d{3,4})$/.exec(res);
+    if (m && w > 0 && sh > 0) {
+      var stg = Math.min(w / (+m[1]), sh / (+m[2]));
+      if (stg > 1) s = Math.round(Math.min(1.6, Math.max(0.9, s / stg)) * 100) / 100;
+    }
+  } catch(_) {}
+  return s;
 }
 window._tmSetUiFontScale = function(v, btn){
   // 顺手清旧键 tianming_font_size（tm-audio-theme.js 旧 A+/A- 面板遗留）——它曾在开局时把根字号改回旧值
@@ -469,6 +480,21 @@ window._tmSetUiFontScale = function(v, btn){
     btn.classList.remove('bs'); btn.classList.add('bp');
   }
 };
+// 运行中重适配（2026-08-10·「无论屏幕分辨率/渲染档位都自动适配」）：玩家未显式选档时，窗口改大小、
+// 拖到别的显示器 → 去抖 300ms 重算自适应出厂档并即时应用，不用重启不用刷新；显式选过档（有存值）完全不参与。
+try {
+  var _tmFsAdaptT = null;
+  window.addEventListener('resize', function(){
+    try { if (localStorage.getItem('tm.uiFontScale')) return; } catch(_) { return; }
+    if (_tmFsAdaptT) clearTimeout(_tmFsAdaptT);
+    _tmFsAdaptT = setTimeout(function(){
+      try {
+        var s = _tmUiFontScaleDefault();
+        document.documentElement.style.fontSize = (s === 1 ? '' : (16 * s) + 'px');
+      } catch(_) {}
+    }, 300);
+  });
+} catch(_) {}
 // 渲染分辨率（fit 虚拟舞台·tm-fixed-fit.js 读同 key）：'auto'=桌面自适应窗口（不开 fit）·
 // 'WxH'=固定舞台整体缩放（APK 必走舞台·默认 1477x831）。CSSOM 归一化不可逆 → 改档整页重载。
 window._tmSetFitResolution = function(btn){
@@ -563,7 +589,8 @@ openSettings=function(){
   var b=_$("sb2");
   b.innerHTML=
     // 界面显示（2026-06-10·玩家反馈双端字太小）·字号即时生效·分辨率（fit 舞台）改后重载生效
-    // 出厂默认：字号自适应（2026-08-10·高分屏 ≥2400px 宽出厂即 1.35「特大」·其余 1.2「大」·不落盘·显式选择优先）·
+    // 出厂默认：字号自适应（2026-08-10·屏幕宽 ≥3400 取 1.6·≥2400 取 1.35「特大」·其余 1.2「大」；
+    // 固定舞台整体放大时随之折算防双重放大·窗口变化运行中重适配·不落盘·显式选择优先）·
     // APK 分辨率 1477×831「标准」——读档 fallback
     // 须与 index.html early-apply / tm-fixed-fit.js 的默认一致，否则高亮档错位。
     (function(){

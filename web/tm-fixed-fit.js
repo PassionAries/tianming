@@ -11,7 +11,7 @@
 //    · width=device-width：layout viewport=真设备宽 → html=屏宽·overflow:hidden 真夹住·不滚动·transform 真 contain。
 //      代价=御案的 @media(max-width:…) 会按真设备宽（横屏~900px）误触发 → 隐藏动作栏/左栏、御案 reflow 成残废。
 //    · ✅ 解法 = device-width（拿干净缩放/不 pan/不滚动）
-//             + 运行时 CSSOM「舞台归一化」(见下 normalizeStage)：删 max-width 断点 + fixed→absolute + vw/vh→px
+//             + 运行时 CSSOM「舞台归一化」(见下 normalizeStage)：删 max-width 断点 + fixed→absolute + 各类 vw/vh→px
 //               （把御案从 viewport 相对改写成 1920×1080 舞台相对·不靠 WebView 的 fixed+transform 怪癖）
 //             + 隐藏 legacy #mobile-nav（tm-game-loop _initMobileNav 冒的旧底栏）。
 //
@@ -97,12 +97,13 @@
   (document.head || document.documentElement).appendChild(style);
   document.documentElement.classList.add('tm-fixed-fit');
 
-  // ── CSSOM「舞台归一化」：把御案从「viewport 相对（fixed/vw/vh）」改写成「舞台相对（absolute/px）」──
-  //   真机 Android WebView：position:fixed 锚到真视口（无视 body 的 transform）、vw/vh 也指真视口
-  //   → fixed 顶栏/动作栏/弹窗/右 rail 飘到屏幕边、vw 定位错位（桌面 Edge honor transform 故看不出·真机才炸）。
+  // ── CSSOM「舞台归一化」：把御案从「viewport 相对（fixed/各类 vw/vh）」改写成「舞台相对（absolute/px）」──
+  //   真机 Android WebView：position:fixed 锚到真视口（无视 body 的 transform），vw/vh/dvh 等也指真视口
+  //   → fixed 顶栏/动作栏/弹窗/右 rail 飘到屏幕边、视口单位定位错位（桌面 Edge honor transform 故看不出·真机才炸）。
   //   CSSOM 这层（仅同源样式表·改规则·仅 fixed-fit 下）：
   //     ① 删所有含 max-width 的 @media（不因真设备窄 reflow·保留 pointer:coarse/hover:none/max-height/min-width）；
-  //     ② 值里的 Nvw/Nvh → px（N*VW/100 / N*VH/100·钉到 1920×1080 舞台·不再指真视口）。
+  //     ② 值里的 Nvw/Nvh/Ndvh/Nsvh/Nlvh 等 → px（N*VW/100 / N*VH/100·钉到虚拟舞台·不再指真视口）；
+  //     ③ 递归 @supports/@layer 等 grouping rule（新 UI 常在 @supports(height:100dvh) 内覆盖旧 100vh）。
   //   位置（fixed→absolute+reparent）交 DOM 层 anchorEl 处理（见下·按计算后 position 侦测·兼收规则与内联 fixed）。
   //   配 body{position:absolute;1920×1080;transform:scale} → 整个御案成自洽的绝对定位舞台·随 body 等比缩放。
   //   仅同源可读写；跨域/未就绪 try/catch 跳过，靠多次重扫 + MutationObserver 兜未来注入的 <style>。
@@ -122,11 +123,27 @@
           try { owner.deleteRule(j); } catch (_) {}
           continue;
         }
-        try { if (r.cssRules) walkRules(r, r.cssRules); } catch (_) {}
-      } else if (r.type === 1 /* STYLE_RULE */ && r.style) {
+      }
+      if (r.type === 1 /* STYLE_RULE */ && r.style) {
         fixStyleRule(r.style);
       }
+      // CSSSupportsRule / CSSLayerBlockRule / CSSScopeRule 等同样包 cssRules；
+      // 不能只递归 @media，否则 @supports 里的 100dvh 会逃回真设备视口并被 body 再缩一次。
+      try { if (r.cssRules) walkRules(r, r.cssRules); } catch (_) {}
     }
+  }
+  var STAGE_VIEWPORT_UNIT_TEST = /(?:^|[^\w.-])-?(?:\d+(?:\.\d+)?|\.\d+)(?:[dls])?v[wh](?![\w.-])/i;
+  var STAGE_VIEWPORT_UNIT_RE = /(^|[^\w.-])(-?(?:\d+(?:\.\d+)?|\.\d+))(?:[dls])?v([wh])(?![\w.-])/gi;
+  var STAGE_PROTECTED_VALUE_RE = /((?:url\(\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^)]*)\s*\)|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'))/gi;
+  function stageViewportUnits(value) {
+    // content 字符串与 url(...) 里的“100dvh.png”是文件名/文本，不是长度 token，必须原样保留。
+    var parts = String(value).split(STAGE_PROTECTED_VALUE_RE);
+    for (var i = 0; i < parts.length; i += 2) {
+      parts[i] = parts[i].replace(STAGE_VIEWPORT_UNIT_RE, function (_m, prefix, n, axis) {
+        return prefix + (parseFloat(n) * (String(axis).toLowerCase() === 'w' ? VW : VH) / 100) + 'px';
+      });
+    }
+    return parts.join('');
   }
   function fixStyleRule(st) {
     try {
@@ -135,28 +152,25 @@
       for (k = 0; k < st.length; k++) props.push(st[k]);
       for (k = 0; k < props.length; k++) {
         var p = props[k], v = st.getPropertyValue(p);
-        if (v && /\d(?:\.\d+)?v[wh]/.test(v)) {
-          var nv = v.replace(/(\d+(?:\.\d+)?)vw/g, function (_m, n) { return (parseFloat(n) * VW / 100) + 'px'; })
-                    .replace(/(\d+(?:\.\d+)?)vh/g, function (_m, n) { return (parseFloat(n) * VH / 100) + 'px'; });
+        if (v && STAGE_VIEWPORT_UNIT_TEST.test(v)) {
+          var nv = stageViewportUnits(v);
           if (nv !== v) st.setProperty(p, nv, st.getPropertyPriority(p));
         }
       }
     } catch (_) {}
   }
-  // ── DOM 归一化：内联 position:fixed（弹窗多用 el.style.cssText='position:fixed;…' 创建）→ absolute + 内联 vw/vh→px ──
+  // ── DOM 归一化：内联 position:fixed（弹窗多用 el.style.cssText='position:fixed;…' 创建）→ absolute + 内联视口单位→px ──
   //   就地改 style·**不移 DOM**——曾试 reparent fixed 元素到 body（想解决嵌套 fixed 锚错祖先），但游戏持有元素父链
   //   引用·移动后 classList null 崩游戏（实测）。改用：fixed→absolute 后锚「最近定位祖先」；绝大多数 fixed 弹窗/顶栏/
   //   动作栏是 body 直接子→锚 body 舞台正确。少数嵌在定位容器里的（如 #tm-right-rail 在 .gs-rail-right）→ 靠上面
   //   style 把那个容器 position:static 化（让其 absolute 子落到 body）·不移 DOM·安全。
   function inlineVwVh(st) {
-    var ct = st && st.cssText; if (!ct || !/\d(?:\.\d+)?v[wh]/.test(ct)) return;
+    var ct = st && st.cssText; if (!ct || !STAGE_VIEWPORT_UNIT_TEST.test(ct)) return;
     var props = [], k; for (k = 0; k < st.length; k++) props.push(st[k]);
     for (k = 0; k < props.length; k++) {
       var p = props[k], v = st.getPropertyValue(p);
-      if (v && /\d(?:\.\d+)?v[wh]/.test(v))
-        st.setProperty(p, v.replace(/(\d+(?:\.\d+)?)vw/g, function (_m, n) { return (parseFloat(n) * VW / 100) + 'px'; })
-                           .replace(/(\d+(?:\.\d+)?)vh/g, function (_m, n) { return (parseFloat(n) * VH / 100) + 'px'; }),
-                    st.getPropertyPriority(p));
+      if (v && STAGE_VIEWPORT_UNIT_TEST.test(v))
+        st.setProperty(p, stageViewportUnits(v), st.getPropertyPriority(p));
     }
   }
   function anchorEl(el) {

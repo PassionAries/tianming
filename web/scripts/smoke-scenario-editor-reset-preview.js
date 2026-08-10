@@ -3322,4 +3322,29 @@ assert(/diffs\.forEach\(function\(d\)/.test(authoringRenderJs)
   && !/var inner = es\.slice\(0,\s*40\)/.test(authoringRenderJs),
   'every diff hunk should remain visible and individually rejectable');
 
+// 列传行 data-folio-field 与顶层字段同名（military/name…）·两个 change 监听器撞车曾把
+// 人物「军」数值直写 state.scenario.military（军队列表整个被数字覆盖）。三道闸必须都在：
+// ①顶层折子监听器跳过带 data-folio-char 的列传行 ②saveFolioField 拒绝标量覆盖对象/数组
+// ③草稿/案卷载入时自愈已被数值覆盖的 military。
+assert(/dataset\.folioField && event\.target\.dataset\.folioChar == null/.test(appJs),
+  'top-level folio change listener must skip char-folio rows (folioChar guard)');
+assert(/oldIsStruct && !\(next !== null && typeof next === 'object'\)/.test(appJs),
+  'saveFolioField must reject scalar overwrite of structured top-level fields');
+assert(/function healScalarCorruptedMilitary/.test(appJs)
+  && (appJs.match(/healScalarCorruptedMilitary\(\)/g) || []).length >= 2,
+  'scalar-corrupted military should self-heal on draft load and project snapshot load');
+
+// 列传编辑流不许弹回名录顶部：①字段保存只就地刷新当前名录卡+详情头（整块重建会吃掉
+// 落向下一张卡的点击且 scrollTop 归零）②选人/加特质走的 reRenderModulePrimary 须先记
+// .rwf2-roster 滚动位置、重渲后复位。
+assert(/function refreshCharFolioInPlace/.test(appJs)
+  && /card\.outerHTML = rosterCard\(/.test(appJs)
+  && /dh\.outerHTML = charDetailHead\(/.test(appJs),
+  'char folio field save must refresh roster card + detail head in place, not rebuild the folio');
+assert(!/rebuildCharFolioKeepScroll/.test(appJs)
+  && (appJs.match(/refreshCharFolioInPlace\(charIndex\)/g) || []).length >= 2,
+  'saveCharFolioField (incl. wuchang branch) must route through the in-place refresh');
+assert(/function reRenderModulePrimary\(\)[\s\S]{0,600}?roster \? roster\.scrollTop : 0[\s\S]{0,300}?roster\.scrollTop = top/.test(appJs),
+  'reRenderModulePrimary must preserve .rwf2-roster scroll across re-render');
+
 console.log('smoke-scenario-editor-reset-preview OK: ' + passed + ' assertions');

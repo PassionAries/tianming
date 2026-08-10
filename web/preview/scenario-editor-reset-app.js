@@ -1245,6 +1245,20 @@
     return null;
   }
 
+  // 旧伤自愈：双 change 监听器撞车曾把列传「军」数值直写 state.scenario.military，
+  // 顶层军事对象（含 initialTroops 全部部队）被一个数字覆盖并随草稿/案卷持久化。
+  // 载入时发现 military 是标量 → 优先从底稿找回，找不回退成空骨架。返回提示语（无伤返回 null）。
+  function healScalarCorruptedMilitary() {
+    var sc = state.scenario;
+    if (!sc || sc.military == null || typeof sc.military === 'object') return null;
+    var restored = state.original && isObject(state.original.military) ? clone(state.original.military) : null;
+    sc.military = restored || { troops: [], facilities: [], organization: [], campaigns: [], initialTroops: [], militarySystem: [] };
+    state.dirty = true;
+    return restored
+      ? '检测到军事字段曾被数值覆盖，已从底稿找回军队列表'
+      : '检测到军事字段曾被数值覆盖，已重置为空骨架，军队条目需重建';
+  }
+
   function writeStoredDraft() {
     setSaveIndicator('saving');
     var payload = {
@@ -2426,6 +2440,7 @@
         state.validationRan = false;
       }
     }
+    var militaryHealNote = healScalarCorruptedMilitary();
     if (!state.modules.length) {
       state.modules = [{ id: 'scenarioOpening', title: '剧本总览', topLevelKeys: Object.keys(state.scenario || {}), topLevelCount: Object.keys(state.scenario || {}).length }];
     }
@@ -2434,7 +2449,8 @@
     state.selectedField = isAgentEditableFieldKey(state.selectedField) ? state.selectedField : firstAgentEditableField(findModule(state.selectedModuleId).topLevelKeys);
     resetEditTimeline();
     renderAll();
-    setStatus(state.dirty ? '本地草稿已载入' : '官方剧本已载入', state.dirty ? 'warn' : 'good');
+    if (militaryHealNote) setStatus(militaryHealNote, 'warn');
+    else setStatus(state.dirty ? '本地草稿已载入' : '官方剧本已载入', state.dirty ? 'warn' : 'good');
   }
 
   // The baked blueprint only assigns 天启-present keys to modules
@@ -6060,10 +6076,13 @@
     var next = parseEditable(rawValue, oldValue);
     // 修 bug：number/boolean 字段被清空或填非法值时 parseEditable 会落成 ''/字符串损坏类型
     //（游戏按数字读会得 NaN）。数字解析结果非数字、布尔非布尔 → 拒绝并回填旧值。
+    // 对象/数组字段同理：标量顶不掉结构（military 曾被列传「军」数值 93 整个覆盖）。
+    var oldIsStruct = oldValue !== null && typeof oldValue === 'object';
     if ((typeof oldValue === 'number' && typeof next !== 'number') ||
-        (typeof oldValue === 'boolean' && typeof next !== 'boolean')) {
-      if (inputEl && 'value' in inputEl) inputEl.value = (oldValue == null ? '' : String(oldValue));
-      setStatus('「' + field + '」需要' + (typeof oldValue === 'number' ? '数字' : '是/否') + '，已保留原值', 'warn');
+        (typeof oldValue === 'boolean' && typeof next !== 'boolean') ||
+        (oldIsStruct && !(next !== null && typeof next === 'object'))) {
+      if (inputEl && 'value' in inputEl) inputEl.value = oldIsStruct ? '' : (oldValue == null ? '' : String(oldValue));
+      setStatus('「' + field + '」需要' + (oldIsStruct ? '对象/列表' : (typeof oldValue === 'number' ? '数字' : '是/否')) + '，已保留原值', 'warn');
       return;
     }
     if (stableString(next) === stableString(oldValue)) return;
@@ -14082,11 +14101,13 @@
         return genFieldBlock('characters', i, k, val, nestLabels, CHAR_NEST_SUB);
       }).join('') + '</div></div>';
     }
+    return charDetailHead(c) + secs + extraHtml + complexHtml;
+  }
+  function charDetailHead(c) {
     var psrc = charPortraitSrc(c);
     var inner = psrc ? '<img class="rwf2-portrait" src="' + escapeHtml(psrc) + '" alt="立绘" onerror="this.classList.add(&#39;rwf2-noimg&#39;)">' : '<span class="rwf2-portrait rwf2-noimg"></span>';
     var face = '<button class="rwf2-pbtn" data-editor-command="folio-pick-portrait" title="点击设置立绘路径">' + inner + '<span class="rwf2-pedit">设立绘</span></button>';
-    var head = '<div class="rwf2-dh">' + face + '<span class="rwf2-dh-t"><b>' + escapeHtml(c.name || '无名') + '</b><span>' + escapeHtml(c.officialTitle || c.title || '') + '</span></span></div>';
-    return head + secs + extraHtml + complexHtml;
+    return '<div class="rwf2-dh">' + face + '<span class="rwf2-dh-t"><b>' + escapeHtml(c.name || '无名') + '</b><span>' + escapeHtml(c.officialTitle || c.title || '') + '</span></span></div>';
   }
   function selectFolioChar(i) {
     if (!(i >= 0)) return;
@@ -14096,8 +14117,13 @@
   // ── 可视化编辑 B · 势力外交关系图谱（不可见内容可视化·就地编辑）──
   function reRenderModulePrimary() {
     var host = document.getElementById('module-primary-view');
-    if (host) host.innerHTML = modulePrimaryView(state.selectedModuleId) || '';
-    else renderAll();
+    if (!host) { renderAll(); return; }
+    // 名录列自滚（.rwf2-roster overflow:auto），innerHTML 替换会把它清回顶部；
+    // 选人/加删特质等都走这里——先记滚动位置，重渲后复位，免得连录多人时每次都弹回名录顶部。
+    var roster = host.querySelector('.rwf2-roster');
+    var top = roster ? roster.scrollTop : 0;
+    host.innerHTML = modulePrimaryView(state.selectedModuleId) || '';
+    if (top) { roster = host.querySelector('.rwf2-roster'); if (roster) roster.scrollTop = top; }
   }
   function saveFactionRelationField(index, field, raw) {
     var rows = state.scenario.factionRelations;
@@ -15250,27 +15276,31 @@
       if (!chars[charIndex].wuchang || typeof chars[charIndex].wuchang !== 'object') chars[charIndex].wuchang = {};
       chars[charIndex].wuchang[sub] = Math.max(0, Math.min(100, num));
       recordHistory('列传编辑', (chars[charIndex].name || ('#' + charIndex)) + ' · 五常·' + sub);
-      rebuildCharFolioKeepScroll();
+      refreshCharFolioInPlace(charIndex);
       return;
     }
     setEntityProp(chars[charIndex], field, raw, 'characters');
     recordHistory('列传编辑', (chars[charIndex].name || ('#' + charIndex)) + ' · ' + field);
-    rebuildCharFolioKeepScroll();
+    refreshCharFolioInPlace(charIndex);
   }
-  // 列传字段编辑会整块重建 folio（含左侧名录）；重建前记下名录 scrollTop、重建后复位，
-  // 免得连录多人时每次保存都被弹回名录顶部（右侧详情仍随 selectedCharIndex 走）。
-  function rebuildCharFolioKeepScroll() {
-    var html = renderCharacterFolio();
-    var hosts = [document.getElementById('module-primary-view'), document.querySelector('[data-panel="renwu-folio"]')];
+  // 列传字段保存绝不整块重建 folio：blur 触发的 DOM 替换会吃掉用户落向下一张名录卡/
+  // 下一个输入框的点击，名录 scrollTop 也随之归零（连录多人每改一人被弹回顶部）。
+  // 只就地刷新当前名录卡与详情头（名字/头衔/属性摘要）；排序、势力分组的变化等
+  // 下次全量渲染（切人/切章）再追上——刻意取舍。
+  function refreshCharFolioInPlace(charIndex) {
+    var chars = Array.isArray(state.scenario.characters) ? state.scenario.characters : [];
+    var sel = (typeof state._folioSel === 'number' && state._folioSel >= 0 && state._folioSel < chars.length) ? state._folioSel : 0;
+    var i = (typeof charIndex === 'number' && chars[charIndex]) ? charIndex : sel;
+    var c = chars[i];
     var any = false;
-    hosts.forEach(function(h) {
+    [document.getElementById('module-primary-view'), document.querySelector('[data-panel="renwu-folio"]')].forEach(function(h) {
       if (!h) return;
-      var prev = h.querySelector('.rwf2-roster');
-      var top = prev ? prev.scrollTop : 0;
-      h.innerHTML = html;
-      var next = h.querySelector('.rwf2-roster');
-      if (next && top) next.scrollTop = top;
       any = true;
+      if (!c) return;
+      var card = h.querySelector('.rwf2-rc[data-folio-char-i="' + i + '"]');
+      if (card) card.outerHTML = rosterCard(c, i, sel);
+      var dh = h.querySelector('.rwf2-detail .rwf2-dh');
+      if (dh) dh.outerHTML = charDetailHead(c);
     });
     if (!any) renderAll();
   }
@@ -20826,6 +20856,7 @@
     state.currentProjectId = snapshot.id;
     state.dirty = false;
     state.validationRan = false;
+    var militaryHealNote = healScalarCorruptedMilitary();
     ensureModulesPopulated();
     state.selectedModuleId = state.modules[0].id;
     state.selectedField = firstAgentEditableField(state.modules[0].topLevelKeys);
@@ -20833,7 +20864,8 @@
     resetEditTimeline();
     writeStoredDraft();
     renderAll();
-    setStatus('已载入案卷：' + (snapshot.name || meta && meta.name || id), 'good');
+    if (militaryHealNote) setStatus(militaryHealNote, 'warn');
+    else setStatus('已载入案卷：' + (snapshot.name || meta && meta.name || id), 'good');
     return clone(snapshot);
   }
 
@@ -22343,7 +22375,10 @@
       if (t && t.dispatchEvent) t.dispatchEvent(new Event('input', { bubbles: true }));
     });
     document.addEventListener('change', function(event) {
-      if (event.target && event.target.dataset && event.target.dataset.folioField) {
+      // 人物列传行也带 data-folio-field（键名 military/name… 与剧本顶层字段同名），归上面
+      // 监听器的 saveCharFolioField 管；那里的 return 拦不住本监听器再收到同一事件——
+      // 不跳过就会把人物数值直写 state.scenario 顶层（军=93 覆盖整个军事对象）。
+      if (event.target && event.target.dataset && event.target.dataset.folioField && event.target.dataset.folioChar == null) {
         saveFolioField(event.target.dataset.folioField, event.target.value, event.target);
       }
       if (event.target && event.target.dataset.editorControl === 'workbench-panel-select') {

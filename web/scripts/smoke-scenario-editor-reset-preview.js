@@ -633,6 +633,16 @@ const officeGovernanceWorkbenchSource = appJs.slice(
 );
 assert(officeGovernanceWorkbenchSource.includes('state.scenario.officeTree'),
   'officeConfig governance route should still render the saved officeTree hierarchy');
+// 官制章 folio（清单/树状图）增补入口：玩家反馈树上/详情找不到手动添加按钮
+assert(appJs.includes('data-editor-command="office-add-root"'), 'office folio header should expose a top-level 官署 add button');
+assert(appJs.includes("if (command === 'office-add-root') { state.selectedField = 'officeTree';"),
+  'office-add-root should pin officeTree then flow through the addTreeNode officeTree branch');
+assert(appJs.includes('data-editor-command="office-add-pos"'), 'office node detail panel should expose a per-dept position add button');
+assert(appJs.includes("if (command === 'office-add-pos') { addOfficePositionRow("),
+  'office-add-pos should pass the selected node path to addOfficePositionRow');
+assert(appJs.includes('function addOfficePositionRow(nodePath)'), 'addOfficePositionRow should accept an optional target dept path');
+assert(appJs.includes('var dept = nodePath ? resolveOfficePath(nodePath) : state.scenario.officeTree[0];'),
+  'addOfficePositionRow without a node path should keep appending to the first top-level dept');
 assert(appJs.includes('function renderPresetRelationsWorkbench'), 'preview app should render a preset relations workbench');
 assert(appJs.includes('function savePresetRelationsWorkbench'), 'preview app should save preset relation edits');
 assert(appJs.includes('function addPresetRelationRow'), 'preview app should add preset relation rows');

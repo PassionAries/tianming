@@ -6045,11 +6045,13 @@
     return clone(officeConfig.costVariables[officeConfig.costVariables.length - 1]);
   }
 
-  function addOfficePositionRow() {
+  function addOfficePositionRow(nodePath) {
     if (document.querySelector('[data-structured-kind="office-governance"]')) saveOfficeGovernanceWorkbench({ silent: true });
     if (!Array.isArray(state.scenario.officeTree)) state.scenario.officeTree = [];
     if (!state.scenario.officeTree.length) state.scenario.officeTree.push({ id: uniqueId('office'), name: '新机构', desc: '待补机构说明', positions: [], subs: [] });
-    var dept = state.scenario.officeTree[0];
+    // 可带目标衙门路径（org-chart 节点 id·形如 0.subs.2）；不带则维持原行为·塞首个顶级机构
+    var dept = nodePath ? resolveOfficePath(nodePath) : state.scenario.officeTree[0];
+    if (!dept) { setStatus('未找到目标衙门，请先在树上点选', 'warn'); return null; }
     if (!Array.isArray(dept.positions)) dept.positions = [];
     dept.positions.push(officePositionTemplate());
     state.selectedField = 'officeTree';
@@ -14895,7 +14897,8 @@
       var row2 = hasExtra ? '<div class="oft-pos2"><span class="oft-l">俸</span>' + ctl('salary', pos.salary, '俸禄', true) + ctl('perPersonSalary', pos.perPersonSalary, '俸注') + '<span class="oft-l">权</span>' + ctl('authority', pos.authority, '权限') + ctl('succession', pos.succession, '继任') + ('powers' in pos ? ctl('powers', pos.powers, '权责') : '') + ('privateIncome' in pos ? ctl('privateIncome', pos.privateIncome, '灰收') : '') + '</div>' + ('duties' in pos ? '<div class="oft-duties"><span class="oft-l">职责</span>' + ctl('duties', pos.duties, '职责') + '</div>' : '') : '';
       return row1 + row2;
     }).join('');
-    return '<div class="oft-node"><div class="oft-h"><b>' + escapeHtml(node.name || '') + '</b><span>' + escapeHtml(node.desc || '') + '</span></div>' +
+    return '<div class="oft-node"><div class="oft-h"><b>' + escapeHtml(node.name || '') + '</b><span>' + escapeHtml(node.desc || '') + '</span>' +
+      '<button class="mini-ai" style="margin-left:auto" data-editor-command="office-add-pos" data-office-node="' + escapeHtml(pathStr) + '" title="往本衙门追加一行新官职">＋新增官职条目</button></div>' +
       (posRows ? '<div class="oft-poshead"><span>官职</span><span>品级</span><span>现任</span><span>员额</span><span>缺员</span></div>' + posRows : '<div class="rwf2-empty">本衙门暂无官职条目</div>') + '</div>';
   }
   function resolveOfficePath(pathStr) {
@@ -14914,6 +14917,7 @@
     var tabbar = '<div class="facf-tabs">' +
       '<button class="facf-tab' + (view === 'list' ? ' on' : '') + '" data-editor-command="office-view" data-office-view="list">清单</button>' +
       '<button class="facf-tab' + (view === 'tree' ? ' on' : '') + '" data-editor-command="office-view" data-office-view="tree">树状图</button>' +
+      '<button class="ai-button" style="margin-left:auto" data-editor-command="office-add-root" title="在官署树根部新增一个顶级衙门">＋新增官署</button>' +
     '</div>';
     var headTxt = '官制 · ' + tree.length + ' 衙门 · 员额 ' + count + ' · 缺员 ' + vac + ' · ' + (view === 'tree' ? '拖拽平移·点节点编辑该衙门官职' : '各官职现任/员额/缺员可就地改');
     if (view === 'tree') {
@@ -21828,6 +21832,10 @@
     if (command === 'admin-toggle-node') { var nid = target && target.dataset && target.dataset.adminNodeId; if (nid) { if (!state._adminExpanded) state._adminExpanded = {}; if (state._adminExpanded[nid]) delete state._adminExpanded[nid]; else state._adminExpanded[nid] = 1; reRenderModulePrimary(); } return; }
     if (command === 'admin-view') { state._adminView = (target && target.dataset && target.dataset.adminView) || 'list'; reRenderModulePrimary(); return; }
     if (command === 'office-view') { state._officeView = (target && target.dataset && target.dataset.officeView) || 'list'; reRenderModulePrimary(); return; }
+    // 官制 folio 增补入口：新增顶级官署走 addTreeNode 的 officeTree 分支（先钉 selectedField）
+    if (command === 'office-add-root') { state.selectedField = 'officeTree'; state.selectedModuleId = inferModuleForField('officeTree'); addTreeNode(); return; }
+    // 往当前点选衙门（详情面板带 data-office-node 路径）追加一行新官职
+    if (command === 'office-add-pos') { addOfficePositionRow(target && target.dataset && target.dataset.officeNode); return; }
     if (command === 'orgchart-pick') {
       var okind = target && target.dataset && target.dataset.ocKind, oid = target && target.dataset && target.dataset.ocId;
       if (okind === 'admin') state._adminDivId = oid; else if (okind === 'office') state._officeNodeId = oid;

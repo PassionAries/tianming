@@ -734,8 +734,19 @@
       return count;
     }
 
-    Object.keys(G.adminHierarchy).forEach(function(factionKey) {
-      if (opts.faction && factionKey !== opts.faction) return;
+    var _facKeys = Object.keys(G.adminHierarchy);
+    if (opts.faction) {
+      if (_facKeys.indexOf(opts.faction) >= 0) {
+        _facKeys = [opts.faction];
+      } else if (opts.faction === 'player' && _facKeys.length) {
+        // 2026-08 玩家剧本事故：国师导出以势力名（如「楚」）为键、无 'player' 键 → strict 匹配走 0 个区、中央月入被抹成 0。
+        // 与 IntegrationBridge.getTopLevelDivisions 同一解析：'player' 键缺省时取第一势力。
+        _facKeys = [_facKeys[0]];
+      } else {
+        _facKeys = [];
+      }
+    }
+    _facKeys.forEach(function(factionKey) {
       var tree = G.adminHierarchy[factionKey];
       if (tree && Array.isArray(tree.divisions)) {
         for (var i = 0; i < tree.divisions.length; i++) visit(tree.divisions[i], null, factionKey);
@@ -1276,6 +1287,31 @@
       }
     });
 
+    // 2026-08 玩家剧本事故根治·preferStaticRemit（剧本未 authored 任何税制 → DEFAULT_TAXES 兜底·旗置于一 cascadeCollect ctx）：
+    // 架空/压缩尺度 economyBase 会算出≈0 伪收入并抹掉作者 fiscalDetail 静态账（国库月入全灭）。
+    // 计算上供不足作者 fiscalDetail.remittedToCenter(年额折回合)一半 = 计算路径对此地无真税基 →
+    // 中央钱入补足到作者口径、地方静态账保持原样（不覆写不归零·与下方归零病修同理）；
+    // 计算健康（≥作者口径一半）则照旧走计算覆写（零变更）。fiscalDetail 优先于可能被旧版覆写过的 fiscal。
+    var _staticRemitAnnual = (ctx && ctx.preferStaticRemit)
+      ? safeNumber(div.fiscalDetail && div.fiscalDetail.remittedToCenter, safeNumber(div.fiscal && div.fiscal.remittedToCenter, 0))
+      : 0;
+    if (_staticRemitAnnual > 0) {
+      var _staticExpect = Math.max(0, Math.round(_staticRemitAnnual * safeNumber(ctx && ctx.turnFracOfYear, 0)));
+      if (_staticExpect > 0 && remitMoney < _staticExpect * 0.5) {
+        var _srTopUp = _staticExpect - remitMoney;
+        if (_srTopUp > 0) {
+          addToLedger(ledgers.money, _srTopUp, 'staticRemit');
+          totals.central.money += _srTopUp;
+          if (!totals.contribByCategory) totals.contribByCategory = {};
+          if (!totals.contribByCategory.staticRemit) totals.contribByCategory.staticRemit = {};
+          var _srDivName = div.name || div.id || 'unknown';
+          totals.contribByCategory.staticRemit[_srDivName] = safeNumber(totals.contribByCategory.staticRemit[_srDivName], 0) + _srTopUp;
+        }
+        if (div.fiscal) div.fiscal._thisTurnRemitMoney = _staticExpect;
+        return; // 作者静态账保持原样·不走下方计算覆写
+      }
+    }
+
     // 2026-06-12 归零病修：cascade 在此区划一文未征（无 economyBase 税基/全免科）时，
     // 不得用 0 抹掉剧本静态账——否则册页「应征 234 万/实征 0」自相矛盾、财赋视图直接归零。
     // 一文未征 = 本引擎对此地无话语权，账面保持原样（剧本/上回合值）。
@@ -1443,6 +1479,13 @@
       turnFracOfYear: turnFrac
     };
 
+    // 2026-08 玩家剧本事故根治：剧本未 authored 任何税制（无 taxList/taxes/customTaxes → DEFAULT_TAXES 兜底）时，
+    // DEFAULT_TAXES×economyBase 对架空/压缩尺度数据会算出≈0 伪收入、并抹掉作者 fiscalDetail 静态账（国库月入全灭）。
+    // 此时各区以作者 fiscalDetail.remittedToCenter(年额)折回合为中央钱入（cascadeDivision 内落地）。authored 税制剧本 = 旧行为零变更。
+    ctx.preferStaticRemit = !(Array.isArray(fc.taxList) && fc.taxList.length)
+      && !(Array.isArray(fc.taxes) && fc.taxes.length)
+      && !(Array.isArray(fc.customTaxes) && fc.customTaxes.length);
+
     var totals = {
       central: { money: 0, grain: 0, cloth: 0 },
       localRetain: { money: 0, grain: 0, cloth: 0 },
@@ -1477,7 +1520,8 @@
       yongBu: 'qita',
       shangShui: 'shipaiShui',
       yanlizhuan: 'yanlizhuan',
-      caoliang: 'caoliang'
+      caoliang: 'caoliang',
+      staticRemit: 'qita'
     };
     ['money', 'grain', 'cloth'].forEach(function(kind) {
       var led = ledgers[kind];

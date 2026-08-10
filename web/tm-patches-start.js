@@ -93,6 +93,38 @@ function _tmStartLoadVars(sid, sc) {
   return Object.keys(GM.vars || {}).length;
 }
 
+// 民心全局 pin（2026-08 玩家剧本事故）：剧本 variables 里 name:'民心' 的数值是作者对全国开局民心的显式设定，
+// 但民心官方账 GM.minxin 由玩家势力叶子区划 minxinLocal 自底向上聚合、从不读 variables → 作者设定被静默丢弃。
+// 把显式 pin 落到玩家势力叶子（minxin/minxinLocal），进游戏聚合（aggregateRegionsToVariables）自然得出作者值；无此变量 = 行为不变。
+// 仅新开局生效（GM.turn>1 跳过·防读档后覆盖回合内已漂移的叶子民心）。
+function _tmStartPinMinxinFromVars(sc) {
+  try {
+    if (!sc || !Array.isArray(sc.variables)) return false;
+    if (typeof GM !== 'undefined' && GM && (GM.turn || 1) > 1) return false;
+    var pin = null;
+    sc.variables.forEach(function (v) { if (v && v.name === '民心' && isFinite(parseFloat(v.value))) pin = parseFloat(v.value); });
+    if (pin === null) return false;
+    pin = Math.max(0, Math.min(100, pin));
+    function _pinLeaves(ah) {
+      if (!ah || typeof ah !== 'object') return 0;
+      // 与 IntegrationBridge.getTopLevelDivisions 同一解析：player 键缺省时取第一势力——保证 pin 的集合正是聚合的集合
+      var fac = ah.player || ah[Object.keys(ah)[0]];
+      var leaves = [];
+      (function walk(ns) {
+        (ns || []).forEach(function (n) {
+          if (!n || typeof n !== 'object') return;
+          if (Array.isArray(n.children) && n.children.length) walk(n.children); else leaves.push(n);
+        });
+      })(fac && fac.divisions);
+      leaves.forEach(function (d) { d.minxin = pin; d.minxinLocal = pin; });
+      return leaves.length;
+    }
+    var n1 = (typeof P !== 'undefined' && P && P.adminHierarchy) ? _pinLeaves(P.adminHierarchy) : 0;
+    var n2 = (typeof GM !== 'undefined' && GM && GM.adminHierarchy) ? _pinLeaves(GM.adminHierarchy) : 0;
+    return (n1 + n2) > 0;
+  } catch (e) { return false; }
+}
+
 function _tmStartMapSource(sc, allowDisabled) {
   if (typeof GM !== 'undefined' && _tmStartHasRegions(GM.mapData)) return GM.mapData;
   if (typeof P !== 'undefined' && P) {
@@ -1084,6 +1116,7 @@ function doActualStart(sid, requestToken){
   // 根治(跨剧本)：GM.adminHierarchy 此前只在 fullLoadGame(存档加载)恢复·doActualStart(新开局)从不设→
   // 新开局 GM.adminHierarchy=undefined → 财政引擎 cascadeCollect 经 getGame().adminHierarchy 找不到任何区 → 落 fixedCollect 兜底 → 收入畸低(绍宋开局显七万·实应数百万/月)。开局即同步。
   if(P.adminHierarchy && typeof GM !== 'undefined' && GM && (!GM.adminHierarchy || Object.keys(GM.adminHierarchy).length === 0)) GM.adminHierarchy = deepClone(P.adminHierarchy);
+  _tmStartPinMinxinFromVars(sc); // 民心显式 pin（2026-08 玩家剧本事故·仅新开局生效·实现见 _tmStartLoadVars 后）
   if(sc.officeTree) P.officeTree = deepClone(sc.officeTree);
   if(sc.officeConfig) P.officeConfig = deepClone(sc.officeConfig);
   // 官制数据源优先级：government.nodes（编辑器主数据，含holder）> officeTree（旧兜底）
@@ -1096,6 +1129,9 @@ function doActualStart(sid, requestToken){
     }
   }
   // 同步到 GM
+  // 官制树形状归一（2026-08 玩家剧本事故）：国师/案卷写出的 {children,holder,level} 嵌套形状与引擎契约 {positions,subs} 不符——
+  // 不归一则全树 0 职位槽、人物官衔无处入座、全被甩进（编制外）动态部门平铺。归一+拍平后与官方剧本同构。
+  if (P.officeTree && typeof _offNormalizeTreeShape === 'function') P.officeTree = _offNormalizeTreeShape(P.officeTree); // arch-ok：本函数即剧本装载写 P 口（与邻行 deepClone 赋 P 同类）
   if(P.officeTree && P.officeTree.length>0) GM.officeTree = deepClone(P.officeTree);
   if(sc.techTree) P.techTree = deepClone(sc.techTree);
   if(sc.civicTree) P.civicTree = deepClone(sc.civicTree);

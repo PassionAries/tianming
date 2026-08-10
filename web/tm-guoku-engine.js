@@ -1442,6 +1442,36 @@
       if (go.monthlyExpense !== undefined) GM.guoku.monthlyExpense = go.monthlyExpense;
       if (go.annualIncome !== undefined)  GM.guoku.annualIncome = go.annualIncome;
     }
+    // 兼容·2026-08 玩家剧本事故：案卷/国师常把财政写进 fiscalConfig.{treasury,monthlyIncome,monthlyExpense}
+    // 或 guoku.{money,grain,库存折贯,常平仓石}——这些键此前零读者 → 作者国库/月入设定全灭（开局退回朝代默认）。
+    // 归一为兜底：显式 initialMoney/balance/monthly*Estimate 仍优先；月入月支依旧只是占位（真值由 CascadeTax 活算覆盖）。
+    if (scenarioOverride) {
+      var _goC = scenarioOverride.guoku || {};
+      var _fcC = scenarioOverride.fiscalConfig || {};
+      var _pickFiscalNum = function () { for (var _i = 0; _i < arguments.length; _i++) { var _v = Number(arguments[_i]); if (isFinite(_v) && _v >= 0) return _v; } return null; };
+      if (_goC.initialMoney === undefined && _goC.balance === undefined) {
+        var _legacyStock = _pickFiscalNum(_goC.money, _goC['库存折贯'], _fcC.treasury);
+        if (_legacyStock !== null) { GM.guoku.balance = _legacyStock; GM.guoku.ledgers.money.stock = _legacyStock; } // arch-ok：本函数即 guoku 模型初始化写口（与上方剧本覆盖块同类）
+      }
+      if (_goC.initialGrain === undefined) {
+        var _legacyGrain = _pickFiscalNum(_goC.grain, _goC['常平仓石']);
+        if (_legacyGrain !== null) { GM.guoku.ledgers.grain.stock = _legacyGrain; GM.guoku.grain = _legacyGrain; } // arch-ok：guoku 初始化写口
+      }
+      if (_goC.initialCloth === undefined) {
+        var _legacyCloth = _pickFiscalNum(_goC.cloth);
+        if (_legacyCloth !== null) { GM.guoku.ledgers.cloth.stock = _legacyCloth; GM.guoku.cloth = _legacyCloth; } // arch-ok：guoku 初始化写口
+      }
+      var _hasIncEst = !!(_goC.monthlyIncomeEstimate && _goC.monthlyIncomeEstimate.money != null);
+      if (!_hasIncEst && _goC.monthlyIncome === undefined && !(typeof GM !== 'undefined' && GM && GM._lastCascadeSummary)) {
+        var _legacyInc = _pickFiscalNum(_fcC.monthlyIncome);
+        if (_legacyInc !== null) GM.guoku.monthlyIncome = _legacyInc; // arch-ok：guoku 初始化写口
+      }
+      var _hasExpEst = !!(_goC.monthlyExpenseEstimate && _goC.monthlyExpenseEstimate.money != null);
+      if (!_hasExpEst && _goC.monthlyExpense === undefined) {
+        var _legacyExp = _pickFiscalNum(_fcC.monthlyExpense);
+        if (_legacyExp !== null) GM.guoku.monthlyExpense = _legacyExp; // arch-ok：guoku 初始化写口
+      }
+    }
     return { dynasty: dynasty, phase: phase, multiplier: mult };
   }
 

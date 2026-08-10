@@ -123,6 +123,51 @@ function _offWalkOfficeTree(nodes, visitor, chain) {
   return true;
 }
 
+/**
+ * 官制树形状归一（2026-08 玩家剧本事故兼容·装载期调用见 tm-patches-start）。
+ * 引擎契约：{ id, name, desc, positions:[...], subs:[递归同形] }；国师/案卷常见写法：{ name, level, desc, holder, children:[…] }。
+ * 规则：children 中「自身还有非空 children」→ 次级部门（递归归一）；其余叶子 → 职位（level→rank·holder→holder·「（阙…）」开头=空缺）。
+ * 已有 positions/subs 的节点原样保留（官方剧本零变更）·children 与 positions 并存时合并；部门级 holder 不入座（契约上任者属于职位）。
+ * 次级部门拍平为顶级（树图 V10 不读 subs·拍平后次级部门与其堂官全部可见可入座）。返回新数组；输入非数组原样返回。
+ */
+function _offNormalizeTreeShape(tree) {
+  if (!Array.isArray(tree)) return tree;
+  function _vacant(h) { return !h || /^[（(]\s*阙/.test(String(h)); }
+  function _convNode(n) {
+    if (!n || typeof n !== 'object') return null;
+    var out = {};
+    Object.keys(n).forEach(function (k) { if (k !== 'children' && k !== 'subs' && k !== 'positions' && k !== 'holder' && k !== 'level') out[k] = n[k]; });
+    out.positions = Array.isArray(n.positions) ? n.positions.slice() : [];
+    var subs = Array.isArray(n.subs) ? n.subs.slice() : [];
+    (Array.isArray(n.children) ? n.children : []).forEach(function (c) {
+      if (!c || typeof c !== 'object') return;
+      if (Array.isArray(c.children) && c.children.length > 0) { subs.push(c); return; }
+      out.positions.push({
+        name: c.name || '', rank: c.rank || c.level || '',
+        holder: _vacant(c.holder) ? '' : String(c.holder),
+        desc: c.desc || c.description || '',
+        establishedCount: 1, vacancyCount: _vacant(c.holder) ? 1 : 0
+      });
+    });
+    var outSubs = [];
+    subs.forEach(function (s) { var cs = _convNode(s); if (cs) outSubs.push(cs); });
+    out.subs = outSubs;
+    return out;
+  }
+  var flat = [];
+  tree.forEach(function (n) {
+    var cn = _convNode(n);
+    if (!cn) return;
+    flat.push(cn);
+    (function _lift(node) {
+      var lifted = (node.subs || []).slice();
+      node.subs = [];
+      lifted.forEach(function (s) { flat.push(s); _lift(s); });
+    })(cn);
+  });
+  return flat;
+}
+
 function _offNormalizeTitleName(title) {
   var t = String(title == null ? '' : title).replace(/\s+/g, '').replace(/^[·、，,。；;]+|[·、，,。；;]+$/g, '');
   return /^(无|无职|未任|布衣|—|-|null|undefined)$/i.test(t) ? '' : t;

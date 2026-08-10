@@ -2693,6 +2693,15 @@
     return { ok: added.length === 0, violations: added, results: {}, stats: { checked: groups.length, failed: added.length ? 1 : 0 } };
   }
 
+  // 元素级归一（onApply 用·2026-08-10 堵双编码洞）：数组集合内混入的字符串条目多为 LLM 双编码的
+  //   实体 JSON（偶套 ```json 围栏）→ parse 回对象/数组；无法解析返回 null → 丢弃计数。
+  //   与 editor-authoring-agent.js 的 _coerceEntityValue 同规：写入侧拦新，这里兜存量草稿。
+  function _coerceArrElem(s) {
+    var t = String(s).trim(), m = t.match(/^```(?:json)?\s*([\s\S]*?)```$/i);
+    if (m) t = m[1].trim();
+    try { var p = JSON.parse(t); return (p && typeof p === 'object') ? p : null; } catch (e) { return null; }
+  }
+
   function onApply() {
     if (ui._pendingClarify) {   // 方向K · 提交澄清回答 → 续接 onGenerate（输入框里是玩家的回答）
       if (!(ui.els.req.value || '').trim()) { setStatus('请先在输入框回答问题'); return; }
@@ -2712,14 +2721,26 @@
       if (diffs.length && rej.size >= diffs.length) { setStatus('已拒绝全部改动，未应用'); return; }
       var _liveBefore = ui.adapter.getScenario();
       var _finalSc = _applyScenario();
+      var _fixN = 0, _dropN = 0;   // 元素级归一计数：字符串条目 parse 修复 / 无法解析丢弃
       ['characters', 'factions', 'parties', 'classes', 'items', 'events', 'families', 'relations', 'factionRelations', 'rigidHistoryEvents', 'timeline', 'openingLetters', 'goals'].forEach(function (f) {
-        if (!_finalSc || _finalSc[f] == null || Array.isArray(_finalSc[f])) return;
-        var _v = _finalSc[f];
-        if (typeof _v === 'object') {
-          var _ks = Object.keys(_v);
-          // 数字键对象→还原数组；命名对象（单条漏包数组）→包成 [实体]
-          _finalSc[f] = (_ks.length && _ks.every(function (k) { return /^\d+$/.test(k); })) ? _ks.map(function (k) { return _v[k]; }) : [_v];
-        } else { _finalSc[f] = [_v]; }
+        if (!_finalSc || _finalSc[f] == null) return;
+        if (!Array.isArray(_finalSc[f])) {
+          var _v = _finalSc[f];
+          if (typeof _v === 'object') {
+            var _ks = Object.keys(_v);
+            // 数字键对象→还原数组；命名对象（单条漏包数组）→包成 [实体]
+            _finalSc[f] = (_ks.length && _ks.every(function (k) { return /^\d+$/.test(k); })) ? _ks.map(function (k) { return _v[k]; }) : [_v];
+          } else { _finalSc[f] = [_v]; }
+        }
+        // 元素级归一：数组内字符串条目（LLM 双编码 JSON）parse 回对象；无法解析的丢弃·防污染写回链
+        _finalSc[f] = _finalSc[f].reduce(function (acc, it) {
+          if (typeof it !== 'string') { acc.push(it); return acc; }
+          var _c = _coerceArrElem(it);
+          if (_c === null) { _dropN++; return acc; }
+          _fixN++;
+          acc.push(_c);
+          return acc;
+        }, []);
       });
       var _selectedValidation = _validateSelectedScenario(_liveBefore, _finalSc);
       if (!_selectedValidation.ok) {
@@ -2729,7 +2750,7 @@
         return;
       }
       _pushCheckpoint('应用前 ' + _ckptTime());   // 通过冲突与选择后校验后才建检查点
-      ui.adapter.commit(_finalSc);   // 应用前规范化：集合字段非数组→数组（修已生成草稿里 agent 误设成对象的集合，防下游遍历崩）
+      ui.adapter.commit(_finalSc);   // 应用前规范化：集合字段非数组→数组 + 数组内字符串条目 parse 修复/丢弃（修 agent 误设/双编码的集合，防下游遍历崩与坏数据写回）
       var _fxN = (ui._pendingSideEffects || []).length;
       if (_fxN && AA && typeof AA.commitSideEffects === 'function') {
         var _fxCommit = AA.commitSideEffects(ui._pendingSideEffects);
@@ -2748,7 +2769,7 @@
         if (_app && typeof _app.markAgentTouched === 'function') _app.markAgentTouched(Object.keys(_touched));
         if (_firstPath && _app && typeof _app.revealPath === 'function') _app.revealPath(_firstPath);
       } catch (e) {}
-      setStatus('已应用到剧本 ✓' + (partial ? '（仅接受的改动·拒绝了 ' + rej.size + ' 处）' : '') + (_fxN ? '（并提交 ' + _fxN + ' 条记忆/技能）' : '') + '（可继续追问·同一会话）');
+      setStatus('已应用到剧本 ✓' + (partial ? '（仅接受的改动·拒绝了 ' + rej.size + ' 处）' : '') + (_fxN ? '（并提交 ' + _fxN + ' 条记忆/技能）' : '') + ((_fixN || _dropN) ? '（已自动修复 ' + _fixN + ' 条' + (_dropN ? '·丢弃 ' + _dropN + ' 条无法解析条目' : '') + '）' : '') + '（可继续追问·同一会话）');
       if (ui._reply) { ui._reply.classList.add('applied'); var _atag = ui._reply.querySelector('.reply-tag'); if (_atag) _atag.textContent = '✓ 已应用到剧本' + (partial ? '（拒绝 ' + rej.size + ' 处）' : ''); }
       _freezeLastReply();   // 聊天化：应用后冻结当前卡（按钮隐藏·成历史只读）
       _clearDraft();

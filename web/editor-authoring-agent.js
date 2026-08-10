@@ -129,6 +129,26 @@
     return _hasUnsafePathSegment(p) || BLOCKED.some(function(re) { return re.test(p); });
   }
 
+  /**
+   * parse-or-reject 归一（写工具入参 value 用·2026-08-10 堵双编码洞）。
+   *   LLM 偶把实体 JSON 双编码成字符串（甚至套 ```json 围栏）传给写工具，原样落进
+   *   classes/families 等数组集合会污染剧本数据、下游写回链崩。
+   *   字符串→容错剥围栏后 JSON.parse：出对象/数组→{ok:true,value}；
+   *   无法解析/解析出标量→{ok:false}，由调用方返回工具错误喂回模型，下轮改传结构化 JSON 自纠。
+   *   非字符串原样放行（{ok:true,value} 原引用）。
+   */
+  function _coerceEntityValue(value) {
+    if (typeof value !== 'string') return { ok: true, value: value };
+    var s = value.trim();
+    var m = s.match(/^```(?:json)?\s*([\s\S]*?)```$/i);
+    if (m) s = m[1].trim();
+    try {
+      var p = JSON.parse(s);
+      if (p && typeof p === 'object') return { ok: true, value: p };
+    } catch (e) {}
+    return { ok: false };
+  }
+
   // ═══════════════════════════════════════════════════════════════════
   //  applyEdit / applyPush —— 旁路 PathUtils 副作用
   // ═══════════════════════════════════════════════════════════════════
@@ -148,6 +168,13 @@
     // 顶层数组集合被整个设成非数组（agent 偶把 relations/events 这类整集合设成对象/单条）→ 转数组，
     //   否则应用/校验/渲染处的 forEach 会炸（applyPush 早有此保护，applyEdit 之前缺）。
     var _ARR_COLLS = { characters: 1, factions: 1, parties: 1, classes: 1, items: 1, events: 1, families: 1, relations: 1, factionRelations: 1, rigidHistoryEvents: 1, timeline: 1, openingLetters: 1, goals: 1 };
+    // 整集合被设成字符串：多为 LLM 双编码的实体 JSON → parse-or-reject；出对象/数组交下方既有归一，
+    //   无法解析→工具错误喂回模型下轮自纠（此前 else 分支把字符串原样包成数组元素·静默落坏数据）
+    if (_ARR_COLLS[String(path)] && typeof value === 'string') {
+      var _cv = _coerceEntityValue(value);
+      if (!_cv.ok) return { ok: false, reason: '集合 ' + path + ' 的值须为对象或数组，收到无法解析的字符串；请直接传结构化 JSON（对象/数组），不要把 JSON 字符串化后再传' };
+      value = _cv.value;
+    }
     if (_ARR_COLLS[String(path)] && value != null && !Array.isArray(value)) {
       if (typeof value === 'object') {
         var _ks = Object.keys(value);
@@ -186,6 +213,15 @@
     if (_hasUnsafePathSegment(path)) return { ok: false, reason: 'unsafe path: ' + path };
     if (!opts.force && isBlocked(path)) return { ok: false, reason: 'blocked path: ' + path };
 
+    // value 的 schema 本就是 object：字符串入参多为 LLM 双编码的实体 JSON → parse-or-reject（同 applyEdit），
+    //   无法解析→工具错误喂回模型下轮自纠（此前原样 push 成字符串元素·污染集合）
+    if (typeof value === 'string') {
+      var _cv = _coerceEntityValue(value);
+      if (!_cv.ok) return { ok: false, reason: 'push 到 ' + path + ' 的值须为对象或数组，收到无法解析的字符串；请直接传结构化 JSON（对象/数组），不要把 JSON 字符串化后再传' };
+      value = _cv.value;
+    }
+    var _vals = Array.isArray(value) ? value : [value];   // 出数组→逐条入列（LLM 常把整批塞进一个值·不当单元素嵌套）
+
     var r = _resolvePath(draft, path);
     if (!r.parent) {
       var keys = String(path).split('.');
@@ -195,12 +231,12 @@
         if (!cur[keys[i]] || typeof cur[keys[i]] !== 'object') return { ok: false, reason: '路径中间段不是对象: ' + keys[i] };
         cur = cur[keys[i]];
       }
-      cur[keys[keys.length - 1]] = [value];
-      return { ok: true, path: path, pushed: value, created: true };
+      cur[keys[keys.length - 1]] = _vals.slice();
+      return { ok: true, path: path, pushed: value, pushedCount: _vals.length, created: true };
     }
     if (!Array.isArray(r.parent[r.key])) r.parent[r.key] = [];
-    r.parent[r.key].push(value);
-    return { ok: true, path: path, pushed: value };
+    for (var _pi = 0; _pi < _vals.length; _pi++) r.parent[r.key].push(_vals[_pi]);
+    return { ok: true, path: path, pushed: value, pushedCount: _vals.length };
   }
 
   /** 删除 draft 某路径的元素（数组按索引 splice·对象 delete）。同样旁路副作用。 */
@@ -3529,6 +3565,7 @@
     applyEdit: applyEdit,
     applyPush: applyPush,
     applyRemove: applyRemove,
+    _coerceEntityValue: _coerceEntityValue,   // 写工具入参 parse-or-reject 归一（onApply 元素级兜底/smoke）
     validateDraft: validateDraft,
     addCheck: addCheck,
     _checks: _checks,

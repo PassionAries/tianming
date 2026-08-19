@@ -201,9 +201,29 @@ async function main() {
     'valid workshop ZIP is extracted entry-by-entry after preflight');
   fs.rmSync(extractedSafe, { recursive: true, force: true });
 
+  const hotBombPath = path.join(TMP, 'hot-size-header-bomb.zip');
+  const hotBombZip = new AdmZip();
+  hotBombZip.addFile('index.html', Buffer.from('<!doctype html>'));
+  const hotBombBytes = hotBombZip.toBuffer();
+  const centralHeader = hotBombBytes.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+  check(centralHeader >= 0, 'hot-update fixture contains a central-directory header');
+  // 0xffffffff is the ZIP64 sentinel; use 4GB-2 so the parser exposes the malicious declared size
+  // to our quota validator without requiring a ZIP64 extra field.
+  hotBombBytes.writeUInt32LE(0xfffffffe, centralHeader + 24);
+  fs.writeFileSync(hotBombPath, hotBombBytes);
+  const hotTempsBefore = new Set(fs.readdirSync(os.tmpdir()).filter(name => name.startsWith('tianming-hot-')));
+  let hotBombError = null;
+  try { await T.extractZipToTempChecked(hotBombPath, 'tianming-hot-'); } catch (error) { hotBombError = error; }
+  const hotTempsAfter = fs.readdirSync(os.tmpdir()).filter(name => name.startsWith('tianming-hot-'));
+  check(hotBombError && /声明解压体积|单文件声明解压体积|ZIP 炸弹/.test(hotBombError.message),
+    'hot-update ZIP with a 4GB declared size is rejected during central-directory preflight; actual=' + String(hotBombError && hotBombError.message));
+  check(hotTempsAfter.every(name => hotTempsBefore.has(name)), 'rejected hot-update ZIP allocates no extraction directory');
+
   const mainSource = fs.readFileSync(path.join(ROOT, 'main-impl.js'), 'utf8');
   const preloadSource = fs.readFileSync(path.join(ROOT, 'preload-impl.js'), 'utf8');
   const builderSource = fs.readFileSync(path.join(ROOT, 'web', 'tools', 'build-hot-update-package.js'), 'utf8');
+  const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  const packageLock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
   check(mainSource.includes("redirect: 'manual'") && mainSource.includes('dns.lookup(hostname, { all: true')
     && mainSource.includes("credentials: 'omit'") && mainSource.includes("referrerPolicy: 'no-referrer'"), 'network proxy revalidates DNS/redirects and omits ambient credentials');
   check(mainSource.includes('WORKSHOP_CATALOG_AUTHORIZATIONS.get(packageUrl)')
@@ -212,6 +232,19 @@ async function main() {
     && !/checkForUpdate:\s*\([^)]*feedUrl/.test(preloadSource), 'renderer bridge cannot provide ordinary/hot update feed URLs');
   check(!builderSource.includes("addLocalFile(path.join(APP_ROOT, 'main")
     && !builderSource.includes("addLocalFile(path.join(APP_ROOT, 'preload"), 'content OTA builder cannot package main/preload executable code');
+  check(!/require\(['"]adm-zip['"]\)/.test(mainSource)
+    && /tempDir = await extractZipToTempChecked\(/.test(mainSource)
+    && /preflightHotUpdateZip\(zipPath\)/.test(mainSource),
+  'production hot-update extraction uses awaited bounded yauzl streaming instead of adm-zip');
+  check(/^\^?0\.6\./.test(packageJson.dependencies['adm-zip'])
+    && packageLock.packages['node_modules/adm-zip'].version === '0.6.0',
+  'remaining build-time adm-zip tooling is pinned to the patched 0.6 line');
+  check(/^\^?6\.8\.9$/.test(packageJson.dependencies['electron-updater'])
+    && packageLock.packages['node_modules/electron-updater'].version === '6.8.9'
+    && packageLock.packages['node_modules/electron-updater/node_modules/builder-util-runtime'].version === '9.7.0',
+  'runtime updater stack includes the cross-origin credential redirect fix');
+  check(packageLock.packages['node_modules/js-yaml'].version === '4.3.1',
+  'runtime YAML parser includes the merge-key and omap complexity fixes');
 
   // 打包进程即使继承测试环境变量，也不得暴露任何测试出口。
   electronStub.app.isPackaged = true;

@@ -87,12 +87,75 @@ function calculateMonthlyIncome(region, eraState) {
   return Math.floor(baseIncome);
 }
 
+function requireEconomyRatio(value, field, fallback) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new RangeError(field + ' must be between 0 and 1');
+  }
+  return value;
+}
+
+function collectPlayerEconomyFactionAliases(runtimeMap) {
+  var aliases = Object.create(null);
+  function add(value) {
+    var normalized = String(value == null ? '' : value).replace(/\s+/g, '').toLowerCase();
+    if (normalized) aliases[normalized] = true;
+  }
+  function matches(value) {
+    var normalized = String(value == null ? '' : value).replace(/\s+/g, '').toLowerCase();
+    return !!(normalized && aliases[normalized]);
+  }
+
+  add(P && P.playerInfo && P.playerInfo.factionName);
+  add(P && P.playerFaction);
+  add(GM && GM.playerFaction);
+
+  var factions = [];
+  if (GM && Array.isArray(GM.facs)) factions = factions.concat(GM.facs);
+  if (P && Array.isArray(P.factions)) factions = factions.concat(P.factions);
+  factions.forEach(function(faction) {
+    if (!faction) return;
+    if (faction.isPlayer || matches(faction.id) || matches(faction.name) || matches(faction.key)) {
+      add(faction.id);
+      add(faction.name);
+      add(faction.key);
+    }
+  });
+
+  var mapFactions = runtimeMap && runtimeMap.factions;
+  if (mapFactions && typeof mapFactions === 'object') {
+    Object.keys(mapFactions).forEach(function(key) {
+      var meta = mapFactions[key] || {};
+      var values = [key, meta.id, meta.key, meta.label, meta.short, meta.scenarioFactionId, meta.scenarioFactionName];
+      if (values.some(matches)) values.forEach(add);
+    });
+  }
+
+  return aliases;
+}
+
+function runtimeRegionBelongsToPlayer(region, aliases) {
+  if (!region) return false;
+  var values = [
+    region.occupiedBy, region.controller, region.currentOwner, region.owner,
+    region.factionId, region.ownerKey, region.currentOwnerKey, region.controllerKey,
+    region.stableFactionId, region.factionName, region.ownerName
+  ];
+  return values.some(function(value) {
+    var normalized = String(value == null ? '' : value).replace(/\s+/g, '').toLowerCase();
+    return !!(normalized && aliases[normalized]);
+  });
+}
+
 // 更新经济系统（在 endTurn 中调用）
 function updateEconomy(timeRatio) {
   if (!GM.eraState) return;
 
   var es = GM.eraState;
   var centralControl = finiteNumberOr(es.centralControl, 0.5);
+  var ecCfg = P.economyConfig || {};
+  var redistributionRate = requireEconomyRatio(ecCfg.redistributionRate, 'economyConfig.redistributionRate', 0.3);
+  var privateRatio = requireEconomyRatio(ecCfg.privateIncomeRatio, 'economyConfig.privateIncomeRatio', 0.15);
 
   // 1. 计算各地区的收入和贡奉
   var totalTribute = 0;
@@ -104,11 +167,19 @@ function updateEconomy(timeRatio) {
   if (!runtimeMap && GM) runtimeMap = GM.mapData || GM.map || null;
   if (!runtimeMap && P) runtimeMap = P.mapData || P.map || null;
   var runtimeRegions = runtimeMap && Array.isArray(runtimeMap.regions) ? runtimeMap.regions : [];
+  var playerAliases = collectPlayerEconomyFactionAliases(runtimeMap);
+  var hasPlayerAlias = Object.keys(playerAliases).length > 0;
+  var hasExplicitPlayerRegion = hasPlayerAlias && runtimeRegions.some(function(region) {
+    return runtimeRegionBelongsToPlayer(region, playerAliases);
+  });
 
   // 如果有地图系统
   if (runtimeRegions.length > 0) {
     runtimeRegions.forEach(function(region) {
       if (!region || (!region.id && !region.name)) return;
+      // 新地图明确标出了玩家领地时，只征收玩家控制区。无法识别归属的旧地图
+      // 保留原来的全图兼容行为，避免旧档突然失去全部收入。
+      if (hasExplicitPlayerRegion && !runtimeRegionBelongsToPlayer(region, playerAliases)) return;
       var regionKey = String(region.id || region.name);
       var regionName = String(region.name || region.id);
 
@@ -148,7 +219,7 @@ function updateEconomy(timeRatio) {
   }
 
   // 1b. 无地图模式：从 GM.provinceStats 计算贡奉（地方区划已由 updateProvinceEconomy 维护）
-  if (totalTribute === 0 && GM.provinceStats && Object.keys(GM.provinceStats).length > 0) {
+  if (runtimeRegions.length === 0 && GM.provinceStats && Object.keys(GM.provinceStats).length > 0) {
     Object.keys(GM.provinceStats).forEach(function(provName) {
       var prov = GM.provinceStats[provName];
       if (!prov) return;
@@ -163,7 +234,6 @@ function updateEconomy(timeRatio) {
 
   // 2. 中央收到贡奉后，按比例回拨
   // 从配置读取回拨比例，默认 0.3
-  var redistributionRate = finiteNumberOr(P.economyConfig && P.economyConfig.redistributionRate, 0.3);
   var redistributed = Math.floor(totalTribute * redistributionRate);
 
   // 3. 按贡献占比分配回拨
@@ -181,9 +251,7 @@ function updateEconomy(timeRatio) {
 
   // 4. 更新中央财政——双层国库（国库/内库分离）
   var netRevenue = totalTribute - redistributed;
-  var ecCfg = P.economyConfig || {};
   var dualTreasury = ecCfg.dualTreasury === true;
-  var privateRatio = finiteNumberOr(ecCfg.privateIncomeRatio, 0.15);
 
   if (dualTreasury) {
     // ═══ 双层国库模式 ═══
@@ -203,7 +271,9 @@ function updateEconomy(timeRatio) {
     }
 
     // 破产检测
-    var bankruptThreshold = ecCfg.bankruptcyThreshold || -5000;
+    var bankruptThreshold = (ecCfg.bankruptcyThreshold === undefined || ecCfg.bankruptcyThreshold === null)
+      ? -5000
+      : finiteNumberOr(ecCfg.bankruptcyThreshold, -5000);
     if (GM.stateTreasury < bankruptThreshold) {
       if (!GM._bankruptcyTurns) GM._bankruptcyTurns = 0;
       GM._bankruptcyTurns++;

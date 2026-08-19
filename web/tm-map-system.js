@@ -19,6 +19,9 @@ function _mapSystemFiniteNumberOr(value, fallback) {
 }
 
 function initMapSystem() {
+  // 旧档可能只有 GM.map，而兼容初始化会预先造出一个空 GM.mapData。
+  // 在补脚手架前先让权威选择器完成一次有版本标记的迁移。
+  getLiveMapData();
   if (!GM.mapData) {
     GM.mapData = {
       cities: {},
@@ -101,11 +104,41 @@ function ensureMapDataScaffold(mapData) {
   return mapData;
 }
 
+var TM_RUNTIME_MAP_SCHEMA_VERSION = 1;
+
+function hasRuntimeMapContent(mapData) {
+  if (!mapData || typeof mapData !== 'object') return false;
+  if (Array.isArray(mapData.regions) && mapData.regions.length > 0) return true;
+  if (Array.isArray(mapData.items) && mapData.items.length > 0) return true;
+  if (Array.isArray(mapData.roads) && mapData.roads.length > 0) return true;
+  return ['cities', 'polygons', 'edges'].some(function(field) {
+    return mapData[field] && typeof mapData[field] === 'object' && Object.keys(mapData[field]).length > 0;
+  });
+}
+
+function migrateLegacyRuntimeMap(legacyMap) {
+  var migrated = cloneMapValue(legacyMap);
+  normalizeGameMapRuntime(migrated);
+  migrated.mapSchemaVersion = TM_RUNTIME_MAP_SCHEMA_VERSION;
+  if (typeof GM !== 'undefined' && GM) GM.mapData = migrated;
+  return migrated;
+}
+
 function getLiveMapData() {
-  if (typeof GM !== 'undefined' && GM && GM.mapData && GM.mapData.regions) return GM.mapData;
-  if (typeof GM !== 'undefined' && GM && GM.map && GM.map.regions) return GM.map;
-  if (typeof P !== 'undefined' && P && P.map && P.map.regions) return P.map;
-  if (typeof P !== 'undefined' && P && P.mapData && P.mapData.regions) return P.mapData;
+  if (typeof GM !== 'undefined' && GM) {
+    if (hasRuntimeMapContent(GM.mapData)) {
+      if (!GM.mapData.mapSchemaVersion) GM.mapData.mapSchemaVersion = TM_RUNTIME_MAP_SCHEMA_VERSION;
+      return GM.mapData;
+    }
+    if (hasRuntimeMapContent(GM.map)) return migrateLegacyRuntimeMap(GM.map);
+    if (GM.mapData && typeof GM.mapData === 'object') return GM.mapData;
+  }
+  if (typeof P !== 'undefined' && P) {
+    if (hasRuntimeMapContent(P.mapData)) return P.mapData;
+    if (hasRuntimeMapContent(P.map)) return P.map;
+    if (P.mapData && typeof P.mapData === 'object') return P.mapData;
+    if (P.map && typeof P.map === 'object') return P.map;
+  }
   return null;
 }
 
@@ -201,6 +234,7 @@ function findScenarioFactionByMapValue(value, mapData) {
 function normalizeGameMapRuntime(mapData) {
   if (!mapData || typeof mapData !== 'object') return mapData;
   ensureMapDataScaffold(mapData);
+  mapData.mapSchemaVersion = TM_RUNTIME_MAP_SCHEMA_VERSION;
   mapData.width = mapData.width || mapData.config.width || 1200;
   mapData.height = mapData.height || mapData.config.height || 800;
   mapData.config.width = mapData.width;

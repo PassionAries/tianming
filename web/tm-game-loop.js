@@ -547,6 +547,15 @@ function validateScenario(sc) {
     });
   }
 
+  // 经济比例必须在导入/开局边界拒绝，避免结算时生成负收入或超过 100% 的拆分。
+  var economyConfig = sc.economyConfig || {};
+  ['redistributionRate', 'privateIncomeRatio'].forEach(function(field) {
+    if (economyConfig[field] === undefined || economyConfig[field] === null || economyConfig[field] === '') return;
+    if (typeof economyConfig[field] !== 'number' || !Number.isFinite(economyConfig[field]) || economyConfig[field] < 0 || economyConfig[field] > 1) {
+      errors.push('经济配置 ' + field + ' 必须是 0 到 1 之间的数字');
+    }
+  });
+
   // 时间校验
   if (!sc.time && !P.time.year) warnings.push('未设定起始年份');
 

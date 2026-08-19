@@ -456,9 +456,55 @@ function _findPositionInOfficeTree(posName) {
   return found;
 }
 
+function _edictCloneState(value) {
+  if (value == null || typeof value !== 'object') return value;
+  if (typeof deepClone === 'function') return deepClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+
+function _edictRestoreState(target, snapshot) {
+  if (Array.isArray(target) && Array.isArray(snapshot)) {
+    while (target.length > snapshot.length) target.pop();
+    for (var i = 0; i < snapshot.length; i++) {
+      var srcItem = snapshot[i], dstItem = target[i];
+      if (srcItem && dstItem && typeof srcItem === 'object' && typeof dstItem === 'object'
+          && Array.isArray(srcItem) === Array.isArray(dstItem)) {
+        _edictRestoreState(dstItem, srcItem);
+      } else {
+        target[i] = _edictCloneState(srcItem);
+      }
+    }
+    return target;
+  }
+  Object.keys(target || {}).forEach(function(key) {
+    if (!Object.prototype.hasOwnProperty.call(snapshot || {}, key)) delete target[key];
+  });
+  Object.keys(snapshot || {}).forEach(function(key) {
+    var src = snapshot[key], dst = target[key];
+    if (src && dst && typeof src === 'object' && typeof dst === 'object'
+        && Array.isArray(src) === Array.isArray(dst)) {
+      _edictRestoreState(dst, src);
+    } else {
+      target[key] = _edictCloneState(src);
+    }
+  });
+  return target;
+}
+
 /** 执行从诏令中提取的操作（在AI推演前执行，确保状态一致） */
 function applyEdictActions(actions) {
-  if (!actions) return;
+  if (!actions) return { ok: true, applied: false };
+  var _edictTxn = {
+    gmRef: GM,
+    pRef: P,
+    gm: _edictCloneState(GM),
+    p: _edictCloneState(P)
+  };
+  actions = Object.assign({}, actions);
+  ['appointments', 'dismissals', 'deaths', 'armyBuilds', 'rewards', 'payArrears', 'pardons'].forEach(function(key) {
+    actions[key] = Array.isArray(actions[key]) ? actions[key].slice() : [];
+  });
+  try {
   var appointedThisEdict = {};
   (actions.appointments || []).forEach(function(a){
     if (a && a.character) appointedThisEdict[a.character] = true;
@@ -500,7 +546,7 @@ function applyEdictActions(actions) {
         var prevHolder = hit.pos.holder || ((typeof _offAllHolders === 'function' && _offAllHolders(hit.pos)[0]) || '');
         var isConcurrent = !!a.concurrent || (typeof _offIsConcurrentAppointment === 'function' && _offIsConcurrentAppointment(a, a.raw || ''));
         if (!isConcurrent && typeof _offVacateByCharName === 'function') {
-          try { _offVacateByCharName(a.character, 'edict-appointment'); } catch(_vacE) {}
+          _offVacateByCharName(a.character, 'edict-appointment');
         }
         if (typeof _offSeatPersonInPosition === 'function') {
           _offSeatPersonInPosition(hit.pos, a.character, { oldHolder: prevHolder, replace: true });
@@ -544,7 +590,7 @@ function applyEdictActions(actions) {
         if (hit.pos.publicTreasury) hit.pos.publicTreasury.currentHead = a.character;
         if (typeof recordCharacterArc === 'function') recordCharacterArc(a.character, 'appointment', '奉诏就任' + a.position);
         // ★2026-07-04 交互双向性·受任者留一条"奉诏就任"知情记忆(imp7)·此前只进 careerHistory/arc/AffinityMap 不入 _memory→推演看不到这桩定义性擢升。relatedPerson=天子(玩家)
-        if (typeof NpcMemorySystem !== 'undefined') { try { NpcMemorySystem.remember(a.character, '奉诏' + (isConcurrent ? '加兼' : '就任') + a.position, '敬', 7, (P.playerInfo && P.playerInfo.characterName) || '天子', { source: 'witnessed', type: 'career', _noMirror: true }); } catch(_apM) {} }
+        if (typeof NpcMemorySystem !== 'undefined') NpcMemorySystem.remember(a.character, '奉诏' + (isConcurrent ? '加兼' : '就任') + a.position, '敬', 7, (P.playerInfo && P.playerInfo.characterName) || '天子', { source: 'witnessed', type: 'career', _noMirror: true });
         if (typeof CorruptionEngine !== 'undefined' && CorruptionEngine.markAsRecentAppointment) CorruptionEngine.markAsRecentAppointment(char);
         addEB('人事', a.character + (isConcurrent ? '奉诏加兼' : '奉诏就任') + a.position + '（' + hit.deptPath + '）', { credibility: 'high' });
         if (typeof AffinityMap !== 'undefined') AffinityMap.add(a.character, P.playerInfo.characterName || '玩家', 5, '被委以重任');
@@ -599,38 +645,31 @@ function applyEdictActions(actions) {
     }
   });
   // 1a·奉诏任命/委以重任 → 确定性小幅抬该员 loyalty（被信用则效忠·君恩进"驱动抗命"的那本账·与 affinity 同步累积）
-  try {
-    if (typeof adjustCharacterLoyalty === 'function') actions.appointments.forEach(function(_ap) {
-      var _ac = (_ap && _ap.character) ? findCharByName(_ap.character) : null;
-      if (_ac) adjustCharacterLoyalty(_ac, 3, '奉诏委以重任·君恩', { source: 'edict-appointment-loyalty', oncePerTurn: true });
-    });
-  } catch (_apLoyE) {}
+  if (typeof adjustCharacterLoyalty === 'function') actions.appointments.forEach(function(_ap) {
+    var _ac = (_ap && _ap.character) ? findCharByName(_ap.character) : null;
+    if (_ac) adjustCharacterLoyalty(_ac, 3, '奉诏委以重任·君恩', { source: 'edict-appointment-loyalty', oncePerTurn: true });
+  });
   // 1b·奉诏犒赏/封赏/加俸 → 玩家亲自施恩确定性抬该员 loyalty + affinity（让"发钱真有用"·不再全靠 AI 看心情演 reward）
-  try {
-    var _pNameRw = (P.playerInfo && P.playerInfo.characterName) || '玩家';
-    (actions.rewards || []).forEach(function(_rw) {
-      var _rc = (_rw && _rw.character) ? findCharByName(_rw.character) : null;
-      if (!_rc) return;
-      if (typeof adjustCharacterLoyalty === 'function') adjustCharacterLoyalty(_rc, 4, '奉诏受赏·君恩', { source: 'edict-reward-loyalty', oncePerTurn: true });
-      else _rc.loyalty = Math.min(100, ((typeof _rc.loyalty === 'number' && isFinite(_rc.loyalty)) ? _rc.loyalty : 50) + 4);
-      if (typeof AffinityMap !== 'undefined') AffinityMap.add(_rw.character, _pNameRw, 8, '奉诏受赏');
-      if (typeof recordCharacterArc === 'function') recordCharacterArc(_rw.character, 'reward', '奉诏受赏·君恩');
-      addEB('人事', _rw.character + ' 奉诏受赏，感恩戴德', { credibility: 'high' });
-    });
-  } catch (_rwLoyE) {}
+  var _pNameRw = (P.playerInfo && P.playerInfo.characterName) || '玩家';
+  actions.rewards.forEach(function(_rw) {
+    var _rc = (_rw && _rw.character) ? findCharByName(_rw.character) : null;
+    if (!_rc) return;
+    if (typeof adjustCharacterLoyalty === 'function') adjustCharacterLoyalty(_rc, 4, '奉诏受赏·君恩', { source: 'edict-reward-loyalty', oncePerTurn: true });
+    else _rc.loyalty = Math.min(100, ((typeof _rc.loyalty === 'number' && isFinite(_rc.loyalty)) ? _rc.loyalty : 50) + 4);
+    if (typeof AffinityMap !== 'undefined') AffinityMap.add(_rw.character, _pNameRw, 8, '奉诏受赏');
+    if (typeof recordCharacterArc === 'function') recordCharacterArc(_rw.character, 'reward', '奉诏受赏·君恩');
+    addEB('人事', _rw.character + ' 奉诏受赏，感恩戴德', { credibility: 'high' });
+  });
   // 下诏任免主帅·确定性补绑：含军职(督师/总兵/提督…)的任命，额外把 army.commander 绑到对应部队（不取代官制任命·在其上补绑兵权）
-  try {
-    if (typeof TM !== 'undefined' && TM.AIChange && TM.AIChange.Army && typeof TM.AIChange.Army.bindCommanderFromAppointment === 'function') {
-      actions.appointments.forEach(function(_ap) {
-        if (_ap && _ap.character && _ap.position) {
-          try { TM.AIChange.Army.bindCommanderFromAppointment(_ap.character, _ap.position, { source: 'edict.appoint_commander' }); } catch (_bcOneE) {}
-        }
-      });
-    }
-  } catch (_bcE) {}
+  if (typeof TM !== 'undefined' && TM.AIChange && TM.AIChange.Army && typeof TM.AIChange.Army.bindCommanderFromAppointment === 'function') {
+    actions.appointments.forEach(function(_ap) {
+      if (_ap && _ap.character && _ap.position) {
+        TM.AIChange.Army.bindCommanderFromAppointment(_ap.character, _ap.position, { source: 'edict.appoint_commander' });
+      }
+    });
+  }
   // 下诏建军·确定性落名册（操作不蒸发；实际兵力规模与招募成本交回合内 sc18 军事推演 AI 估）
-  try {
-    var _ab = (actions && Array.isArray(actions.armyBuilds)) ? actions.armyBuilds : [];
+    var _ab = actions.armyBuilds;
     var _applyArmy = (typeof TM !== 'undefined' && TM.AIChange && TM.AIChange.Army && TM.AIChange.Army.applyAIArmyChange)
       ? TM.AIChange.Army.applyAIArmyChange
       : (typeof applyAIArmyChange === 'function' ? applyAIArmyChange : null);
@@ -638,16 +677,14 @@ function applyEdictActions(actions) {
       _ab.forEach(function(b) {
         if (!b || !b.name) return;
         var _pending = (b.strength == null);
-        var _res = null;
-        try {
-          _res = _applyArmy({
+        var _res = _applyArmy({
             name: b.name, action: 'create',
             soldiers: _pending ? 0 : b.strength,
             branch: '募兵',
             state: _pending ? 'recruiting' : 'garrison',
             reason: '奉诏组建'
           }, { source: 'edict.build_army', silentEB: true });
-        } catch (_aE) {}
+        if (!_res || _res.ok === false || !_res.army) throw new Error('奉诏建军失败: ' + b.name + '·' + String(_res && _res.reason || '未创建军队'));
         var _army = _res && _res.army;
         if (_army) {
           _army._edictBuilt = true;
@@ -660,10 +697,8 @@ function applyEdictActions(actions) {
         }
       });
     }
-  } catch (_abErr) {}
   // 下诏补饷·确定性结算欠饷（走 settleArmyArrears 真扣国库·不再免费清欠；与 UI 发饷按钮靠 settleArmyArrears 读当前欠饷月数幂等·不双结算）
-  try {
-    var _pa = (actions && Array.isArray(actions.payArrears)) ? actions.payArrears : [];
+    var _pa = actions.payArrears;
     var _paMS = (typeof MilitarySystems !== 'undefined' && MilitarySystems) || (typeof TM !== 'undefined' && TM.MilitarySystems) || (typeof global !== 'undefined' && global.MilitarySystems) || null;
     if (_pa.length && _paMS && typeof _paMS.settleArmyArrears === 'function' && Array.isArray(GM.armies)) {
       var _pfPay = (P.playerInfo && P.playerInfo.factionName) || '';
@@ -682,6 +717,7 @@ function applyEdictActions(actions) {
         _targets.forEach(function(a) {
           if (!a || (a.payArrearsMonths || 0) <= 0) return;
           var _r = _paMS.settleArmyArrears(a, {});
+          if (!_r || _r.ok === false) throw new Error('奉诏补饷失败: ' + a.name + '·' + String(_r && _r.reason || '未知错误'));
           if (_r && _r.monthsCleared > 0 && typeof addEB === 'function') {
             var _c = _r.cost || {};
             addEB('军务', '奉诏补饷·' + a.name + '·清欠 ' + _r.monthsCleared + ' 月·耗银 ' + (_c.money || 0) + (_r.shortfall > 0 ? '（国库不足·欠 ' + Math.round(_r.shortfall) + '）' : ''), { credibility: 'high' });
@@ -689,13 +725,13 @@ function applyEdictActions(actions) {
         });
       });
     }
-  } catch (_paErr) {}
   // 免职——双路径：postSystem + officeTree
   actions.dismissals.forEach(function(a) {
     var char = findCharByName(a.character);
     var didAny = false;
     if (typeof PostTransfer !== 'undefined' && GM.postSystem && GM.postSystem.posts && GM.postSystem.posts.length) {
-      try { PostTransfer.cascadeVacate(a.character); didAny = true; } catch(e){ if(window.TM&&TM.errors) TM.errors.capture(e,'endturn.cascadeVacate'); }
+      PostTransfer.cascadeVacate(a.character);
+      didAny = true;
     }
     // 同时扫 officeTree 把所有 holder===name 的 position 清空
     if (GM.officeTree) {
@@ -733,11 +769,9 @@ function applyEdictActions(actions) {
     addEB('人事', a.character + '被免职', { credibility: didAny ? 'high' : 'medium' });
     if (typeof AffinityMap !== 'undefined') AffinityMap.add(a.character, P.playerInfo.characterName || '玩家', -10, '被免职');
     // 免职即解兵权：被免者若正挂某军主帅，确定性摘帅留空缺（角色仍在世·按死活扫的 reconciler 抓不到这条，须显式摘）
-    try {
-      if (typeof TM !== 'undefined' && TM.AIChange && TM.AIChange.Army && typeof TM.AIChange.Army.vacateArmiesByCommander === 'function') {
-        TM.AIChange.Army.vacateArmiesByCommander(a.character, { moraleHit: 10, markLost: true, eb: '{army}主帅{name}奉诏去职、兵权交卸，军中暂缺主将，待下诏补任' });
-      }
-    } catch (_vcE) {}
+    if (typeof TM !== 'undefined' && TM.AIChange && TM.AIChange.Army && typeof TM.AIChange.Army.vacateArmiesByCommander === 'function') {
+      TM.AIChange.Army.vacateArmiesByCommander(a.character, { moraleHit: 10, markLost: true, eb: '{army}主帅{name}奉诏去职、兵权交卸，军中暂缺主将，待下诏补任' });
+    }
   });
   // 赦免/起复——清羁押/流放/致仕/逃亡·按需从 _origOfficialTitle 复官回座(治"下诏放人/官复原职没用")
   if (Array.isArray(actions.pardons)) actions.pardons.forEach(function(a) {
@@ -757,10 +791,10 @@ function applyEdictActions(actions) {
       var _orig = char._origOfficialTitle;
       var _hit = (typeof _findPositionInOfficeTree === 'function') ? _findPositionInOfficeTree(_orig) : null;
       if (_hit && _hit.pos && typeof _offSeatPersonInPosition === 'function') {
-        try { _offSeatPersonInPosition(_hit.pos, char.name, { replace: false }); } catch(_seatE){}
+        _offSeatPersonInPosition(_hit.pos, char.name, { replace: false });
       }
       if (typeof _offAddCharOfficeTitle === 'function') {
-        try { _offAddCharOfficeTitle(char, _orig, {}); } catch(_atE){ char.officialTitle = _orig; char.position = _orig; }
+        _offAddCharOfficeTitle(char, _orig, {});
       } else { char.officialTitle = _orig; char.position = _orig; }
       if (!char.officialTitle) { char.officialTitle = _orig; char.position = _orig; }
       char.title = char.officialTitle || _orig;
@@ -768,9 +802,9 @@ function applyEdictActions(actions) {
     }
     if (!char.careerHistory) char.careerHistory = [];
     char.careerHistory.push({ turn: GM.turn, event: a.restore ? ('奉诏起复' + (_restoredTitle ? '·复任' + _restoredTitle : '·官复原职')) : '奉诏赦免开释' });
-    if (typeof recordCharacterArc === 'function') { try { recordCharacterArc(a.character, 'recall', char._releaseReason); } catch(_arcE){} }
+    if (typeof recordCharacterArc === 'function') recordCharacterArc(a.character, 'recall', char._releaseReason);
     if (typeof addEB === 'function') addEB('人事', a.character + '·' + char._releaseReason + (_restoredTitle ? '（复任' + _restoredTitle + '）' : ''), { credibility: 'high' });
-    if (typeof AffinityMap !== 'undefined') { try { AffinityMap.add(a.character, P.playerInfo.characterName || '玩家', 12, a.restore ? '被起复复职·感恩' : '蒙赦释放·感恩'); } catch(_afE){} }
+    if (typeof AffinityMap !== 'undefined') AffinityMap.add(a.character, P.playerInfo.characterName || '玩家', 12, a.restore ? '被起复复职·感恩' : '蒙赦释放·感恩');
   });
   // 大赦天下·群体放归（第七轮G·flag massAmnestyEnabled 默认关·个体赦免不受此闸影响）
   //   在押人犯尽数放归田里(不复官·与个体"起复"有别)·谋逆/通敌/已定罪逆党十恶不赦·
@@ -787,7 +821,7 @@ function applyEdictActions(actions) {
       ch._releaseReason = '恩诏大赦·放归田里';
       if (!ch.careerHistory) ch.careerHistory = [];
       ch.careerHistory.push({ turn: GM.turn, event: '蒙恩诏大赦放归' });
-      if (typeof AffinityMap !== 'undefined') { try { AffinityMap.add(ch.name, P.playerInfo.characterName || '玩家', 8, '蒙大赦放归·感恩'); } catch(_amAf){} }
+      if (typeof AffinityMap !== 'undefined') AffinityMap.add(ch.name, P.playerInfo.characterName || '玩家', 8, '蒙大赦放归·感恩');
       _amReleased.push(ch.name);
     });
     if (typeof addEB === 'function') addEB('恩诏', '大赦天下：放归' + _amReleased.length + '人' + (_amHeld.length ? '·谋逆重犯' + _amHeld.length + '人不在赦列' : ''), { credibility: 'high' });
@@ -812,13 +846,11 @@ function applyEdictActions(actions) {
     addEB('人事', a.character + '被赐死');
         // P-QAM·诛逆确定性 floor：赐死的若是【系统已定罪的逆党】(char._conspiracyConvicted·镇压谋反时 apply 标记)，确定性给小额皇威——
         //   诛除已坐实奸党正法是立威之举·此为不含糊的质判定(已定罪 yes/no)·小额保底；其余 赐死(可能忠良/未定罪)不在此硬给·忠奸交 AI 经 record_sentiment_changes 判。系统每回合 ±5 净封顶兜住与 AI 的叠加。
-        try {
           if (char._conspiracyConvicted || a.treasonCited) {
             var _AEx = (typeof AuthorityEngines !== 'undefined' && AuthorityEngines) || (typeof window !== 'undefined' && window.AuthorityEngines) || null;
             var _zhuniWhy = (char._conspiracyConvicted ? '诛除已定罪逆党 ' : '诛除通敌奸佞 ') + a.character + '·正法立威';
             if (_AEx && typeof _AEx.adjustHuangwei === 'function') _AEx.adjustHuangwei('executeRebelMinister', 3, _zhuniWhy);
           }
-        } catch (_exHwE) {}
         // 赐死某人会让其亲近者对玩家产生怨恨
         if (typeof AffinityMap !== 'undefined') {
           var deadRels = AffinityMap.getRelations(a.character);
@@ -828,7 +860,6 @@ function applyEdictActions(actions) {
         //   非地方官部门(fiscal/military/judicial/central/imperial) 直降 subDepts[dept].true（aggregate 不覆盖这几口·持久）；
         //   地方官(provincial)或推不出 → 降全势力 div.corruption 源头（FE.adjustPlayerDivisionCorruption·cascade + 回合末 aggregate 都吃·持久）。
         //   量 = 保守保底 P_EXEC_CORR_DROP（可调·处决走诏书确定性通道·不走 AI reform_effects）。
-        try {
           var _title = String((char.officialTitle || char.position || '')).trim();
           var P_EXEC_CORR_DROP = 5; // 处决一名官员对其部门的震慑降浊度·保守保底·可调
           var _dept = '';
@@ -848,8 +879,18 @@ function applyEdictActions(actions) {
             var _ne = _FEe.adjustPlayerDivisionCorruption(_pFacE, -P_EXEC_CORR_DROP, 0, 100);
             if (_ne === 0) _FEe.adjustPlayerDivisionCorruption('', -P_EXEC_CORR_DROP, 0, 100);
           }
-        } catch (_execCorrE) {}
   });
+  return { ok: true, applied: true };
+  } catch (error) {
+    _edictRestoreState(_edictTxn.gmRef, _edictTxn.gm);
+    _edictRestoreState(_edictTxn.pRef, _edictTxn.p);
+    try {
+      if (typeof window !== 'undefined' && window.TM && TM.errors && typeof TM.errors.capture === 'function') {
+        TM.errors.capture(error, 'applyEdictActions.atomic');
+      }
+    } catch (_) {}
+    throw error;
+  }
 }
 
 // ============================================================

@@ -1915,11 +1915,16 @@
   }
 
   function clearFormalEdictDrafts(){
+    var errors = [];
+    // 先清内存真值；即使后续 localStorage/DOM 清理失败，也不能让已提交诏令再次回灌下一回合。
     state.edictDraft = [];
     state.edictDrafts = {};
     state.playerAction = '';
-    clearFormalDraftStore(['edictDraft', 'edictDrafts', 'playerAction']);
-    removeFormalEdictHiddenInputs();
+    try { clearFormalDraftStore(['edictDraft', 'edictDrafts', 'playerAction']); }
+    catch (storeError) { errors.push(storeError); }
+    try { removeFormalEdictHiddenInputs(); }
+    catch (domError) { errors.push(domError); }
+    return { ok: errors.length === 0, committed: true, errors: errors };
   }
 
   function appendFormalEdictDraft(catId, block, root){

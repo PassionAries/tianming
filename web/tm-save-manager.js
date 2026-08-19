@@ -100,6 +100,8 @@ var SaveManager = {
       return false;
     }
 
+    // 读档 hydration 未完成时不得构造一个时序不确定的存档快照。
+    if (typeof _tmAwaitLoadBarrier === 'function') await _tmAwaitLoadBarrier();
     // 等待保存所需后台任务；序列化只发生在隔离快照上。
     if (typeof _awaitPostTurnJobsForSave === 'function') await _awaitPostTurnJobsForSave();
 
@@ -141,8 +143,7 @@ var SaveManager = {
     var slotKey = 'slot_' + slotId;
     console.log('[loadFromSlot] 尝试加载:', slotKey, 'IDB available:', TM_SaveDB.isAvailable());
     showLoading('展卷中……', 30);
-    TM_SaveDB.load(slotKey).then(function(record) {
-      hideLoading();
+    TM_SaveDB.load(slotKey).then(async function(record) {
       console.log('[loadFromSlot] 加载结果:', record ? ('有数据, keys:' + Object.keys(record).join(',')) : 'null');
       // 真空槽（IndexedDB 无此记录）唯一判据 = TM_SaveDB.load 返回 null。
       // record 存在即「有记录」：gameState 缺失/为 null（含解出合法 JSON null）/形状损坏一律报损，
@@ -169,7 +170,7 @@ var SaveManager = {
       if (typeof closeSaveManager === 'function') closeSaveManager();
 
       if (typeof fullLoadGame === 'function') {
-        fullLoadGame(saveWrapper);
+        await fullLoadGame(saveWrapper, { source: 'slot-' + slotId });
       } else {
         var gs = record.gameState;
         GM = deepClone(gs.GM || gs);
@@ -184,9 +185,8 @@ var SaveManager = {
       }
       toast('已加载：' + (record.name || '存档'));
     }).catch(function(e) {
-      hideLoading();
       toast('加载失败：' + e.message);
-    });
+    }).finally(function() { hideLoading(); });
   },
 
   // 删除指定槽位
@@ -784,13 +784,13 @@ function loadPreEndturnSnapshot() {
         toast('存档系统未就绪');
         return;
       }
-      TM_SaveDB.load('pre_endturn').then(function(record) {
+      TM_SaveDB.load('pre_endturn').then(async function(record) {
         var _preCheck = (typeof _validatePreEndturnSnapshot === 'function')
           ? _validatePreEndturnSnapshot(record, null, false)
           : { ok: false, reason: 'validator-missing' };
         if (_preCheck.ok) {
           try {
-            fullLoadGame({ gameState: record.gameState });
+            await fullLoadGame({ gameState: record.gameState }, { source: 'pre-endturn' });
             try { localStorage.removeItem('tm_pre_endturn_mark'); } catch(_){}
             toast('已恢复至过回合前·第' + _preCheck.turn + '回合');
             closeSaveManager();

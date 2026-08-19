@@ -77,6 +77,7 @@ function createTurnDataCommitter(deps) {
       status: 'prepared',
       saveKey: ref.saveKey,
       campaignId: String(input.campaignId || ''),
+      timelineId: String(input.timelineId || ''),
       turn: Number(ref.turn),
       transactionId: ref.transactionId,
       stateChecksum: String(input.stateChecksum || ''),
@@ -118,6 +119,7 @@ function createTurnDataCommitter(deps) {
     function matchesDescriptor(candidate) {
       if (!candidate || candidate.transactionId !== ref.transactionId || String(candidate.turn) !== ref.turn) return false;
       if (input.campaignId != null && String(candidate.campaignId || '') !== String(input.campaignId || '')) return false;
+      if (input.timelineId != null && String(candidate.timelineId || '') !== String(input.timelineId || '')) return false;
       if (input.stateChecksum != null && String(candidate.stateChecksum || '') !== String(input.stateChecksum || '')) return false;
       return true;
     }

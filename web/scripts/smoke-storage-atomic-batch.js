@@ -108,7 +108,7 @@ function makeContext(indexedDB, localStorage) {
   const idb = makeIndexedDB();
   const ctx = makeContext(idb, makeLocalStorage());
   await ctx.TM_SaveDB.open();
-  const state = { GM: { turn: 50 }, P: {} };
+  const state = { GM: { turn: 50, _campaignId: 'campaign-state', _timelineId: 'tml_state_12345678' }, P: {} };
   const ok = await ctx.TM_SaveDB.saveManyAtomic([
     { id: 'autosave', gameState: state, meta: { type: 'auto', turn: 50 } },
     { id: 'slot_0', gameState: state, meta: { type: 'auto', turn: 50 } }
@@ -117,7 +117,7 @@ function makeContext(indexedDB, localStorage) {
   check(idb.stores.get('saves').size === 2 && idb.stores.get('saveMetadata').size === 2, 'payloads and metadata commit together');
 
   const batchReceiptMarker = {
-    campaignId: 'campaign-batch-receipt', transactionId: 'turn-batch-receipt-12345678', saveName: '测试档',
+    campaignId: 'campaign-batch-receipt', timelineId: 'tml_batch_12345678', transactionId: 'turn-batch-receipt-12345678', saveName: '测试档',
     turn: 50, stateChecksum: 'checksum-batch-12345678'
   };
   const receiptBatchIdb = makeIndexedDB();
@@ -233,26 +233,60 @@ function makeContext(indexedDB, localStorage) {
   'single-slot quota recovery removes only a disposable auto save before retrying the target');
 
   const chronicleSaved = await ctx.TM_SaveDB.saveChronicleRecord({
-    campaignId: 'campaign-chronicle', year: 2025, requestId: 'req-1', loadGeneration: 3,
+    campaignId: 'campaign-chronicle', timelineId: 'tml_chronicle_12345678', year: 2025, sourceTurn: 12,
+    historyBasisHash: 'chb_12345678', requestId: 'req-1', loadGeneration: 3,
     generatedAt: 123, chronicle: { content: '年度正史', afterword: '史评', read: false }
   });
-  const chronicleRows = await ctx.TM_SaveDB.listChronicleRecords('campaign-chronicle');
+  const chronicleRows = await ctx.TM_SaveDB.listChronicleRecords('campaign-chronicle', 'tml_chronicle_12345678');
   check(chronicleSaved === true && chronicleRows.length === 1
     && chronicleRows[0].chronicle.content === '年度正史' && idb.stores.get('saves').size === 2,
   'annual chronicles checkpoint in a lightweight store without rewriting world saves');
 
   const receiptMarker = {
-    campaignId: 'campaign-receipt', transactionId: 'turn-receipt-12345678', saveName: '测试档',
+    campaignId: 'campaign-receipt', timelineId: 'tml_receipt_12345678', transactionId: 'turn-receipt-12345678', saveName: '测试档',
     turn: 50, stateChecksum: 'checksum-12345678'
   };
   const receiptSaved = await ctx.TM_SaveDB.saveTurnPublishReceipt(receiptMarker, 'world-committed');
-  const receiptRows = await ctx.TM_SaveDB.listTurnPublishReceipts('campaign-receipt', 'world-committed');
+  const receiptRows = await ctx.TM_SaveDB.listTurnPublishReceipts('campaign-receipt', 'tml_receipt_12345678', 'world-committed');
   const receiptDeleted = await ctx.TM_SaveDB.deleteTurnPublishReceipt(receiptMarker);
   check(receiptSaved === true && receiptRows.length === 1 && receiptRows[0].transactionId === receiptMarker.transactionId
     && receiptDeleted === true && idb.stores.get('turnPublishReceipts').size === 0,
   'turn bundle receipts use an independent lightweight store with explicit lifecycle');
 
-  const marker = { transactionId: 'turn-marker-12345678', campaignId: 'campaign-1', turn: 50 };
+  const gcIdb = makeIndexedDB();
+  const gcCtx = makeContext(gcIdb, makeLocalStorage());
+  await gcCtx.TM_SaveDB.open();
+  const gcState = { GM: { turn: 12, _campaignId: 'campaign-gc', _timelineId: 'tml_gc_12345678' }, P: {} };
+  await gcCtx.TM_SaveDB.save('slot_gc_a', gcState, { name: 'A', type: 'manual', turn: 12 });
+  await gcCtx.TM_SaveDB.save('slot_gc_b', gcState, { name: 'B', type: 'manual', turn: 12 });
+  await gcCtx.TM_SaveDB.saveChronicleRecord({
+    campaignId: 'campaign-gc', timelineId: 'tml_gc_12345678', year: 2025, sourceTurn: 12,
+    historyBasisHash: 'chb_gc_12345678', chronicle: { content: 'GC 正史' }
+  });
+  const gcReceipt = {
+    campaignId: 'campaign-gc', timelineId: 'tml_gc_12345678', transactionId: 'turn-gc-12345678',
+    turn: 12, stateChecksum: 'checksum-gc-12345678'
+  };
+  await gcCtx.TM_SaveDB.saveTurnPublishReceipt(gcReceipt, 'world-committed');
+  await gcCtx.TM_SaveDB.delete('slot_gc_a');
+  check(gcIdb.stores.get('chronicleRecords').size === 1 && gcIdb.stores.get('turnPublishReceipts').size === 1,
+    'deleting one save keeps auxiliary records while another save still references the timeline');
+  await gcCtx.TM_SaveDB.delete('slot_gc_b');
+  check(gcIdb.stores.get('chronicleRecords').size === 0 && gcIdb.stores.get('turnPublishReceipts').size === 0,
+    'deleting the final timeline save garbage-collects its chronicle and receipt records');
+
+  const oldBranchState = { GM: { turn: 20, _campaignId: 'campaign-overwrite', _timelineId: 'tml_overwrite_old_12345678' }, P: {} };
+  await gcCtx.TM_SaveDB.save('slot_overwrite', oldBranchState, { type: 'manual', turn: 20 });
+  await gcCtx.TM_SaveDB.saveChronicleRecord({
+    campaignId: 'campaign-overwrite', timelineId: 'tml_overwrite_old_12345678', year: 2030, sourceTurn: 20,
+    historyBasisHash: 'chb_overwrite_12345678', chronicle: { content: '旧分支正史' }
+  });
+  const newBranchState = { GM: { turn: 10, _campaignId: 'campaign-overwrite', _timelineId: 'tml_overwrite_new_12345678' }, P: {} };
+  await gcCtx.TM_SaveDB.save('slot_overwrite', newBranchState, { type: 'manual', turn: 10 });
+  check(gcIdb.stores.get('chronicleRecords').size === 0,
+    'overwriting the final save reference with a new timeline garbage-collects the orphaned old branch');
+
+  const marker = { transactionId: 'turn-marker-12345678', campaignId: 'campaign-1', timelineId: 'tml_marker_12345678', turn: 50 };
   const markerState = { GM: { turn: 51, _pendingTurnDataPublish: marker }, P: {} };
   const markerIdb = makeIndexedDB({ saves: {
     autosave: { id: 'autosave', type: 'auto', turn: 51, gameState: JSON.stringify(markerState), _compressed: false },

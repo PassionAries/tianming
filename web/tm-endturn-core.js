@@ -412,6 +412,7 @@ function _tmCaptureEndTurnTransaction() {
     pRef: pRef,
     loadGen: (typeof window !== 'undefined' && window._tmLoadGen) || 0,
     campaignId: gmRef && gmRef._campaignId || '',
+    timelineId: gmRef && gmRef._timelineId || '',
     turn: gmRef && gmRef.turn,
     transactionId: transactionId,
     gm: _tmCaptureEndTurnObject(gmRef, ['_postTurnJobs', '_postTurnDetachedJobs', '_indices']),
@@ -424,7 +425,8 @@ function _tmCaptureEndTurnTransaction() {
 function _tmEndTurnTransactionCurrent(txn) {
   return !!txn && !txn.committed && !txn.rolledBack && GM === txn.gmRef && P === txn.pRef &&
     (((typeof window !== 'undefined' && window._tmLoadGen) || 0) === txn.loadGen) &&
-    String((GM && GM._campaignId) || '') === String(txn.campaignId || '');
+    String((GM && GM._campaignId) || '') === String(txn.campaignId || '') &&
+    String((GM && GM._timelineId) || '') === String(txn.timelineId || '');
 }
 
 function _tmMaybeStageTurnResult(html, idx) {

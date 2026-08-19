@@ -52,7 +52,7 @@ var TM_SaveDB = (function() {
   'use strict';
 
   var DB_NAME = 'tianming_db'; // 统一数据库名
-  var DB_VERSION = 4; // v4: 年度编年与回合分卷 receipt 独立轻量持久化
+  var DB_VERSION = 5; // v5: 辅助记录按 campaign + timeline 建索引并参与存档生命周期回收
   var SAVE_STORE = 'saves';
   var SAVE_META_STORE = 'saveMetadata';
   var PROJECT_STORE = 'projects';
@@ -129,12 +129,20 @@ var TM_SaveDB = (function() {
         if (!db.objectStoreNames.contains(PROJECT_STORE)) {
           db.createObjectStore(PROJECT_STORE, { keyPath: 'id' });
         }
-        if (!db.objectStoreNames.contains(CHRONICLE_RECORD_STORE)) {
-          db.createObjectStore(CHRONICLE_RECORD_STORE, { keyPath: 'id' });
+        var chronicleStore = db.objectStoreNames.contains(CHRONICLE_RECORD_STORE)
+          ? e.target.transaction.objectStore(CHRONICLE_RECORD_STORE)
+          : db.createObjectStore(CHRONICLE_RECORD_STORE, { keyPath: 'id' });
+        var receiptStore = db.objectStoreNames.contains(TURN_PUBLISH_RECEIPT_STORE)
+          ? e.target.transaction.objectStore(TURN_PUBLISH_RECEIPT_STORE)
+          : db.createObjectStore(TURN_PUBLISH_RECEIPT_STORE, { keyPath: 'id' });
+        function ensureIndex(store, name, keyPath) {
+          try {
+            if (!store.indexNames || !store.indexNames.contains(name)) store.createIndex(name, keyPath, { unique: false });
+          } catch (_) {}
         }
-        if (!db.objectStoreNames.contains(TURN_PUBLISH_RECEIPT_STORE)) {
-          db.createObjectStore(TURN_PUBLISH_RECEIPT_STORE, { keyPath: 'id' });
-        }
+        ensureIndex(chronicleStore, 'campaignTimeline', ['campaignId', 'timelineId']);
+        ensureIndex(chronicleStore, 'campaignTimelineYear', ['campaignId', 'timelineId', 'year']);
+        ensureIndex(receiptStore, 'campaignTimelineStatus', ['campaignId', 'timelineId', 'status']);
         // v2→v3 只在升级事务中遍历一次旧 payload，之后列表永远只读轻量 metadata。
         if (e.oldVersion > 0 && e.oldVersion < 3 && saveStore && metadataStore) {
           var cursorReq = saveStore.openCursor();
@@ -198,7 +206,17 @@ var TM_SaveDB = (function() {
       date: record.date || '',
       dynastyPhase: record.dynastyPhase || '',
       snapshotId: record.snapshotId || '',
-      commitState: record.commitState || ''
+      commitState: record.commitState || '',
+      campaignId: record.campaignId || '',
+      timelineId: record.timelineId || ''
+    };
+  }
+
+  function _saveIdentityFromGameState(gameState) {
+    var gm = gameState && gameState.GM ? gameState.GM : gameState;
+    return {
+      campaignId: String(gm && gm._campaignId || ''),
+      timelineId: String(gm && gm._timelineId || '')
     };
   }
 
@@ -588,6 +606,45 @@ var TM_SaveDB = (function() {
     });
   }
 
+  function _listByIndex(storeName, indexName, key) {
+    if (!_available || !_db) return _listAll(storeName);
+    return new Promise(function(resolve, reject) {
+      try {
+        var tx = _db.transaction(storeName, 'readonly');
+        var store = tx.objectStore(storeName);
+        if (!store || typeof store.index !== 'function') {
+          _listAll(storeName).then(resolve, reject);
+          return;
+        }
+        var req = store.index(indexName).getAll(key);
+        req.onsuccess = function() { resolve(req.result || []); };
+        req.onerror = function(e) { reject(e.target && e.target.error || new Error('IndexedDB 索引读取失败')); };
+        tx.onabort = function(e) { reject(e.target && e.target.error || tx.error || new Error('IndexedDB 索引事务已中止')); };
+      } catch (_) {
+        _listAll(storeName).then(resolve, reject);
+      }
+    });
+  }
+
+  function _deleteMany(storeName, records) {
+    records = Array.isArray(records) ? records.filter(function(record) { return record && record.id != null; }) : [];
+    if (!records.length) return Promise.resolve(0);
+    if (!_available || !_db) {
+      records.forEach(function(record) { localStorage.removeItem('tm_idb_' + storeName + '_' + record.id); });
+      return Promise.resolve(records.length);
+    }
+    return new Promise(function(resolve, reject) {
+      try {
+        var tx = _db.transaction(storeName, 'readwrite');
+        var store = tx.objectStore(storeName);
+        records.forEach(function(record) { store.delete(record.id); });
+        tx.oncomplete = function() { resolve(records.length); };
+        tx.onerror = function(e) { reject(e.target && e.target.error || new Error('IndexedDB 辅助记录清理失败')); };
+        tx.onabort = function(e) { reject(e.target && e.target.error || tx.error || new Error('IndexedDB 辅助记录清理事务已中止')); };
+      } catch (error) { reject(error); }
+    });
+  }
+
   function _listSaveMetadata() {
     if (_available && _db) return _listAll(SAVE_META_STORE);
     return _listAll(SAVE_META_STORE).then(function(metadataRecords) {
@@ -629,6 +686,34 @@ var TM_SaveDB = (function() {
   }
 
   /** 保存游戏存档（7.1: 支持gzip压缩） */
+  function _gcReplacedSaveTimelines(previousMetadata, currentRecords) {
+    previousMetadata = Array.isArray(previousMetadata) ? previousMetadata : [];
+    currentRecords = Array.isArray(currentRecords) ? currentRecords : [];
+    var currentById = Object.create(null);
+    currentRecords.forEach(function(record) { if (record && record.id != null) currentById[String(record.id)] = record; });
+    var candidates = [];
+    var seen = Object.create(null);
+    previousMetadata.forEach(function(previous) {
+      if (!previous || previous.id == null) return;
+      var current = currentById[String(previous.id)];
+      if (!current) return;
+      var previousCampaign = String(previous.campaignId || '');
+      var previousTimeline = String(previous.timelineId || '');
+      if (!previousCampaign || !_validTimelineId(previousTimeline)) return;
+      if (previousCampaign === String(current.campaignId || '') && previousTimeline === String(current.timelineId || '')) return;
+      var key = previousCampaign + ':' + previousTimeline;
+      if (seen[key]) return;
+      seen[key] = true;
+      candidates.push(previous);
+    });
+    return Promise.all(candidates.map(function(metadata) {
+      return _gcAuxiliaryTimelineIfUnreferenced(metadata).catch(function(error) {
+        try { console.warn('[SaveDB] 覆盖存档后的辅助记录回收失败:', error); } catch (_) {}
+        return false;
+      });
+    })).then(function() { return true; });
+  }
+
   function save(id, gameState, meta, options) {
     options = options || {};
     function _writeStillAllowed() {
@@ -639,10 +724,15 @@ var TM_SaveDB = (function() {
     // 在调用栈内立即固化 JSON。_ensureOpen / gzip 都是异步；若延后 stringify，
     // selective snapshot 中安全复用的 append-only 引用可能在过回合期间继续增长，污染 pre_endturn 时点。
     var jsonStr;
+    var saveIdentity = _saveIdentityFromGameState(gameState);
     try { jsonStr = JSON.stringify(gameState); }
     catch (e) { return Promise.reject(e); }
     if (!_writeStillAllowed()) return Promise.resolve(false);
+    var previousMetadata = null;
     return _ensureOpen().then(function() {
+      return _get(SAVE_META_STORE, id);
+    }).then(function(previous) {
+      previousMetadata = previous;
       return SaveCompression.compress(jsonStr).then(function(compressed) {
         // Blob 只能由 IndexedDB 结构化克隆安全保存。localStorage 的 JSON.stringify
         // 会把 Blob 变成 {}，因此降级路径必须保留原始 JSON 字符串。
@@ -660,6 +750,8 @@ var TM_SaveDB = (function() {
           // pre_endturn 两阶段恢复校验元数据；普通/旧存档保持空值兼容。
           snapshotId: (meta && meta.snapshotId) || '',
           commitState: (meta && meta.commitState) || '',
+          campaignId: (meta && meta.campaignId) || saveIdentity.campaignId,
+          timelineId: (meta && meta.timelineId) || saveIdentity.timelineId,
           gameState: isCompressed ? compressed : jsonStr,
           _compressed: isCompressed
         };
@@ -669,7 +761,10 @@ var TM_SaveDB = (function() {
         }
         // 压缩/开库可能跨越读档或下一回合；真正开启写事务前再验一次租约。
         if (!_writeStillAllowed()) return false;
-        return _putSaveRecord(record, 0, _writeStillAllowed);
+        return _putSaveRecord(record, 0, _writeStillAllowed).then(function(saved) {
+          if (saved !== true) return saved;
+          return _gcReplacedSaveTimelines(previousMetadata ? [previousMetadata] : [], [record]);
+        });
       });
     });
   }
@@ -695,14 +790,21 @@ var TM_SaveDB = (function() {
         seenIds[id] = true;
         var json = JSON.stringify(entry.gameState);
         if (typeof json !== 'string') throw new Error('批量存档正文不可序列化：' + id);
-        return { id: id, json: json, meta: Object.assign({}, entry.meta || {}) };
+        var frozenMeta = Object.assign({}, entry.meta || {});
+        var identity = _saveIdentityFromGameState(entry.gameState);
+        if (!frozenMeta.campaignId) frozenMeta.campaignId = identity.campaignId;
+        if (!frozenMeta.timelineId) frozenMeta.timelineId = identity.timelineId;
+        return { id: id, json: json, meta: frozenMeta };
       });
       if (options.turnPublishReceipt) {
         frozenTurnPublishReceipt = _normalizeTurnPublishReceipt(options.turnPublishReceipt, 'world-committed');
       }
     } catch (error) { return Promise.reject(error); }
     if (!_writeStillAllowed()) return Promise.resolve(false);
+    var previousMetadata = [];
+    var savedRecords = [];
     return _ensureOpen().then(async function() {
+      previousMetadata = await Promise.all(frozen.map(function(item) { return _get(SAVE_META_STORE, item.id); }));
       var timestamp = Date.now();
       var records = [];
       for (var i = 0; i < frozen.length; i++) {
@@ -721,12 +823,18 @@ var TM_SaveDB = (function() {
           dynastyPhase: item.meta.dynastyPhase || '',
           snapshotId: item.meta.snapshotId || '',
           commitState: item.meta.commitState || '',
+          campaignId: item.meta.campaignId || '',
+          timelineId: item.meta.timelineId || '',
           gameState: isCompressed ? compressed : item.json,
           _compressed: isCompressed
         });
       }
       if (!_writeStillAllowed()) return false;
+      savedRecords = records;
       return _putSaveRecordsAtomic(records, _writeStillAllowed, 0, frozenTurnPublishReceipt);
+    }).then(function(saved) {
+      if (saved !== true) return saved;
+      return _gcReplacedSaveTimelines(previousMetadata, savedRecords);
     });
   }
 
@@ -772,13 +880,24 @@ var TM_SaveDB = (function() {
     return prefix + ':' + campaignId + ':' + suffix;
   }
 
+  function _validTimelineId(value) {
+    value = String(value || '');
+    return value.length >= 12 && value.length <= 128 && /^tml_[A-Za-z0-9_-]+$/.test(value);
+  }
+
   /** 年度正史独立 checkpoint；AI 成功结果不必等待下一次大型世界存档。 */
   function saveChronicleRecord(input, options) {
     input = input || {};
     options = options || {};
     var campaignId = String(input.campaignId || '');
+    var timelineId = String(input.timelineId || '');
     var year = Number(input.year);
     if (!Number.isSafeInteger(year)) return Promise.reject(new Error('年度正史缺少合法年份'));
+    if (!_validTimelineId(timelineId)) return Promise.reject(new Error('年度正史缺少合法 timelineId'));
+    var sourceTurn = Number(input.sourceTurn);
+    if (!Number.isSafeInteger(sourceTurn) || sourceTurn < 0) return Promise.reject(new Error('年度正史缺少合法来源回合'));
+    var historyBasisHash = String(input.historyBasisHash || '');
+    if (!historyBasisHash || historyBasisHash.length > 128) return Promise.reject(new Error('年度正史缺少历史基础校验值'));
     var chronicle;
     try { chronicle = JSON.parse(JSON.stringify(input.chronicle)); }
     catch (error) { return Promise.reject(error); }
@@ -788,9 +907,12 @@ var TM_SaveDB = (function() {
     var record;
     try {
       record = {
-        id: _auxRecordId('chronicle', campaignId, year),
+        id: _auxRecordId('chronicle', campaignId, timelineId + ':' + year),
         campaignId: campaignId,
+        timelineId: timelineId,
         year: year,
+        sourceTurn: sourceTurn,
+        historyBasisHash: historyBasisHash,
         requestId: String(input.requestId || ''),
         loadGeneration: Number(input.loadGeneration) || 0,
         generatedAt: Number(input.generatedAt) || Date.now(),
@@ -799,28 +921,47 @@ var TM_SaveDB = (function() {
     } catch (error) { return Promise.reject(error); }
     return _ensureOpen().then(function() {
       return _put(CHRONICLE_RECORD_STORE, record, 0, options.writeGuard);
+    }).then(function(saved) {
+      if (saved !== true) return saved;
+      var maxYears = Math.max(1, Math.floor(Number(input.maxYears) || 20));
+      return pruneChronicleRecords(campaignId, timelineId, maxYears).then(function() { return true; });
     });
   }
 
-  function listChronicleRecords(campaignId) {
+  function listChronicleRecords(campaignId, timelineId) {
     campaignId = String(campaignId || '');
-    if (!campaignId) return Promise.resolve([]);
-    return _ensureOpen().then(function() { return _listAll(CHRONICLE_RECORD_STORE); }).then(function(records) {
-      return (records || []).filter(function(record) { return record && String(record.campaignId || '') === campaignId; });
+    timelineId = String(timelineId || '');
+    if (!campaignId || !_validTimelineId(timelineId)) return Promise.resolve([]);
+    return _ensureOpen().then(function() { return _listByIndex(CHRONICLE_RECORD_STORE, 'campaignTimeline', [campaignId, timelineId]); }).then(function(records) {
+      return (records || []).filter(function(record) {
+        return record && String(record.campaignId || '') === campaignId && String(record.timelineId || '') === timelineId;
+      });
+    });
+  }
+
+  function pruneChronicleRecords(campaignId, timelineId, maxYears) {
+    maxYears = Math.max(1, Math.floor(Number(maxYears) || 20));
+    return listChronicleRecords(campaignId, timelineId).then(function(records) {
+      records = (records || []).slice().sort(function(a, b) {
+        return Number(b && b.year || 0) - Number(a && a.year || 0) || Number(b && b.generatedAt || 0) - Number(a && a.generatedAt || 0);
+      });
+      return _deleteMany(CHRONICLE_RECORD_STORE, records.slice(maxYears));
     });
   }
 
   function _normalizeTurnPublishReceipt(marker, status) {
     marker = marker || {};
     var campaignId = String(marker.campaignId || '');
+    var timelineId = String(marker.timelineId || '');
     var transactionId = String(marker.transactionId || '');
     var normalizedStatus = String(status || marker.status || 'world-committed');
     if (['staged', 'world-committed', 'published'].indexOf(normalizedStatus) < 0) {
       throw new Error('回合分卷 receipt 状态无效');
     }
     var record = {
-      id: _auxRecordId('turn-publish', campaignId, transactionId),
+      id: _auxRecordId('turn-publish', campaignId, timelineId + ':' + transactionId),
       campaignId: campaignId,
+      timelineId: timelineId,
       transactionId: transactionId,
       saveName: String(marker.saveName || ''),
       turn: Number(marker.turn),
@@ -829,6 +970,7 @@ var TM_SaveDB = (function() {
       createdAt: Number(marker.createdAt) || Date.now(),
       updatedAt: Date.now()
     };
+    if (!_validTimelineId(record.timelineId)) throw new Error('回合分卷 receipt timelineId 无效');
     if (!Number.isSafeInteger(record.turn) || record.turn < 0) throw new Error('回合分卷 receipt 回合号无效');
     if (!record.stateChecksum || record.stateChecksum.length > 128) throw new Error('回合分卷 receipt checksum 无效');
     return record;
@@ -844,13 +986,18 @@ var TM_SaveDB = (function() {
     });
   }
 
-  function listTurnPublishReceipts(campaignId, status) {
+  function listTurnPublishReceipts(campaignId, timelineId, status) {
     campaignId = String(campaignId || '');
+    timelineId = String(timelineId || '');
     status = status == null ? '' : String(status);
-    if (!campaignId) return Promise.resolve([]);
-    return _ensureOpen().then(function() { return _listAll(TURN_PUBLISH_RECEIPT_STORE); }).then(function(records) {
+    if (!campaignId || !_validTimelineId(timelineId)) return Promise.resolve([]);
+    var query = status ? [campaignId, timelineId, status] : null;
+    return _ensureOpen().then(function() {
+      return query ? _listByIndex(TURN_PUBLISH_RECEIPT_STORE, 'campaignTimelineStatus', query) : _listAll(TURN_PUBLISH_RECEIPT_STORE);
+    }).then(function(records) {
       return (records || []).filter(function(record) {
-        return record && String(record.campaignId || '') === campaignId && (!status || String(record.status || '') === status);
+        return record && String(record.campaignId || '') === campaignId && String(record.timelineId || '') === timelineId
+          && (!status || String(record.status || '') === status);
       });
     });
   }
@@ -859,7 +1006,7 @@ var TM_SaveDB = (function() {
     marker = marker || {};
     options = options || {};
     var id;
-    try { id = _auxRecordId('turn-publish', marker.campaignId, marker.transactionId); }
+    try { id = _auxRecordId('turn-publish', marker.campaignId, String(marker.timelineId || '') + ':' + marker.transactionId); }
     catch (error) { return Promise.reject(error); }
     return _ensureOpen().then(function() {
       return _del(TURN_PUBLISH_RECEIPT_STORE, String(id), options.writeGuard);
@@ -897,13 +1044,41 @@ var TM_SaveDB = (function() {
       return _listSaveMetadata();
     }).then(function(records) {
       return records.map(function(r) {
-        return { id:r.id, name:r.name, type:r.type, timestamp:r.timestamp, turn:r.turn, scenarioName:r.scenarioName, eraName:r.eraName, date:r.date||'', dynastyPhase:r.dynastyPhase||'', snapshotId:r.snapshotId||'', commitState:r.commitState||'' };
+        return { id:r.id, name:r.name, type:r.type, timestamp:r.timestamp, turn:r.turn, scenarioName:r.scenarioName, eraName:r.eraName, date:r.date||'', dynastyPhase:r.dynastyPhase||'', snapshotId:r.snapshotId||'', commitState:r.commitState||'', campaignId:r.campaignId||'', timelineId:r.timelineId||'' };
       }).sort(function(a,b) { return b.timestamp - a.timestamp; });
     });
   }
 
   /** 删除游戏存档 */
-  function deleteSave(id) { return _ensureOpen().then(function() { return _deleteSaveRecord(id); }); }
+  function _gcAuxiliaryTimelineIfUnreferenced(metadata) {
+    var campaignId = String(metadata && metadata.campaignId || '');
+    var timelineId = String(metadata && metadata.timelineId || '');
+    if (!campaignId || !_validTimelineId(timelineId)) return Promise.resolve(false);
+    return _listSaveMetadata().then(function(records) {
+      var referenced = (records || []).some(function(record) {
+        return record && String(record.campaignId || '') === campaignId && String(record.timelineId || '') === timelineId;
+      });
+      if (referenced) return false;
+      return Promise.all([
+        listChronicleRecords(campaignId, timelineId).then(function(rows) { return _deleteMany(CHRONICLE_RECORD_STORE, rows); }),
+        listTurnPublishReceipts(campaignId, timelineId, '').then(function(rows) { return _deleteMany(TURN_PUBLISH_RECEIPT_STORE, rows); })
+      ]).then(function() { return true; });
+    });
+  }
+
+  function deleteSave(id) {
+    var metadata = null;
+    return _ensureOpen().then(function() { return _get(SAVE_META_STORE, id); }).then(function(record) {
+      metadata = record;
+      return _deleteSaveRecord(id);
+    }).then(function(deleted) {
+      if (deleted !== true) return deleted;
+      return _gcAuxiliaryTimelineIfUnreferenced(metadata).catch(function(error) {
+        try { console.warn('[SaveDB] 辅助记录回收失败:', error); } catch (_) {}
+        return false;
+      }).then(function() { return true; });
+    });
+  }
 
   // ============================================================
   //  公开API：剧本项目
@@ -1152,6 +1327,7 @@ var TM_SaveDB = (function() {
     clearPendingTurnDataPublishAtomic: clearPendingTurnDataPublishAtomic,
     saveChronicleRecord: saveChronicleRecord,
     listChronicleRecords: listChronicleRecords,
+    pruneChronicleRecords: pruneChronicleRecords,
     saveTurnPublishReceipt: saveTurnPublishReceipt,
     listTurnPublishReceipts: listTurnPublishReceipts,
     deleteTurnPublishReceipt: deleteTurnPublishReceipt,

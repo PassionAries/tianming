@@ -48,6 +48,42 @@ function _tmEnsureCampaignId(gm) {
   return id;
 }
 
+function _tmEnsureTimelineIdentity(gm) {
+  if (!gm) return '';
+  try {
+    if (typeof window !== 'undefined' && typeof window._tmEnsureTimelineId === 'function') {
+      return window._tmEnsureTimelineId(gm);
+    }
+  } catch (_) {}
+  var id = typeof gm._timelineId === 'string' ? gm._timelineId.trim() : '';
+  if (!id || id.length > 128 || !/^tml_[A-Za-z0-9_-]+$/.test(id)) {
+    id = 'tml_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 14);
+  }
+  gm._timelineId = id;
+  return id;
+}
+
+function _tmForkLoadedTimeline(gm, reason) {
+  if (!gm) return '';
+  try {
+    if (typeof window !== 'undefined' && typeof window._tmForkTimeline === 'function') {
+      return window._tmForkTimeline(gm, reason || 'load');
+    }
+  } catch (_) {}
+  var parent = _tmEnsureTimelineIdentity(gm);
+  var next = 'tml_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 14);
+  gm._parentTimelineId = parent;
+  gm._timelineId = next;
+  gm._forkTurn = Number.isSafeInteger(Number(gm.turn)) ? Number(gm.turn) : 0;
+  gm._timelineForkReason = String(reason || 'load').slice(0, 80);
+  return next;
+}
+
+function _tmAwaitLoadBarrier() {
+  var barrier = (typeof window !== 'undefined') ? window._tmLoadBarrier : null;
+  return barrier && typeof barrier.then === 'function' ? barrier : Promise.resolve(true);
+}
+
 // 确保 GM 所有字段存在默认值（存档前/读档后统一调用）
 // F2 势力活世界总闸·翻默认 ON 迁移 + 启动竞态自愈的【单一真源】规则(normalizer 与 tm:p-restored 自愈两处同调·避免逻辑分叉·Codex 二轮 B)。
 //   带用户意图戳(_factionLivingWorldSetByUser) → 尊重存档值(仅异常值兜底 ON)；
@@ -75,6 +111,7 @@ function _ensureGMDefaults(GM, P) {
   P = P || (typeof window !== 'undefined' ? window.P : null);
   if (!GM) return;
   _tmEnsureCampaignId(GM);
+  _tmEnsureTimelineIdentity(GM);
   if (!GM.shijiHistory) GM.shijiHistory = [];
   if (!GM.allCharacters) GM.allCharacters = [];
   if (!GM.classes) GM.classes = [];
@@ -583,7 +620,135 @@ function _prepareGMForSave(GM, P) {
   return { GM: GM, P: P };
 }
 
+function _tmDesktopSavePanelRoot(title, maxWidth) {
+  showPanel('<div id="tm-desktop-save-panel"></div>');
+  var root = _$("tm-desktop-save-panel");
+  root.style.cssText = 'padding:1.5rem;max-width:' + maxWidth + 'px;margin:auto';
+  var heading = document.createElement('h2');
+  heading.style.cssText = 'color:var(--gold);margin-bottom:1rem';
+  heading.textContent = title;
+  root.appendChild(heading);
+  return root;
+}
+
+function _tmDesktopSaveButton(text, style, handler) {
+  var button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = text;
+  button.style.cssText = style;
+  button.addEventListener('click', handler);
+  return button;
+}
+
+function _tmDesktopSaveSubline(file) {
+  file = file || {};
+  var meta = file.meta || {};
+  var parts = [];
+  if (file.modifiedStr) parts.push(String(file.modifiedStr));
+  if (Number.isFinite(Number(file.size))) parts.push(Math.round(Number(file.size) / 1024) + ' KB');
+  if (meta.scenario) parts.push('剧本:' + String(meta.scenario));
+  if (meta.turn != null && meta.turn !== '') parts.push('T' + String(meta.turn));
+  if (file.metadataPending) parts.push('元数据整理中');
+  return parts.join(' · ');
+}
+
+function _tmAppendDesktopSaveRow(parent, file, actions) {
+  file = file || {};
+  actions = actions || {};
+  var row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;background:var(--bg-3);border-radius:6px;padding:0.5rem 0.75rem';
+  var copy = document.createElement('div');
+  copy.style.cssText = 'flex:1;min-width:0';
+  var name = document.createElement('div');
+  name.style.cssText = 'color:var(--txt-s);font-size:0.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  name.textContent = String(file.name || file.storageKey || '未命名存档');
+  var sub = document.createElement('div');
+  sub.style.cssText = 'color:var(--txt-d);font-size:0.75rem';
+  sub.textContent = _tmDesktopSaveSubline(file);
+  copy.appendChild(name);
+  copy.appendChild(sub);
+  row.appendChild(copy);
+  if (typeof actions.primary === 'function') {
+    row.appendChild(_tmDesktopSaveButton(actions.primaryText || '载入', 'padding:0.2rem 0.7rem;border:none;border-radius:4px;background:var(--gold);color:#111;cursor:pointer;font-size:0.8rem;font-family:inherit', function() { actions.primary(file); }));
+  }
+  if (typeof actions.secondary === 'function') {
+    row.appendChild(_tmDesktopSaveButton(actions.secondaryText || '删除', 'padding:0.2rem 0.6rem;border:none;border-radius:4px;background:#5a2020;color:#eee;cursor:pointer;font-size:0.8rem;font-family:inherit', function() { actions.secondary(file); }));
+  }
+  parent.appendChild(row);
+}
+
+function _tmShowDesktopSavePanel(files, defaultName) {
+  var root = _tmDesktopSavePanelRoot('保存游戏', 520);
+  var label = document.createElement('label');
+  label.htmlFor = 'save-name-inp';
+  label.style.cssText = 'display:block;margin-bottom:0.4rem;color:var(--txt-s)';
+  label.textContent = '存档名';
+  root.appendChild(label);
+  var input = document.createElement('input');
+  input.id = 'save-name-inp';
+  input.className = 'inp';
+  input.style.cssText = 'width:100%;margin-bottom:0.8rem';
+  input.value = String(defaultName || '');
+  root.appendChild(input);
+  var saveButton = _tmDesktopSaveButton('保存', 'margin-bottom:1.2rem', function() { window.desktopDoSave(); });
+  saveButton.className = 'btn';
+  root.appendChild(saveButton);
+  if (files.length) {
+    var title = document.createElement('h4');
+    title.style.cssText = 'color:var(--txt-d);margin-bottom:0.5rem';
+    title.textContent = '覆盖现有存档';
+    root.appendChild(title);
+    var list = document.createElement('div');
+    list.style.cssText = 'max-height:220px;overflow-y:auto';
+    files.forEach(function(file) {
+      _tmAppendDesktopSaveRow(list, file, {
+        primaryText: '覆盖',
+        primary: function(selected) {
+          input.value = String(selected.name || '');
+          window.desktopDoSave();
+        }
+      });
+    });
+    root.appendChild(list);
+  }
+  var cancelButton = _tmDesktopSaveButton('取消', 'margin-top:1rem', function() { enterGame(); });
+  cancelButton.className = 'btn';
+  root.appendChild(cancelButton);
+  _$("G").style.display = 'none';
+}
+
+function _tmShowDesktopLoadFallback(files) {
+  var root = _tmDesktopSavePanelRoot('读取存档', 560);
+  if (!files.length) {
+    var empty = document.createElement('p');
+    empty.style.color = 'var(--txt-d)';
+    empty.textContent = '无存档。';
+    root.appendChild(empty);
+  } else {
+    var list = document.createElement('div');
+    list.style.cssText = 'max-height:340px;overflow-y:auto';
+    files.forEach(function(file) {
+      _tmAppendDesktopSaveRow(list, file, {
+        primaryText: '载入',
+        primary: function(selected) { window.desktopLoadSave({ name: selected.name, storageKey: selected.storageKey || '' }); },
+        secondaryText: '删除',
+        secondary: function(selected) { window.desktopDeleteSave({ name: selected.name, storageKey: selected.storageKey || '' }); }
+      });
+    });
+    root.appendChild(list);
+  }
+  var actions = document.createElement('div');
+  actions.style.cssText = 'display:flex;gap:0.8rem;margin-top:1rem';
+  actions.appendChild(_tmDesktopSaveButton('从文件导入', '', function() { importSaveFile(); }));
+  actions.lastChild.className = 'btn';
+  actions.appendChild(_tmDesktopSaveButton('返回', '', function() { showMain(); }));
+  actions.lastChild.className = 'btn';
+  root.appendChild(actions);
+  _$("G").style.display = 'none';
+}
+
 doSaveGame=async function(){
+  await _tmAwaitLoadBarrier();
   if(!GM.running){toast("\u8BF7\u5148\u5F00\u59CB\u6E38\u620F");return;}
   if (typeof _awaitPostTurnJobsForSave === 'function') await _awaitPostTurnJobsForSave();
 
@@ -594,31 +759,7 @@ doSaveGame=async function(){
     var list=await window.tianming.listSaves();
     var files=list.success?list.files.filter(function(f){return f.name!=="__autosave__";}):[];
     files.sort(function(a,b){return (b.modified||0)-(a.modified||0);});
-    var html='<div style="padding:1.5rem;max-width:520px;margin:auto">';
-    html+='<h2 style="color:var(--gold);margin-bottom:1rem">\u4FDD\u5B58\u6E38\u620F</h2>';
-    html+='<label style="display:block;margin-bottom:0.4rem;color:var(--txt-s)">\u5B58\u6863\u540D</label>';
-    html+='<input id="save-name-inp" class="inp" style="width:100%;margin-bottom:0.8rem" value="'+defName+'">';
-    html+='<button class="btn" style="margin-bottom:1.2rem" onclick="desktopDoSave()">\u4FDD\u5B58</button>';
-    if(files.length){
-      html+='<h4 style="color:var(--txt-d);margin-bottom:0.5rem">\u8986\u76D6\u73B0\u6709\u5B58\u6863</h4>';
-      html+='<div style="max-height:220px;overflow-y:auto">';
-      files.forEach(function(f){
-        var meta=f.meta||{};
-        var sub=(meta.scenario?'\u5267\u672C:'+meta.scenario+' ':'')+(meta.turn?'T'+meta.turn:'');
-        html+='<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem;background:var(--bg-3);border-radius:6px;padding:0.4rem 0.75rem">';
-        html+='<div style="flex:1;min-width:0">';
-        html+='<div style="color:var(--txt-s);font-size:0.88rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+f.name+'</div>';
-        html+='<div style="color:var(--txt-d);font-size:0.72rem">'+f.modifiedStr+(sub?' &nbsp;\u00b7 '+sub:'')+'</div>';
-        html+='</div>';
-        html+='<button style="padding:0.15rem 0.6rem;border:none;border-radius:4px;background:var(--gold);color:#111;cursor:pointer;font-size:0.78rem;font-family:inherit" '+'onclick="_$(\"save-name-inp\").value='+JSON.stringify(f.name)+';desktopDoSave()">\u8986\u76D6</button>';
-        html+='</div>';
-      });
-      html+='</div>';
-    }
-    html+='<button class="btn" style="margin-top:1rem" onclick="enterGame()">\u53D6\u6D88</button>';
-    html+='</div>';
-    showPanel(html);
-    _$('G').style.display='none';
+    _tmShowDesktopSavePanel(files, defName);
   }else{
     // 浏览器端：直接导出
     var sc2=findScenarioById(GM.sid);
@@ -632,6 +773,7 @@ doSaveGame=async function(){
 };
 
 window.desktopDoSave=async function(){
+  await _tmAwaitLoadBarrier();
   var name=(_$("save-name-inp").value||"").trim();
   if(!name){toast("\u8BF7\u8F93\u5165\u5B58\u6863\u540D");return;}
   var sc=findScenarioById(GM.sid);
@@ -866,18 +1008,20 @@ var PREF_CONF_KEYS = [
 ];
 
 function _recoverPendingTurnDataPublish() {
-  if (!(GM && window.tianming && typeof window.tianming.recoverTurnData === 'function')) return;
+  if (!(GM && window.tianming && typeof window.tianming.recoverTurnData === 'function')) return Promise.resolve({ ok: true, skipped: true });
   var targetGM = GM;
   var targetP = P;
   var targetLoadGen = (typeof window !== 'undefined' && window._tmLoadGen) || 0;
   var campaignId = String((GM && GM._campaignId) || '');
+  var timelineId = String((GM && GM._timelineId) || '');
   function baseRecoveryLeaseCurrent() {
     return GM === targetGM && P === targetP &&
       (((typeof window !== 'undefined' && window._tmLoadGen) || 0) === targetLoadGen) &&
-      String((GM && GM._campaignId) || '') === campaignId;
+      String((GM && GM._campaignId) || '') === campaignId &&
+      String((GM && GM._timelineId) || '') === timelineId;
   }
 
-  Promise.resolve().then(async function() {
+  return Promise.resolve().then(async function() {
     // v4 以前的存档把 marker 烘进两个大世界正文；仅在兼容迁移时做一次全量清理。
     if (targetGM._pendingTurnDataPublish) {
       var legacyMarker = deepClone(targetGM._pendingTurnDataPublish);
@@ -899,27 +1043,45 @@ function _recoverPendingTurnDataPublish() {
     if (!baseRecoveryLeaseCurrent()) return;
     if (!(typeof TM_SaveDB !== 'undefined' && TM_SaveDB &&
       typeof TM_SaveDB.listTurnPublishReceipts === 'function' && typeof TM_SaveDB.deleteTurnPublishReceipt === 'function')) return;
-    var receipts = await TM_SaveDB.listTurnPublishReceipts(campaignId, 'world-committed');
+    var receipts = await TM_SaveDB.listTurnPublishReceipts(campaignId, timelineId, 'world-committed');
     receipts = (receipts || []).slice().sort(function(a, b) {
       return Number(a && a.turn || 0) - Number(b && b.turn || 0) || Number(a && a.createdAt || 0) - Number(b && b.createdAt || 0);
     });
     for (var i = 0; i < receipts.length; i++) {
       if (!baseRecoveryLeaseCurrent()) return;
       var marker = receipts[i];
+      if (!marker || String(marker.timelineId || '') !== timelineId || Number(marker.turn) > Number(targetGM.turn || 0)) continue;
       var result = await window.tianming.recoverTurnData(marker);
       if (!baseRecoveryLeaseCurrent()) return;
       if (!(result && result.success === true)) throw new Error(result && result.error || '回合分卷恢复失败');
       var deleted = await TM_SaveDB.deleteTurnPublishReceipt(marker, { writeGuard: baseRecoveryLeaseCurrent });
       if (deleted !== true || !baseRecoveryLeaseCurrent()) throw new Error('回合分卷已恢复，但 receipt 清理失败');
     }
+    return { ok: true, recovered: receipts.length };
   }).catch(function(error) {
     if (GM !== targetGM) return;
     try { if (window.TM && TM.errors && TM.errors.capture) TM.errors.capture(error, 'fullLoadGame] recover turn-data'); } catch (_) {}
     try { if (typeof toast === 'function') toast('存档已载入；回合分卷仍待补发，将在下次读档重试。'); } catch (_) {}
+    return { ok: false, error: error };
   });
 }
 
-function fullLoadGame(data, loadOptions){
+function fullLoadGame(data, loadOptions) {
+  var promise = _fullLoadGameImpl(data, loadOptions);
+  try {
+    if (typeof window !== 'undefined') {
+      window._tmLoadBarrier = promise;
+      promise.then(function() {
+        if (window._tmLoadBarrier === promise) window._tmLoadBarrier = Promise.resolve(true);
+      }, function() {
+        if (window._tmLoadBarrier === promise) window._tmLoadBarrier = Promise.resolve(false);
+      });
+    }
+  } catch (_) {}
+  return promise;
+}
+
+async function _fullLoadGameImpl(data, loadOptions){
   loadOptions = loadOptions || {};
   // 跨档保留 API 设置：localStorage 的 tm_api 是用户的"机器"配置·不应被存档覆盖
   var _preservedAi = null;
@@ -983,8 +1145,9 @@ function fullLoadGame(data, loadOptions){
     GM.running=true;
     // 旧档可能没有或带着陈旧 GM.year/month/day；读档后按 turn + P.time 重新派生。
     try { if (typeof _tmSyncGMCalendar === 'function') _tmSyncGMCalendar(GM, GM.turn || 1); } catch (_calendarLoadE) {}
-    // 读档时强制重置busy——若存档时推演未完成（例如自动存档在endTurn中途触发），busy可能遗留为true导致"静待时变"失效
-    GM.busy = false;
+    // 必需 hydration/receipt 恢复完成前保持 busy，旧界面残留按钮也不能提前过回合。
+    GM.busy = true;
+    GM._loadHydrationPending = true;
     GM._endTurnBusy = false;
     if(GM._rngState && typeof restoreRng === 'function') restoreRng(GM._rngState);
     // 兼容旧存档：旧版本将ChronicleSystem序列化数据错误地写入GM._chronicle（覆盖了原本的数组）——检测并迁移
@@ -996,11 +1159,6 @@ function fullLoadGame(data, loadOptions){
     // 每次读档都绑定（包括没有旧字段的空档），避免沿用上一战役的进程级单例残留。
     if(typeof ChronicleSystem !== 'undefined') {
       ChronicleSystem.deserialize(GM._chronicleSysState || null, GM);
-      if (typeof ChronicleSystem.hydrateDurableRecords === 'function') {
-        ChronicleSystem.hydrateDurableRecords(GM, P).catch(function(error) {
-          try { if (window.TM && TM.errors && TM.errors.captureSilent) TM.errors.captureSilent(error, 'fullLoadGame·chronicle hydrate'); } catch (_) {}
-        });
-      }
     }
     if(GM._warTruces && typeof WarWeightSystem !== 'undefined') WarWeightSystem.deserialize(GM._warTruces);
 
@@ -1149,14 +1307,6 @@ function fullLoadGame(data, loadOptions){
       }
     } catch(_memSpineE) { console.warn('[fullLoadGame] memory spine backfill failed:', _memSpineE); }
 
-    _$("launch").style.display="none";
-    _$("bar").style.display="flex";
-    _$("bar-btns").innerHTML="";
-    _$("G").style.display="grid";
-    _$("E").style.display="none";
-    _$("shiji-btn").classList.add("show");
-    _$("save-btn").classList.add("show");
-
     // ── 管辖层级/封建字段迁移（老存档兼容）──
     if (GM.facs && GM.facs.length > 0) {
       GM.facs.forEach(function(f) {
@@ -1241,6 +1391,25 @@ function fullLoadGame(data, loadOptions){
       }
     } catch(_cpLE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_cpLE, 'load] customPresets sync 失败') : console.warn('[load] customPresets sync 失败', _cpLE); }
 
+    // 读档完成屏障：先合并当前父时间线的有效辅助记录和可恢复分卷，再开放任何玩法操作。
+    if (typeof ChronicleSystem !== 'undefined' && typeof ChronicleSystem.hydrateDurableRecords === 'function') {
+      await ChronicleSystem.hydrateDurableRecords(GM, P);
+    }
+    await _recoverPendingTurnDataPublish();
+    // 每次从快照继续都建立子时间线；失败回滚可显式 preserveTimeline 复原原身份。
+    if (!loadOptions.preserveTimeline) _tmForkLoadedTimeline(GM, loadOptions.source || 'load');
+    GM._loadHydrationPending = false;
+    GM.busy = false;
+
+    // hydration 完成前保持加载遮罩与旧界面隔离；此处才真正开放新世界 UI。
+    _$("launch").style.display="none";
+    _$("bar").style.display="flex";
+    _$("bar-btns").innerHTML="";
+    _$("G").style.display="grid";
+    _$("E").style.display="none";
+    _$("shiji-btn").classList.add("show");
+    _$("save-btn").classList.add("show");
+
     enterGame();
     renderGameState();
     renderOfficeTree();
@@ -1252,8 +1421,6 @@ function fullLoadGame(data, loadOptions){
     if(typeof renderGameCivic==="function")renderGameCivic();
     if(typeof renderRenwu==="function")renderRenwu();
     if(typeof renderSidePanels==="function")renderSidePanels();
-
-    _recoverPendingTurnDataPublish();
 
     toast("\u2705 \u5DF2\u52A0\u8F7D: T"+GM.turn+" "+getTSText(GM.turn));
   }else{
@@ -1268,9 +1435,9 @@ function fullLoadGame(data, loadOptions){
 importSaveFile=function(){
   // Electron桌面端：使用原生文件对话框
   if(_tmHasNativeFs()&&window.tianming&&window.tianming.dialogImport){
-    window.tianming.dialogImport().then(function(res){
+    window.tianming.dialogImport().then(async function(res){
       if(!res||res.canceled||!res.success)return;
-      try{ fullLoadGame(res.data); }catch(err){ toast('\u5931\u8D25: '+err.message); }
+      try{ await fullLoadGame(res.data, { source: 'desktop-import' }); }catch(err){ toast('\u5931\u8D25: '+err.message); }
     }).catch(function(){ toast('\u5931\u8D25'); });
     return;
   }
@@ -1280,12 +1447,12 @@ importSaveFile=function(){
     var f=e.target.files[0];if(!f)return;
     showLoading("\u8BFB\u53D6\u6587\u4EF6...",30);
     var reader=new FileReader();
-    reader.onload=function(ev){
+    reader.onload=async function(ev){
       try{
         showLoading("\u89E3\u6790\u6570\u636E...",60);
         var data=JSON.parse(ev.target.result);
         showLoading("\u6062\u590D\u72B6\u6001...",90);
-        fullLoadGame(data);
+        await fullLoadGame(data, { source: 'file-import' });
         hideLoading();
       }catch(err){hideLoading();toast("\u5931\u8D25: "+err.message);}
     };
@@ -1302,35 +1469,7 @@ if(_tmHasNativeFs()){
     (async function(){var list=await window.tianming.listSaves();
     var files=list.success?list.files.filter(function(f){return f.name!=="__autosave__";}):[];
     files.sort(function(a,b){return (b.modified||0)-(a.modified||0);});
-    var html="<div style='padding:1.5rem;max-width:560px;margin:auto'>";
-    html+="<h2 style='color:var(--gold);margin-bottom:1rem'>\u8BFB\u53D6\u5B58\u6863</h2>";
-    if(!files.length){
-      html+="<p style='color:var(--txt-d)'>\u65E0\u5B58\u6863\u3002</p>";
-    }else{
-      html+="<div style='max-height:340px;overflow-y:auto'>";
-      files.forEach(function(f){
-        var meta=f.meta||{};
-        var sub=(meta.scenario?'\u5267\u672C:'+meta.scenario+' ':'')+(meta.turn?'T'+meta.turn:'');
-        html+="<div style='display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;background:var(--bg-3);border-radius:6px;padding:0.5rem 0.75rem'>";
-        html+="<div style='flex:1;min-width:0'>";
-        html+="<div style='color:var(--txt-s);font-size:0.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>"+f.name+"</div>";
-        html+="<div style='color:var(--txt-d);font-size:0.75rem'>"+(f.modifiedStr||"")+" \u00b7 "+Math.round(f.size/1024)+" KB"+(sub?" \u00b7 "+sub:"")+"</div>";
-        html+="</div>";
-        html+="<button style='padding:0.2rem 0.7rem;border:none;border-radius:4px;background:var(--gold);color:#111;cursor:pointer;font-size:0.8rem;font-family:inherit' "
-          +"onclick='window.desktopLoadSave("+JSON.stringify({name:f.name,storageKey:f.storageKey||''})+")'>"+"\u8F7D\u5165"+"</button>";
-        html+="<button style='padding:0.2rem 0.6rem;border:none;border-radius:4px;background:#5a2020;color:#eee;cursor:pointer;font-size:0.8rem;font-family:inherit' "
-          +"onclick='window.desktopDeleteSave("+JSON.stringify({name:f.name,storageKey:f.storageKey||''})+")'>"+"\u5220\u9664"+"</button>";
-        html+="</div>";
-      });
-      html+="</div>";
-    }
-    html+="<div style='display:flex;gap:0.8rem;margin-top:1rem'>";
-    html+="<button class='btn' onclick='importSaveFile()'>\u4ECE\u6587\u4EF6\u5BFC\u5165</button>";
-    html+="<button class='btn' onclick='showMain()'>\u8FD4\u56DE</button>";
-    html+="</div>";
-    html+="</div>";
-    showPanel(html);
-    _$("G").style.display="none";
+    _tmShowDesktopLoadFallback(files);
   })();};
 
   window.desktopLoadSave=async function(name){
@@ -1339,7 +1478,7 @@ if(_tmHasNativeFs()){
       var r=await window.tianming.loadProject(name);
       if(r.success&&r.data){
         showLoading("\u6062\u590D...",70);
-        try { fullLoadGame(r.data); }
+        try { await fullLoadGame(r.data, { source: 'desktop-save' }); }
         catch (_lpE) { console.error('[loadProject] 恢复失败', _lpE); toast('恢复失败: ' + (_lpE.message||_lpE)); }
         finally { hideLoading(); }
       }else{hideLoading();toast("\u52A0\u8F7D\u5931\u8D25");}
@@ -1617,7 +1756,7 @@ if(_tmHasNativeFs()){
           // 有运行中的游戏——提示恢复
           if(confirm("\u68C0\u6D4B\u5230\u81EA\u52A8\u5B58\u6863 (T"+(r.data.gameState.turn||1)+")\uFF0C\u662F\u5426\u6062\u590D\uFF1F")){
             showLoading("\u6062\u590D...",50);
-            try { fullLoadGame(r.data, { autoSaveSessionToken: r.sessionToken || '' }); }
+            try { await fullLoadGame(r.data, { autoSaveSessionToken: r.sessionToken || '', source: 'desktop-autosave' }); }
             catch (_restE) { console.error('[autoRestore] 恢复失败', _restE); toast('恢复失败: ' + (_restE.message||_restE)); }
             finally { hideLoading(); }
           }

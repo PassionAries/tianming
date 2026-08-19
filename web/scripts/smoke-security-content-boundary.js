@@ -10,6 +10,7 @@ const indexSource = fs.readFileSync(path.join(WEB, 'index.html'), 'utf8');
 const mapSource = fs.readFileSync(path.join(WEB, 'map-display.js'), 'utf8');
 const interactiveMapSource = fs.readFileSync(path.join(WEB, 'tm-map-system.js'), 'utf8');
 const saveSource = fs.readFileSync(path.join(WEB, 'tm-save-manager.js'), 'utf8');
+const saveLifecycleSource = fs.readFileSync(path.join(WEB, 'tm-save-lifecycle.js'), 'utf8');
 const launchSource = fs.readFileSync(path.join(WEB, 'tm-launch.js'), 'utf8');
 let assertions = 0;
 
@@ -140,6 +141,91 @@ function runInteractiveMapProbe() {
   ok(createdTags.every(tag => ['SECTION', 'H4', 'DIV', 'STRONG'].includes(tag)), '地区字段不会创建活动 DOM 标签');
 }
 
+function runDesktopFallbackSaveProbe() {
+  const marker = '<img src=x onerror="globalThis.__tmFallbackOwned=1">';
+  const scenarioMarker = '<script>globalThis.__tmFallbackOwned=2</script>';
+  const nodesById = Object.create(null);
+  const createdTags = [];
+  let htmlWrites = 0;
+  let loadRequest = null;
+  let deleteRequest = null;
+
+  function makeNode(tag) {
+    const node = {
+      tagName: String(tag || '').toUpperCase(),
+      children: [],
+      style: {},
+      textContent: '',
+      className: '',
+      value: '',
+      listeners: Object.create(null),
+      appendChild(child) { this.children.push(child); child.parentNode = this; return child; },
+      addEventListener(type, handler) { this.listeners[type] = handler; }
+    };
+    Object.defineProperty(node, 'lastChild', { get() { return this.children[this.children.length - 1] || null; } });
+    Object.defineProperty(node, 'innerHTML', {
+      set() { htmlWrites++; },
+      get() { return ''; }
+    });
+    if (tag) createdTags.push(node.tagName);
+    return node;
+  }
+
+  nodesById.G = makeNode('main');
+  const document = { createElement: makeNode };
+  const context = {
+    document,
+    window: {
+      desktopLoadSave(value) { loadRequest = value; },
+      desktopDeleteSave(value) { deleteRequest = value; }
+    },
+    showPanel(shell) {
+      ok(shell === '<div id="tm-desktop-save-panel"></div>', '降级面板只使用固定静态容器');
+      nodesById['tm-desktop-save-panel'] = makeNode('div');
+    },
+    _$: id => nodesById[id] || null,
+    importSaveFile() {},
+    showMain() {},
+    Number,
+    String,
+    Math
+  };
+  context.window.window = context.window;
+  const start = saveLifecycleSource.indexOf('function _tmDesktopSavePanelRoot(');
+  const end = saveLifecycleSource.indexOf('\ndoSaveGame=async function()', start);
+  ok(start >= 0 && end > start, '桌面存档降级渲染器可定位');
+  const fallbackSource = saveLifecycleSource.slice(start, end);
+  ok(!/\.innerHTML\s*=|insertAdjacentHTML|onclick\s*=/.test(fallbackSource), '桌面存档降级路径无动态 HTML 或内联事件处理器');
+  vm.runInNewContext(fallbackSource, context);
+  const file = {
+    name: marker,
+    storageKey: 'save-safe-key',
+    modifiedStr: '某日',
+    size: 1024,
+    meta: { scenario: scenarioMarker, turn: 0 }
+  };
+  context._tmShowDesktopLoadFallback([file]);
+
+  function flatten(node) {
+    return String(node && node.textContent || '') + (node && node.children || []).map(flatten).join('');
+  }
+  const root = nodesById['tm-desktop-save-panel'];
+  const rendered = flatten(root);
+  ok(htmlWrites === 0, '恶意存档元数据渲染期间不写 innerHTML');
+  ok(rendered.includes(marker) && rendered.includes(scenarioMarker), '存档名和剧本名仅作为文本完整显示');
+  ok(!createdTags.includes('IMG') && !createdTags.includes('SCRIPT'), '恶意元数据不会创建活动 DOM 节点');
+  const buttons = [];
+  (function collect(node) {
+    if (!node) return;
+    if (node.tagName === 'BUTTON') buttons.push(node);
+    (node.children || []).forEach(collect);
+  })(root);
+  buttons[0].listeners.click();
+  buttons[1].listeners.click();
+  ok(loadRequest && loadRequest.storageKey === file.storageKey && deleteRequest && deleteRequest.storageKey === file.storageKey,
+    '降级列表通过闭包事件传递存档标识，不拼接可执行代码');
+}
+
 ok(/http-equiv=["']Content-Security-Policy["']/i.test(indexSource)
   && /object-src 'none'/.test(indexSource) && /base-uri 'none'/.test(indexSource), '首页声明 CSP 基础纵深防护');
 ok(!/span\.innerHTML\s*=/.test(indexSource.slice(indexSource.indexOf('(function fillHomeRecent(){'), indexSource.indexOf('})();', indexSource.indexOf('(function fillHomeRecent(){')))),
@@ -152,5 +238,6 @@ ok(/data-scenario-id/.test(launchSource) && /addEventListener\(['"]click['"]/.te
 runRecentSaveCardProbe();
 runMapDetailsProbe();
 runInteractiveMapProbe();
+runDesktopFallbackSaveProbe();
 
 console.log('[smoke-security-content-boundary] PASS assertions=' + assertions);

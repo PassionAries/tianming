@@ -43,6 +43,7 @@ const OFFICIAL_SCENARIO_FILES = [
 // Writable runtime data must live under userData. Packaged builds may place
 // __dirname inside app.asar, which is readable but not a directory for writes.
 const SAVE_DIR      = path.join(USER_DATA_DIR, 'saves');
+const SAVE_METADATA_DIR = path.join(SAVE_DIR, '.metadata');
 const SCENARIOS_DIR = path.join(USER_DATA_DIR, 'scenarios');
 const TURN_DATA_DIR = path.join(USER_DATA_DIR, 'turn-data');
 const CONFIG_FILE   = path.join(USER_DATA_DIR, 'app_config.json');
@@ -148,7 +149,7 @@ function ensureWritableDir(dir) {
 }
 
 function ensureSaveDir() {
-  [SAVE_DIR, SCENARIOS_DIR, TURN_DATA_DIR, UPDATE_DIR, OFFICIAL_CONTENT_DIR, WORKSHOP_DIR, WORKSHOP_PACKS_DIR, HOT_UPDATE_DIR, HOT_UPDATE_VERSIONS_DIR].forEach(d => {
+  [SAVE_DIR, SAVE_METADATA_DIR, SCENARIOS_DIR, TURN_DATA_DIR, UPDATE_DIR, OFFICIAL_CONTENT_DIR, WORKSHOP_DIR, WORKSHOP_PACKS_DIR, HOT_UPDATE_DIR, HOT_UPDATE_VERSIONS_DIR].forEach(d => {
     ensureWritableDir(d);
   });
 }
@@ -246,6 +247,65 @@ function writeFileAtomic(file, data, encoding) {
     if (fd !== null) { try { fs.closeSync(fd); } catch (_) {} }
     try { fs.rmSync(tmp, { force: true }); } catch (_) {}
     throw e;
+  }
+}
+
+function desktopSaveMetadataPath(storageKey) {
+  storageKey = String(storageKey == null ? '' : storageKey);
+  if (!storageKey || storageKey.length > 140 || path.basename(storageKey) !== storageKey || /[<>:"/\\|?*]/.test(storageKey)) {
+    throw new Error('存档元数据标识非法');
+  }
+  return path.join(SAVE_METADATA_DIR, storageKey + '.json');
+}
+
+function desktopSaveMetadataFromData(data, storageKey) {
+  const envelope = data && data.__tmAutoSaveEnvelope === 1 ? data.data : data;
+  const meta = envelope && envelope._saveMeta && typeof envelope._saveMeta === 'object' ? envelope._saveMeta : {};
+  const state = envelope && envelope.gameState;
+  const gm = state && state.GM && typeof state.GM === 'object' ? state.GM : state;
+  const clean = (value, max) => String(value == null ? '' : value).slice(0, max);
+  const rawTurn = meta.turn != null ? Number(meta.turn) : Number(gm && gm.turn);
+  const turn = Number.isSafeInteger(rawTurn) && rawTurn >= 0 ? rawTurn : 0;
+  const canonicalName = String(storageKey) === '__autosave__'
+    ? '__autosave__'
+    : clean(meta.name || meta.saveName || (gm && gm.saveName) || storageKey, 200);
+  return {
+    version: 1,
+    storageKey: String(storageKey),
+    name: canonicalName,
+    meta: {
+      scenario: clean(meta.scenario || meta.scenarioName, 200),
+      turn,
+      time: clean(meta.time, 100),
+      date: clean(meta.date, 100),
+      version: clean(meta.version, 40),
+      campaignId: clean(gm && gm._campaignId, 128),
+      timelineId: clean(gm && gm._timelineId, 128)
+    },
+    updatedAt: Date.now()
+  };
+}
+
+function writeDesktopSaveMetadata(storageKey, data) {
+  const record = desktopSaveMetadataFromData(data, storageKey);
+  writeJsonAtomic(desktopSaveMetadataPath(storageKey), record);
+  return record;
+}
+
+function fallbackDesktopSaveName(storageKey) {
+  return String(storageKey || '').replace(/--[0-9a-f]{16}$/i, '') || '未命名存档';
+}
+
+async function readDesktopSaveMetadata(storageKey) {
+  try {
+    const raw = await fs.promises.readFile(desktopSaveMetadataPath(storageKey), 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.version !== 1 || String(parsed.storageKey || '') !== String(storageKey)) return null;
+    return parsed;
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return null;
+    console.warn('[save-metadata] sidecar read failed:', storageKey, error && error.message || error);
+    return null;
   }
 }
 
@@ -2786,7 +2846,13 @@ ipcMain.handle('save-project', async (event, { filename, data }) => {
     const filepath = path.join(SAVE_DIR, key + '.json');
     // 2026-06-10·紧凑写盘:同 auto-save·缩进占体积 55%·手动存档同步砍半
     writeFileAtomic(filepath, JSON.stringify(data), 'utf-8');
-    return { success: true, path: filepath, storageKey: key };
+    let metadataWarning = '';
+    try { writeDesktopSaveMetadata(key, data); }
+    catch (metadataError) {
+      metadataWarning = String(metadataError && metadataError.message || metadataError);
+      console.warn('[save-project] 正文已保存，sidecar 写入失败:', metadataWarning);
+    }
+    return { success: true, path: filepath, storageKey: key, metadataWarning };
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -2798,6 +2864,9 @@ ipcMain.handle('load-project', async (event, filename) => {
     const ref = saveFileRef(filename);
     if (!fs.existsSync(ref.path)) return { success: false, error: '文件不存在' };
     const data = JSON.parse(fs.readFileSync(ref.path, 'utf-8'));
+    try { writeDesktopSaveMetadata(ref.key, data); } catch (metadataError) {
+      console.warn('[load-project] sidecar 回填失败:', metadataError && metadataError.message || metadataError);
+    }
     return { success: true, data, storageKey: ref.key };
   } catch (e) {
     return { success: false, error: e.message };
@@ -2808,32 +2877,30 @@ ipcMain.handle('load-project', async (event, filename) => {
 ipcMain.handle('list-saves', async () => {
   try {
     ensureSaveDir();
-    const files = fs.readdirSync(SAVE_DIR)
-      .filter(f => f.endsWith('.json'))
-      .map(f => {
+    const entries = await fs.promises.readdir(SAVE_DIR, { withFileTypes: true });
+    const files = await Promise.all(entries
+      .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
+      .map(async entry => {
+        const f = entry.name;
         const fp = path.join(SAVE_DIR, f);
-        const stats = fs.statSync(fp);
-        let _saveMeta = null;
-        let parseError = '';
-        try {
-          const raw = fs.readFileSync(fp, 'utf-8');
-          const parsed = JSON.parse(raw);
-          if (parsed._saveMeta) _saveMeta = parsed._saveMeta;
-        } catch (e) { parseError = String(e && e.message || e); }
+        const stats = await fs.promises.stat(fp);
         const storageKey = f.replace(/\.json$/i, '');
+        const sidecar = await readDesktopSaveMetadata(storageKey);
+        const _saveMeta = sidecar && sidecar.meta || null;
         return {
-          name: (_saveMeta && typeof _saveMeta.name === 'string' && _saveMeta.name) || storageKey,
+          name: (sidecar && typeof sidecar.name === 'string' && sidecar.name) || fallbackDesktopSaveName(storageKey),
           storageKey,
           size: stats.size,
           modified: stats.mtimeMs,
           modifiedStr: new Date(stats.mtimeMs).toLocaleString('zh-CN'),
           _saveMeta,
           meta: _saveMeta,
-          corrupt: !!parseError,
-          error: parseError
+          metadataPending: !sidecar,
+          corrupt: false,
+          error: ''
         };
-      })
-      .sort((a, b) => b.modified - a.modified);
+      }));
+    files.sort((a, b) => b.modified - a.modified);
     return { success: true, files };
   } catch (e) {
     return { success: false, error: e.message };
@@ -2845,6 +2912,8 @@ ipcMain.handle('delete-save', async (event, filename) => {
   try {
     const ref = saveFileRef(filename);
     if (fs.existsSync(ref.path)) fs.unlinkSync(ref.path);
+    try { fs.unlinkSync(desktopSaveMetadataPath(ref.key)); }
+    catch (metadataError) { if (!(metadataError && metadataError.code === 'ENOENT')) throw metadataError; }
     return { success: true };
   } catch (e) {
     return { success: false, error: e.message };
@@ -2941,6 +3010,8 @@ ipcMain.handle('auto-save', (event, payload) => {
       if (requestToken && !autoSaveSessionMatches(requestToken)) {
         return { success: false, stale: true, error: '自动存档提交期间已跨档失效', sessionToken: getAutoSaveSessionToken() };
       }
+      try { writeDesktopSaveMetadata('__autosave__', diskPayload); }
+      catch (metadataError) { console.warn('[auto-save] sidecar 写入失败:', metadataError && metadataError.message || metadataError); }
       return { success: true, sessionToken: requestToken || '' };
     } catch (e) {
       return { success: false, error: e.message };
@@ -3930,6 +4001,8 @@ if (TEST_MODE) {
     isStrictUpgrade,
     isStrictRendererUpgrade,
     sanitize,
+    desktopSaveMetadataFromData,
+    fallbackDesktopSaveName,
     downloadRemoteFile,
     sha256FileStream,
     sha256File,

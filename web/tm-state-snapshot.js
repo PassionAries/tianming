@@ -12,7 +12,7 @@
   var DB_NAME = 'tianming_snapshots';
   var LEGACY_STORE = 'snapshots';
   var STORE = 'snapshots_v2';
-  var DB_VERSION = 2;
+  var DB_VERSION = 3;
   var MAX_SNAPSHOTS = 200;
   var _dbPromise = null;
 
@@ -34,14 +34,25 @@
     return id;
   }
 
+  function _ensureTimelineId(gm) {
+    if (!gm) return '';
+    try {
+      if (typeof global._tmEnsureTimelineId === 'function') return global._tmEnsureTimelineId(gm);
+    } catch (_) {}
+    var id = typeof gm._timelineId === 'string' ? gm._timelineId.trim() : '';
+    if (!/^tml_[A-Za-z0-9_-]{8,124}$/.test(id)) id = 'tml_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 14);
+    gm._timelineId = id;
+    return id;
+  }
+
   function _strictTurn(turn) {
     var n = typeof turn === 'number' ? turn : Number(String(turn == null ? '' : turn).trim());
     if (!Number.isSafeInteger(n) || n < 0 || n > 10000000) throw new Error('非法回合号: ' + turn);
     return n;
   }
 
-  function _recordId(campaignId, turn) {
-    return campaignId + ':' + _strictTurn(turn);
+  function _recordId(campaignId, timelineId, turn) {
+    return campaignId + ':' + timelineId + ':' + _strictTurn(turn);
   }
 
   function _deepClone(obj) {
@@ -62,7 +73,12 @@
         if (!db.objectStoreNames.contains(STORE)) {
           var store = db.createObjectStore(STORE, { keyPath: 'id' });
           store.createIndex('campaignId', 'campaignId', { unique: false });
-          store.createIndex('campaignTurn', ['campaignId', 'turn'], { unique: true });
+          store.createIndex('campaignTimeline', ['campaignId', 'timelineId'], { unique: false });
+          store.createIndex('timelineTurn', ['campaignId', 'timelineId', 'turn'], { unique: true });
+        } else if (e.oldVersion < 3) {
+          var existingStore = e.target.transaction.objectStore(STORE);
+          try { existingStore.createIndex('campaignTimeline', ['campaignId', 'timelineId'], { unique: false }); } catch (_) {}
+          try { existingStore.createIndex('timelineTurn', ['campaignId', 'timelineId', 'turn'], { unique: true }); } catch (_) {}
         }
         // v1 的 partial GM 快照不能安全升级成完整 {GM,P}，保留旧 store 只读，
         // 但绝不混入 v2 列表或恢复路径。
@@ -122,9 +138,9 @@
     });
   }
 
-  function _enforceLRU(campaignId, max) {
+  function _enforceLRU(campaignId, timelineId, max) {
     return _getAllRecords().then(function(records) {
-      var own = records.filter(function(r) { return r && r.campaignId === campaignId; });
+      var own = records.filter(function(r) { return r && r.campaignId === campaignId && r.timelineId === timelineId; });
       own.sort(function(a, b) { return (a.turn - b.turn) || (a.ts - b.ts); });
       var remove = own.slice(0, Math.max(0, own.length - max));
       if (!remove.length) return;
@@ -144,30 +160,33 @@
     });
   }
 
-  function _saveSnapshotFrom(gm, p, requestedTurn, requestedCampaignId) {
+  function _saveSnapshotFrom(gm, p, requestedTurn, requestedCampaignId, requestedTimelineId) {
     try {
       if (!gm) return Promise.resolve({ ok: false, reason: 'no GM' });
       var campaignId = requestedCampaignId || _ensureCampaignId(gm);
       if (campaignId !== _ensureCampaignId(gm)) {
         return Promise.resolve({ ok: false, reason: 'campaign mismatch' });
       }
+      var timelineId = requestedTimelineId || _ensureTimelineId(gm);
+      if (timelineId !== _ensureTimelineId(gm)) return Promise.resolve({ ok: false, reason: 'timeline mismatch' });
       var turn = _strictTurn(requestedTurn == null ? gm.turn : requestedTurn);
       if (_strictTurn(gm.turn) !== turn) return Promise.resolve({ ok: false, reason: 'turn mismatch' });
       var state = _captureFullState(gm, p);
       var record = {
-        id: _recordId(campaignId, turn),
+        id: _recordId(campaignId, timelineId, turn),
         campaignId: campaignId,
+        timelineId: timelineId,
         turn: turn,
         ts: Date.now(),
         schema: 2,
         state: state
       };
       return _putRecord(record).then(function() {
-        return _enforceLRU(campaignId, MAX_SNAPSHOTS).catch(function(e) {
+        return _enforceLRU(campaignId, timelineId, MAX_SNAPSHOTS).catch(function(e) {
           try { console.warn('[StateSnapshot] LRU 清理失败，快照本身已写入', e); } catch (_) {}
         });
       }).then(function() {
-        return { ok: true, turn: turn, campaignId: campaignId, record: record };
+        return { ok: true, turn: turn, campaignId: campaignId, timelineId: timelineId, record: record };
       }).catch(function(e) { return { ok: false, error: e }; });
     } catch (e) {
       return Promise.resolve({ ok: false, error: e });
@@ -177,15 +196,16 @@
   function saveSnapshot(turn) {
     var gm = global.GM || (typeof GM !== 'undefined' ? GM : null);
     var p = global.P || (typeof P !== 'undefined' ? P : null);
-    return _saveSnapshotFrom(gm, p, turn, gm ? _ensureCampaignId(gm) : '');
+    return _saveSnapshotFrom(gm, p, turn, gm ? _ensureCampaignId(gm) : '', gm ? _ensureTimelineId(gm) : '');
   }
 
-  function loadSnapshot(turn, campaignId) {
+  function loadSnapshot(turn, campaignId, timelineId) {
     try {
       var gm = global.GM || (typeof GM !== 'undefined' ? GM : null);
       campaignId = campaignId || (gm ? _ensureCampaignId(gm) : '');
-      if (!campaignId) return Promise.resolve(null);
-      var id = _recordId(campaignId, turn);
+      timelineId = timelineId || (gm ? _ensureTimelineId(gm) : '');
+      if (!campaignId || !timelineId) return Promise.resolve(null);
+      var id = _recordId(campaignId, timelineId, turn);
       return _openDB().then(function(db) {
         return new Promise(function(resolve, reject) {
           var tx;
@@ -201,23 +221,25 @@
     } catch (e) { return Promise.reject(e); }
   }
 
-  function listSnapshots(campaignId) {
+  function listSnapshots(campaignId, timelineId) {
     var gm = global.GM || (typeof GM !== 'undefined' ? GM : null);
     campaignId = campaignId || (gm ? _ensureCampaignId(gm) : '');
-    if (!campaignId) return Promise.resolve([]);
+    timelineId = timelineId || (gm ? _ensureTimelineId(gm) : '');
+    if (!campaignId || !timelineId) return Promise.resolve([]);
     return _getAllRecords().then(function(records) {
-      return records.filter(function(r) { return r && r.campaignId === campaignId; })
+      return records.filter(function(r) { return r && r.campaignId === campaignId && r.timelineId === timelineId; })
         .sort(function(a, b) { return a.turn - b.turn; })
-        .map(function(r) { return { turn: r.turn, ts: r.ts, campaignId: r.campaignId }; });
+        .map(function(r) { return { turn: r.turn, ts: r.ts, campaignId: r.campaignId, timelineId: r.timelineId }; });
     });
   }
 
-  function deleteSnapshot(turn, campaignId) {
+  function deleteSnapshot(turn, campaignId, timelineId) {
     try {
       var gm = global.GM || (typeof GM !== 'undefined' ? GM : null);
       campaignId = campaignId || (gm ? _ensureCampaignId(gm) : '');
-      if (!campaignId) return Promise.resolve({ ok: false, reason: 'no campaign' });
-      var id = _recordId(campaignId, turn);
+      timelineId = timelineId || (gm ? _ensureTimelineId(gm) : '');
+      if (!campaignId || !timelineId) return Promise.resolve({ ok: false, reason: 'no world identity' });
+      var id = _recordId(campaignId, timelineId, turn);
       return _openDB().then(function(db) {
         return new Promise(function(resolve, reject) {
           var tx;
@@ -235,9 +257,9 @@
 
   function _loadGen() { return Number(global._tmLoadGen || 0); }
 
-  function _stillCurrent(gm, p, loadGen, campaignId) {
+  function _stillCurrent(gm, p, loadGen, campaignId, timelineId) {
     return global.GM === gm && global.P === p && _loadGen() === loadGen
-      && !!gm && gm._campaignId === campaignId;
+      && !!gm && gm._campaignId === campaignId && gm._timelineId === timelineId;
   }
 
   function _restoreFullState(state, loadOptions) {
@@ -268,26 +290,28 @@
       currentTurn = _strictTurn(sourceGM.turn);
     } catch (e) { return Promise.resolve({ ok: false, error: e }); }
     var campaignId = _ensureCampaignId(sourceGM);
+    var timelineId = _ensureTimelineId(sourceGM);
     var sourceLoadGen = _loadGen();
     var keepShiji = opts.keepShijiHistory ? _deepClone(sourceGM.shijiHistory || []) : null;
     var keepEvt = opts.keepEvtLog ? _deepClone(sourceGM.evtLog || []) : null;
 
-    return loadSnapshot(target, campaignId).then(function(targetRecord) {
+    return loadSnapshot(target, campaignId, timelineId).then(function(targetRecord) {
       if (!targetRecord) return { ok: false, reason: 'no snapshot for turn ' + target };
-      if (!targetRecord.state || targetRecord.campaignId !== campaignId || targetRecord.turn !== target) {
+      if (!targetRecord.state || targetRecord.campaignId !== campaignId || targetRecord.timelineId !== timelineId || targetRecord.turn !== target) {
         return { ok: false, reason: 'snapshot identity mismatch' };
       }
-      if (!_stillCurrent(sourceGM, sourceP, sourceLoadGen, campaignId)) {
+      if (!_stillCurrent(sourceGM, sourceP, sourceLoadGen, campaignId, timelineId)) {
         return { ok: false, reason: 'stale game before travel' };
       }
       // 在应用目标局之前同步、完整地保存返航点；失败即不动 live 状态。
-      return _saveSnapshotFrom(sourceGM, sourceP, currentTurn, campaignId).then(function(saved) {
+      return _saveSnapshotFrom(sourceGM, sourceP, currentTurn, campaignId, timelineId).then(function(saved) {
         if (!saved || saved.ok !== true) return { ok: false, reason: 'failed to save return point', error: saved && saved.error };
-        if (!_stillCurrent(sourceGM, sourceP, sourceLoadGen, campaignId)) {
+        if (!_stillCurrent(sourceGM, sourceP, sourceLoadGen, campaignId, timelineId)) {
           return { ok: false, reason: 'stale game during travel' };
         }
         return _restoreFullState(targetRecord.state, { source: 'time-travel' }).then(function() {
           var restoredGM = global.GM || (typeof GM !== 'undefined' ? GM : null);
+          var restoredP = global.P || (typeof P !== 'undefined' ? P : null);
           if (!restoredGM || restoredGM._campaignId !== campaignId || Number(restoredGM.turn) !== target) {
             throw new Error('恢复后的快照身份不匹配');
           }
@@ -297,10 +321,38 @@
           try { delete restoredGM._postTurnJobs; } catch (_) {}
           if (!Array.isArray(restoredGM._timeTravelHistory)) restoredGM._timeTravelHistory = [];
           restoredGM._timeTravelHistory.push({ from: currentTurn, to: target, ts: Date.now() });
-          return { ok: true, restoredTurn: target, savedFromTurn: currentTurn, campaignId: campaignId };
+          var restoredTimelineId = _ensureTimelineId(restoredGM);
+          // fullLoadGame 会为时间回溯建立子时间线。目标点和刚保存的返航点都必须
+          // 继承到子时间线，否则玩家回溯成功后会立刻失去返回原回合的入口。
+          var inheritedReturnRecord = null;
+          if (currentTurn !== target) {
+            inheritedReturnRecord = _deepClone(saved.record);
+            inheritedReturnRecord.id = _recordId(campaignId, restoredTimelineId, currentTurn);
+            inheritedReturnRecord.timelineId = restoredTimelineId;
+            inheritedReturnRecord.ts = Date.now();
+            if (inheritedReturnRecord.state && inheritedReturnRecord.state.GM) {
+              inheritedReturnRecord.state.GM._timelineId = restoredTimelineId;
+              inheritedReturnRecord.state.GM._parentTimelineId = restoredGM._parentTimelineId || timelineId;
+              inheritedReturnRecord.state.GM._forkTurn = restoredGM._forkTurn;
+              inheritedReturnRecord.state.GM._timelineForkReason = restoredGM._timelineForkReason || 'time-travel';
+            }
+          }
+          return Promise.all([
+            _saveSnapshotFrom(restoredGM, restoredP, target, campaignId, restoredTimelineId),
+            inheritedReturnRecord ? _putRecord(inheritedReturnRecord) : Promise.resolve(true)
+          ]).then(function(branchWrites) {
+            if (!(branchWrites[0] && branchWrites[0].ok === true)) throw new Error('子时间线目标快照写入失败');
+            return {
+              ok: true,
+              restoredTurn: target,
+              savedFromTurn: currentTurn,
+              campaignId: campaignId,
+              timelineId: restoredTimelineId
+            };
+          });
         }).catch(function(restoreError) {
           // 目标恢复异常时尽力回到刚写入的完整返航点。
-          return _restoreFullState(saved.record.state, { source: 'time-travel-rollback' }).then(function() {
+          return _restoreFullState(saved.record.state, { source: 'time-travel-rollback', preserveTimeline: true }).then(function() {
             return { ok: false, reason: 'restore failed', error: restoreError, rolledBack: true };
           }).catch(function(rollbackError) {
             return { ok: false, reason: 'restore and rollback failed', error: restoreError, rollbackError: rollbackError };

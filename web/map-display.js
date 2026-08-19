@@ -276,9 +276,14 @@ function showProvinceDetails(region) {
  * 在游戏主界面显示地图
  */
 function showMapInGame() {
-    // R107·AI 地理志模式 P.map.enabled===false 时直接归为无数据·占位提示
-    var isAIGeo = (P.map && P.map.enabled === false) || (typeof GM !== 'undefined' && GM._useAIGeo === true);
-    var hasMapData = !isAIGeo && P.map && P.map.regions && P.map.regions.length > 0;
+    // 游戏内地图必须读取运行态；P 仅在尚未创建 GM 地图时作为兼容回退。
+    var liveMap = typeof getLiveMapData === 'function'
+        ? getLiveMapData()
+        : ((typeof GM !== 'undefined' && GM && (GM.mapData || GM.map)) ||
+            (typeof P !== 'undefined' && P && (P.mapData || P.map)) || null);
+    // R107·AI 地理志模式 enabled===false 时直接归为无数据·占位提示
+    var isAIGeo = (liveMap && liveMap.enabled === false) || (typeof GM !== 'undefined' && GM._useAIGeo === true);
+    var hasMapData = !isAIGeo && liveMap && Array.isArray(liveMap.regions) && liveMap.regions.length > 0;
 
     // 2.4方案B：无数据时显示占位提示而非alert
     if (!hasMapData) {
@@ -332,7 +337,7 @@ function showMapInGame() {
         const mode = document.getElementById('game-map-mode').value;
         const showLabels = document.getElementById('game-map-labels').checked;
 
-        renderGameMap('game-map-canvas', P.map, {
+        renderGameMap('game-map-canvas', liveMap, {
             displayMode: mode,
             showLabels: showLabels,
             onProvinceClick: function(region) {

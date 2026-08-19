@@ -179,6 +179,37 @@ function makeContext(indexedDB, localStorage) {
     && noDisposableIdb.stores.get('saves').get('slot_0').gameState === 'old-slot',
   'quota recovery never deletes either canonical slot when no disposable auto save exists');
 
+  const singleOnlySlotIdb = makeIndexedDB({ saves: { slot_0: oldSlot }, saveMetadata: {
+    slot_0: { id: 'slot_0', type: 'auto', turn: 49, timestamp: 1 }
+  } }, 1, 'QuotaExceededError');
+  const singleOnlySlotCtx = makeContext(singleOnlySlotIdb, makeLocalStorage());
+  await singleOnlySlotCtx.TM_SaveDB.open();
+  const singleOnlySlotSaved = await singleOnlySlotCtx.TM_SaveDB.save('slot_0', state, { type: 'auto', turn: 50 });
+  check(singleOnlySlotSaved === false && singleOnlySlotIdb.stores.get('saves').get('slot_0').gameState === 'old-slot',
+    'single-slot quota recovery never deletes the old target when no disposable save exists');
+
+  const singleCanonicalIdb = makeIndexedDB({ saves: { autosave: oldAuto, slot_0: oldSlot }, saveMetadata: {
+    autosave: { id: 'autosave', type: 'auto', turn: 49, timestamp: 1 },
+    slot_0: { id: 'slot_0', type: 'auto', turn: 49, timestamp: 2 }
+  } }, 1, 'QuotaExceededError');
+  const singleCanonicalCtx = makeContext(singleCanonicalIdb, makeLocalStorage());
+  await singleCanonicalCtx.TM_SaveDB.open();
+  const singleCanonicalSaved = await singleCanonicalCtx.TM_SaveDB.save('slot_0', state, { type: 'auto', turn: 50 });
+  check(singleCanonicalSaved === false
+    && singleCanonicalIdb.stores.get('saves').get('autosave').gameState === 'old-auto'
+    && singleCanonicalIdb.stores.get('saves').get('slot_0').gameState === 'old-slot',
+  'single-slot quota recovery protects every canonical recovery slot');
+
+  const singleDisposableIdb = makeIndexedDB(quotaInitial, 1, 'QuotaExceededError');
+  const singleDisposableCtx = makeContext(singleDisposableIdb, makeLocalStorage());
+  await singleDisposableCtx.TM_SaveDB.open();
+  const singleDisposableSaved = await singleDisposableCtx.TM_SaveDB.save('slot_0', state, { type: 'auto', turn: 50 });
+  check(singleDisposableSaved === true
+    && !singleDisposableIdb.stores.get('saves').has('older_auto_1')
+    && singleDisposableIdb.stores.get('saves').get('autosave').gameState === 'old-auto'
+    && JSON.parse(singleDisposableIdb.stores.get('saves').get('slot_0').gameState).GM.turn === 50,
+  'single-slot quota recovery removes only a disposable auto save before retrying the target');
+
   const marker = { transactionId: 'turn-marker-12345678', campaignId: 'campaign-1', turn: 50 };
   const markerState = { GM: { turn: 51, _pendingTurnDataPublish: marker }, P: {} };
   const markerIdb = makeIndexedDB({ saves: {
@@ -235,6 +266,16 @@ function makeContext(indexedDB, localStorage) {
   check(JSON.parse(JSON.parse(localQuota.getItem(keys.auto)).gameState).GM.turn === 50
     && JSON.parse(JSON.parse(localQuota.getItem(keys.slot)).gameState).GM.turn === 50,
   'localStorage quota recovery still advances both canonical slots together');
+
+  const localSingleQuota = makeLocalStorage(localQuotaInitial, keys.slotMeta, 'QuotaExceededError');
+  const localSingleQuotaCtx = makeContext(null, localSingleQuota);
+  await localSingleQuotaCtx.TM_SaveDB.open();
+  const localSingleSaved = await localSingleQuotaCtx.TM_SaveDB.save('slot_0', state, { type: 'auto', turn: 50 });
+  check(localSingleSaved === true
+    && localSingleQuota.getItem('tm_idb_saves_older_auto_1') === null
+    && JSON.parse(localSingleQuota.getItem(keys.auto)).gameState === JSON.parse(localQuotaInitial[keys.auto]).gameState
+    && JSON.parse(JSON.parse(localSingleQuota.getItem(keys.slot)).gameState).GM.turn === 50,
+  'localStorage single-slot quota recovery preserves canonical slots and removes only disposable autos');
 
   const preparedItems = Object.entries(initial).map(([key, previous]) => ({ key, previous }));
   const crashLocal = makeLocalStorage(Object.assign({}, initial, {

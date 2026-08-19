@@ -61,6 +61,11 @@ var TM_SaveDB = (function() {
   var _openPromise = null; // 防止重复打开
   var _migrationTail = Promise.resolve(); // 两类旧源必须串行探测/占用目标 ID
   var LOCAL_SAVE_BATCH_JOURNAL = 'tm_save_batch_journal_v1';
+  var PROTECTED_SAVE_IDS = Object.freeze({
+    autosave: true,
+    slot_0: true,
+    pre_endturn: true
+  });
 
   function _restoreLocalSaveBatchItems(items) {
     items = Array.isArray(items) ? items : [];
@@ -191,11 +196,13 @@ var TM_SaveDB = (function() {
 
   function _dropOldestAutoSave(writeGuard, excludedIds) {
     if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
-    excludedIds = excludedIds || {};
+    var protectedIds = Object.create(null);
+    Object.keys(PROTECTED_SAVE_IDS).forEach(function(id) { protectedIds[id] = true; });
+    Object.keys(excludedIds || {}).forEach(function(id) { protectedIds[String(id)] = true; });
     return _listSaveMetadata().then(function(records) {
       // 列表读取本身是异步的；失效请求不得为了一个已取消的写入删除仍可恢复的旧 autosave。
       if (!_writeGuardAllows(writeGuard)) return false;
-      var autos = (records || []).filter(function(r){ return r.type === 'auto' && !excludedIds[String(r.id)]; })
+      var autos = (records || []).filter(function(r){ return r.type === 'auto' && !protectedIds[String(r.id)]; })
                                  .sort(function(a,b){ return (a.timestamp||0) - (b.timestamp||0); });
       if (autos.length === 0) return false; // 没 auto 可清
       var victim = autos[0];
@@ -223,6 +230,17 @@ var TM_SaveDB = (function() {
           if (previousMetadata == null) localStorage.removeItem(metadataKey);
           else localStorage.setItem(metadataKey, previousMetadata);
         } catch (_) {}
+        if (e && e.name === 'QuotaExceededError' && !_retryCount) {
+          var excludedLocal = Object.create(null);
+          excludedLocal[String(record.id)] = true;
+          if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
+          return _dropOldestAutoSave(writeGuard, excludedLocal).then(function(dropped) {
+            if (!_writeGuardAllows(writeGuard)) return false;
+            if (dropped) return _putSaveRecord(record, 1, writeGuard);
+            if (typeof window.toast === 'function') window.toast('❌ 存档空间满·请手动删除旧存档后重试');
+            return false;
+          });
+        }
         return Promise.reject(e);
       }
     }
@@ -240,7 +258,9 @@ var TM_SaveDB = (function() {
           var isQuota = err && err.name === 'QuotaExceededError';
           if (isQuota && !_retryCount) {
             if (!_writeGuardAllows(writeGuard)) { resolve(false); return; }
-            _dropOldestAutoSave(writeGuard).then(function(dropped) {
+            var excluded = Object.create(null);
+            excluded[String(record.id)] = true;
+            _dropOldestAutoSave(writeGuard, excluded).then(function(dropped) {
               if (!_writeGuardAllows(writeGuard)) { resolve(false); return; }
               if (dropped) _putSaveRecord(record, 1, writeGuard).then(resolve, reject);
               else {
@@ -355,6 +375,17 @@ var TM_SaveDB = (function() {
         return Promise.resolve(true);
       } catch(e) {
         console.error('[SaveDB] localStorage写入失败:', e.message);
+        if (e && e.name === 'QuotaExceededError' && storeName === SAVE_STORE && !_retryCount) {
+          var excludedLocal = Object.create(null);
+          excludedLocal[String(record.id)] = true;
+          if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
+          return _dropOldestAutoSave(writeGuard, excludedLocal).then(function(dropped) {
+            if (!_writeGuardAllows(writeGuard)) return false;
+            if (dropped) return _put(storeName, record, 1, writeGuard);
+            if (typeof window.toast === 'function') window.toast('❌ 存档空间满·请手动删除旧存档后重试');
+            return false;
+          });
+        }
         return Promise.reject(e);
       }
     }
@@ -372,7 +403,9 @@ var TM_SaveDB = (function() {
           if (isQuota && storeName === SAVE_STORE && !_retryCount) {
             if (!_writeGuardAllows(writeGuard)) { resolve(false); return; }
             console.warn('[SaveDB] 配额已满·尝试清最老自动存档后重试');
-            _dropOldestAutoSave(writeGuard).then(function(dropped) {
+            var excluded = Object.create(null);
+            excluded[String(record.id)] = true;
+            _dropOldestAutoSave(writeGuard, excluded).then(function(dropped) {
               if (!_writeGuardAllows(writeGuard)) { resolve(false); return; }
               if (dropped) {
                 // 重试（带 flag 防止无限递归）

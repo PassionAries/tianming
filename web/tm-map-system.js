@@ -103,6 +103,7 @@ function ensureMapDataScaffold(mapData) {
 
 function getLiveMapData() {
   if (typeof GM !== 'undefined' && GM && GM.mapData && GM.mapData.regions) return GM.mapData;
+  if (typeof GM !== 'undefined' && GM && GM.map && GM.map.regions) return GM.map;
   if (typeof P !== 'undefined' && P && P.map && P.map.regions) return P.map;
   if (typeof P !== 'undefined' && P && P.mapData && P.mapData.regions) return P.mapData;
   return null;
@@ -688,7 +689,9 @@ function createTerrainPattern(ctx, patternType) {
  * 实际游戏推演以行政区划（cities/territories）为准
  */
 function updateMapColors() {
-  if (!P.map) return;
+  var runtimeMap = getLiveMapData();
+  if (!runtimeMap) return;
+  var runtimeGM = (typeof GM !== 'undefined' && GM) ? GM : null;
 
   _dbg('[Map] 更新地图颜色...');
 
@@ -696,9 +699,10 @@ function updateMapColors() {
 
   // 建立 region.id → autonomy 类型 映射（若该地块映射了行政区划）
   var _regionAutonomyMap = {};
-  if (P.adminHierarchy) {
-    Object.keys(P.adminHierarchy).forEach(function(fk) {
-      var fh = P.adminHierarchy[fk]; if (!fh || !fh.divisions) return;
+  var runtimeAdminHierarchy = (runtimeGM && runtimeGM.adminHierarchy) || P.adminHierarchy;
+  if (runtimeAdminHierarchy) {
+    Object.keys(runtimeAdminHierarchy).forEach(function(fk) {
+      var fh = runtimeAdminHierarchy[fk]; if (!fh || !fh.divisions) return;
       (function _walk(ds) {
         ds.forEach(function(d) {
           if (d.mappedRegions && d.autonomy && d.autonomy.type) {
@@ -715,7 +719,8 @@ function updateMapColors() {
   // 双树防御走查：P 与 GM 的 adminHierarchy 通常同引用·若分叉则以任一侧有 occupiedBy 为准（占据只由
   // tm-revolt-inference 写在 GM 叶上·P 侧缺失=静默无覆色·安全失效不破图）。
   var _regionOccupiedMap = {};
-  [P.adminHierarchy, (typeof GM !== 'undefined' && GM && GM.adminHierarchy !== P.adminHierarchy) ? GM.adminHierarchy : null].forEach(function(ah) {
+  [runtimeGM ? runtimeGM.adminHierarchy : null,
+    (P.adminHierarchy && (!runtimeGM || runtimeGM.adminHierarchy !== P.adminHierarchy)) ? P.adminHierarchy : null].forEach(function(ah) {
     if (!ah) return;
     Object.keys(ah).forEach(function(fk) {
       var fh = ah[fk]; if (!fh || !fh.divisions) return;
@@ -735,8 +740,8 @@ function updateMapColors() {
   var _AUTONOMY_COLORS = { fanguo:'#9a7bd8', fanzhen:'#f87171', jimi:'#66bb6a', chaogong:'#f59e0b' };
 
   // 更新智能格式地块颜色
-  if (P.map.regions && Array.isArray(P.map.regions)) {
-    P.map.regions.forEach(function(region) {
+  if (runtimeMap.regions && Array.isArray(runtimeMap.regions)) {
+    runtimeMap.regions.forEach(function(region) {
       if (!region) return;
 
       // 根据 owner/currentOwner/ownerKey 查找对应势力
@@ -747,12 +752,12 @@ function updateMapColors() {
       }
 
       // 查找势力
-      var faction = GM.facs ? GM.facs.find(function(f) { return f.name === owner || f.id === owner || f.name === region.factionName || f.id === region.factionId; }) : null;
+      var faction = runtimeGM && runtimeGM.facs ? runtimeGM.facs.find(function(f) { return f.name === owner || f.id === owner || f.name === region.factionName || f.id === region.factionId; }) : null;
       var baseColor = null;
       if (faction && faction.color) baseColor = faction.color;
-      else if (GM.mapData && GM.mapData.factionColors && GM.mapData.factionColors[owner]) baseColor = GM.mapData.factionColors[owner].main;
-      else if (GM.mapData && GM.mapData.factionColors && region.factionName && GM.mapData.factionColors[region.factionName]) baseColor = GM.mapData.factionColors[region.factionName].main;
-      else if (GM.mapData && GM.mapData.factions && region.ownerKey && GM.mapData.factions[region.ownerKey]) baseColor = GM.mapData.factions[region.ownerKey].color;
+      else if (runtimeMap.factionColors && runtimeMap.factionColors[owner]) baseColor = runtimeMap.factionColors[owner].main;
+      else if (runtimeMap.factionColors && region.factionName && runtimeMap.factionColors[region.factionName]) baseColor = runtimeMap.factionColors[region.factionName].main;
+      else if (runtimeMap.factions && region.ownerKey && runtimeMap.factions[region.ownerKey]) baseColor = runtimeMap.factions[region.ownerKey].color;
       else if (region.factionColor) baseColor = region.factionColor;
       if (!baseColor) { region.color = '#cccccc'; return; }
       // 按 autonomy 覆盖或混合——非直辖显示管辖类型色
@@ -767,7 +772,7 @@ function updateMapColors() {
       // 批五·义军占据覆色压轴（占据是既成军事事实·压过 autonomy 显示·退据即自动还色）
       var _occ = _regionOccupiedMap[region.id];
       if (_occ) {
-        var _occC = (GM.mapData && GM.mapData.factionColors && GM.mapData.factionColors[_occ]) || null;
+        var _occC = (runtimeMap.factionColors && runtimeMap.factionColors[_occ]) || null;
         if (_occC && _occC.main) { region.color = _occC.main; region.occupiedBy = _occ; }
       } else if (region.occupiedBy) {
         delete region.occupiedBy;
@@ -777,8 +782,8 @@ function updateMapColors() {
   }
 
   // 更新传统格式地块颜色
-  if (P.map.items && Array.isArray(P.map.items)) {
-    P.map.items.forEach(function(item) {
+  if (runtimeMap.items && Array.isArray(runtimeMap.items)) {
+    runtimeMap.items.forEach(function(item) {
       if (!item) return;
 
       var owner = item.currentOwner || item.owner || item.factionId || item.ownerKey;
@@ -787,15 +792,15 @@ function updateMapColors() {
         return;
       }
 
-      var faction = GM.facs ? GM.facs.find(function(f) { return f.name === owner || f.id === owner || f.name === item.factionName || f.id === item.factionId; }) : null;
+      var faction = runtimeGM && runtimeGM.facs ? runtimeGM.facs.find(function(f) { return f.name === owner || f.id === owner || f.name === item.factionName || f.id === item.factionId; }) : null;
       if (faction && faction.color) {
         item.color = faction.color;
         updateCount++;
-      } else if (GM.mapData && GM.mapData.factionColors && GM.mapData.factionColors[owner]) {
-        item.color = GM.mapData.factionColors[owner].main;
+      } else if (runtimeMap.factionColors && runtimeMap.factionColors[owner]) {
+        item.color = runtimeMap.factionColors[owner].main;
         updateCount++;
-      } else if (GM.mapData && GM.mapData.factions && item.ownerKey && GM.mapData.factions[item.ownerKey]) {
-        item.color = GM.mapData.factions[item.ownerKey].color;
+      } else if (runtimeMap.factions && item.ownerKey && runtimeMap.factions[item.ownerKey]) {
+        item.color = runtimeMap.factions[item.ownerKey].color;
         updateCount++;
       } else if (item.factionColor) {
         item.color = item.factionColor;
@@ -2033,12 +2038,13 @@ function closeMapViewer() {
  * 在doActualStart中调用（地图启用时）
  */
 function buildAdjacencyGraph() {
-  if (!P.map || !P.map.regions || !P.map.regions.length) return;
+  var runtimeMap = getLiveMapData();
+  if (!runtimeMap || !runtimeMap.regions || !runtimeMap.regions.length) return;
   if (!GM.mapData) GM.mapData = {};
 
   var graph = {};
-  var regions = P.map.regions;
-  var roads = P.map.roads || [];
+  var regions = runtimeMap.regions;
+  var roads = runtimeMap.roads || [];
 
   // 构建road索引（双向查找）
   var roadMap = {};
@@ -2100,38 +2106,90 @@ function findPath(from, to, options) {
   if (from === to) return { path: [from], cost: 0, distance: 0, hasPostRoad: false, terrainTypes: [] };
 
   options = options || {};
-  var openSet = [{ node: from, g: 0, f: 0, path: [from], terrains: [], postRoad: false }];
-  var closed = {};
+  var heap = [];
+  var sequence = 0;
+  var bestG = Object.create(null);
+  var previous = Object.create(null);
+  var regionByNode = Object.create(null);
+  if (options.avoidEnemy) {
+    var runtimeMap = getLiveMapData() || {};
+    (runtimeMap.regions || []).forEach(function(region) {
+      if (!region) return;
+      var id = region.id || region.name;
+      if (id != null) regionByNode[id] = region;
+    });
+  }
+  function less(a, b) { return a.f < b.f || (a.f === b.f && a.order < b.order); }
+  function heapPush(item) {
+    heap.push(item);
+    var index = heap.length - 1;
+    while (index > 0) {
+      var parent = Math.floor((index - 1) / 2);
+      if (!less(heap[index], heap[parent])) break;
+      var swap = heap[parent]; heap[parent] = heap[index]; heap[index] = swap;
+      index = parent;
+    }
+  }
+  function heapPop() {
+    if (!heap.length) return null;
+    var first = heap[0];
+    var last = heap.pop();
+    if (heap.length) {
+      heap[0] = last;
+      var index = 0;
+      while (true) {
+        var left = index * 2 + 1;
+        var right = left + 1;
+        var smallest = index;
+        if (left < heap.length && less(heap[left], heap[smallest])) smallest = left;
+        if (right < heap.length && less(heap[right], heap[smallest])) smallest = right;
+        if (smallest === index) break;
+        var swap = heap[index]; heap[index] = heap[smallest]; heap[smallest] = swap;
+        index = smallest;
+      }
+    }
+    return first;
+  }
+  bestG[from] = 0;
+  heapPush({ node: from, g: 0, f: 0, order: sequence++ });
 
-  while (openSet.length > 0) {
-    // 取f值最小的节点
-    openSet.sort(function(a, b) { return a.f - b.f; });
-    var current = openSet.shift();
+  while (heap.length > 0) {
+    var current = heapPop();
+    if (!current || current.g !== bestG[current.node]) continue;
 
     if (current.node === to) {
+      var path = [to];
+      var terrains = [];
+      var hasPostRoad = false;
+      var cursor = to;
+      while (cursor !== from) {
+        var step = previous[cursor];
+        if (!step) return null;
+        terrains.push(step.terrain);
+        hasPostRoad = hasPostRoad || step.hasPostRoad;
+        cursor = step.node;
+        path.push(cursor);
+      }
+      path.reverse();
+      terrains.reverse();
       return {
-        path: current.path,
+        path: path,
         cost: current.g,
-        distance: current.path.length - 1,
-        hasPostRoad: current.postRoad,
-        terrainTypes: current.terrains
+        distance: path.length - 1,
+        hasPostRoad: hasPostRoad,
+        terrainTypes: terrains
       };
     }
-
-    if (closed[current.node]) continue;
-    closed[current.node] = true;
 
     var edges = graph[current.node] || [];
     for (var i = 0; i < edges.length; i++) {
       var edge = edges[i];
-      if (closed[edge.target]) continue;
 
       if (options.waterOnly && edge.type !== 'water') continue;
 
       // avoidEnemy 是全节点约束，不只作用于关隘。
       if (options.avoidEnemy) {
-        var runtimeMap = GM.mapData || {};
-        var region = (runtimeMap.regions || []).find(function(r) { return (r.id || r.name) === edge.target; });
+        var region = regionByNode[edge.target];
         if (region) {
           var regionOwner = region.occupiedBy || region.controller || region.owner || '';
           if (regionOwner && options.faction && regionOwner !== options.faction) {
@@ -2146,18 +2204,14 @@ function findPath(from, to, options) {
       if (edge.type === 'mountain_pass') edgeCost *= 1.5;
       if (edge.hasPostRoad) edgeCost *= 0.7;
       var g = current.g + edgeCost;
-
-      var newTerrains = current.terrains.concat(edge.terrain);
-      var hasRoad = current.postRoad || edge.hasPostRoad;
-
-      openSet.push({
-        node: edge.target,
-        g: g,
-        f: g, // 无启发式（退化为Dijkstra，保证最优）
-        path: current.path.concat(edge.target),
-        terrains: newTerrains,
-        postRoad: hasRoad
-      });
+      if (bestG[edge.target] != null && g >= bestG[edge.target]) continue;
+      bestG[edge.target] = g;
+      previous[edge.target] = {
+        node: current.node,
+        terrain: edge.terrain,
+        hasPostRoad: !!edge.hasPostRoad
+      };
+      heapPush({ node: edge.target, g: g, f: g, order: sequence++ }); // Dijkstra·保证非负边最优
     }
   }
 
@@ -2178,14 +2232,16 @@ function calculateSupplyLine(baseCityId, armyCityId, factionName) {
   }
 
   // 效率随距离递减
-  var distanceDecay = (P.battleConfig && P.battleConfig.supplyConfig && P.battleConfig.supplyConfig.distanceDecay) || 0.08;
+  var configuredDecay = P.battleConfig && P.battleConfig.supplyConfig && P.battleConfig.supplyConfig.distanceDecay;
+  var distanceDecay = configuredDecay == null ? 0.08 : Math.max(0, Number(configuredDecay) || 0);
   var efficiency = Math.max(0.1, 1.0 - pathResult.distance * distanceDecay);
 
   // 检查路径上是否有敌方占领的节点（补给线被截断）
   var isCut = false;
+  var runtimeMap = getLiveMapData() || {};
   for (var i = 1; i < pathResult.path.length - 1; i++) {
     var node = pathResult.path[i];
-    var region = (P.map.regions || []).find(function(r) { return (r.id || r.name) === node; });
+    var region = (runtimeMap.regions || []).find(function(r) { return (r.id || r.name) === node; });
     if (region) {
       var nodeOwner = region.occupiedBy || region.owner || '';
       if (nodeOwner && factionName && nodeOwner !== factionName) {
@@ -2206,11 +2262,12 @@ function calculateSupplyLine(baseCityId, armyCityId, factionName) {
 // ============================================================
 function drawMinimap(){
   var c=_$("g-minimap");if(!c)return;
-  if(!P.mapData || !P.mapData.regions || P.mapData.regions.length === 0) return;
+  var liveMap=getLiveMapData();
+  if(!liveMap || !liveMap.regions || liveMap.regions.length === 0) return;
   var ctx=c.getContext("2d");
   ctx.fillStyle="#1a1a2e";ctx.fillRect(0,0,c.width,c.height);
-  var scale=c.width/(P.mapData.width||800);
-  P.mapData.regions.forEach(function(r){
+  var scale=c.width/(liveMap.width||800);
+  liveMap.regions.forEach(function(r){
     ctx.save();ctx.globalAlpha=0.35;ctx.fillStyle=r.color||"#c9a84c";
     if(r.type==="rect"&&r.rect){
       ctx.fillRect(r.rect.x*scale,r.rect.y*scale,r.rect.w*scale,r.rect.h*scale);
@@ -2244,6 +2301,7 @@ var InteractiveMap = {
   dragStartY: 0,
   selectedRegion: null,
   hoveredRegion: null,
+  mapData: null,
 
   // 初始化
   init: function(canvas) {
@@ -2252,6 +2310,7 @@ var InteractiveMap = {
     this.scale = 1;
     this.offsetX = 0;
     this.offsetY = 0;
+    this.mapData = getLiveMapData();
 
     // 绑定事件
     this.bindEvents();
@@ -2337,10 +2396,11 @@ var InteractiveMap = {
 
   // 获取指定坐标的区域
   getRegionAt: function(x, y) {
-    if (!P.mapData || !P.mapData.regions) return null;
+    var mapData = this.mapData || getLiveMapData();
+    if (!mapData || !mapData.regions) return null;
 
-    for (var i = P.mapData.regions.length - 1; i >= 0; i--) {
-      var r = P.mapData.regions[i];
+    for (var i = mapData.regions.length - 1; i >= 0; i--) {
+      var r = mapData.regions[i];
 
       if (r.type === 'rect' && r.rect) {
         if (x >= r.rect.x && x <= r.rect.x + r.rect.w &&
@@ -2374,7 +2434,8 @@ var InteractiveMap = {
 
   // 绘制地图
   draw: function() {
-    if (!this.ctx || !P.mapData || !P.mapData.regions) return;
+    var mapData = this.mapData || getLiveMapData();
+    if (!this.ctx || !mapData || !mapData.regions) return;
 
     var ctx = this.ctx;
     var w = this.canvas.width;
@@ -2390,7 +2451,7 @@ var InteractiveMap = {
     ctx.scale(this.scale, this.scale);
 
     // 绘制所有区域
-    P.mapData.regions.forEach(function(r) {
+    mapData.regions.forEach(function(r) {
       var isSelected = this.selectedRegion && this.selectedRegion.name === r.name;
       var isHovered = this.hoveredRegion && this.hoveredRegion.name === r.name;
 
@@ -2475,36 +2536,40 @@ var InteractiveMap = {
   showRegionInfo: function(region) {
     var infoDiv = document.getElementById('map-region-info');
     if (!infoDiv) return;
+    infoDiv.replaceChildren();
 
-    var html = '<h4 style="color:var(--gold);margin-bottom:0.5rem;">' + region.name + '</h4>';
+    var title = document.createElement('h4');
+    title.style.cssText = 'color:var(--gold);margin-bottom:0.5rem;';
+    title.textContent = String(region && region.name != null ? region.name : '');
+    infoDiv.appendChild(title);
 
-    // 显示控制者
-    if (region.controller) {
-      html += '<div style="margin-bottom:0.3rem;"><strong>控制者:</strong> ' + region.controller + '</div>';
+    function appendInfoRow(label, value) {
+      var row = document.createElement('div');
+      row.style.cssText = 'margin-bottom:0.3rem;';
+      var strong = document.createElement('strong');
+      strong.textContent = label + ': ';
+      row.appendChild(strong);
+      row.appendChild(document.createTextNode(String(value)));
+      infoDiv.appendChild(row);
     }
 
-    // 显示人口
-    if (region.population) {
-      html += '<div style="margin-bottom:0.3rem;"><strong>人口:</strong> ' + region.population + '</div>';
-    }
+    if (region && region.controller != null) appendInfoRow('控制者', region.controller);
+    if (region && region.population != null) appendInfoRow('人口', region.population);
+    if (region && region.income != null) appendInfoRow('收入', region.income);
 
-    // 显示收入
-    if (region.income) {
-      html += '<div style="margin-bottom:0.3rem;"><strong>收入:</strong> ' + region.income + '</div>';
+    if (region && region.desc != null && region.desc !== '') {
+      var description = document.createElement('div');
+      description.style.cssText = 'margin-top:0.5rem;color:var(--txt-d);font-size:0.85rem;';
+      description.textContent = String(region.desc);
+      infoDiv.appendChild(description);
     }
-
-    // 显示描述
-    if (region.desc) {
-      html += '<div style="margin-top:0.5rem;color:var(--txt-d);font-size:0.85rem;">' + region.desc + '</div>';
-    }
-
-    infoDiv.innerHTML = html;
   }
 };
 
 // 打开交互式地图
 function openInteractiveMap() {
-  if (!P.mapData || !P.mapData.regions || P.mapData.regions.length === 0) {
+  var runtimeMap = getLiveMapData();
+  if (!runtimeMap || !runtimeMap.regions || runtimeMap.regions.length === 0) {
     toast('❌ 当前剧本没有地图数据');
     return;
   }

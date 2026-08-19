@@ -15,6 +15,8 @@ const dns = require('dns').promises;
 const nodeNet = require('net');
 const { pathToFileURL, fileURLToPath } = require('url');
 const AdmZip = require('adm-zip');
+const yauzl = require('yauzl');
+const { pipeline } = require('stream');
 const { autoUpdater } = require('electron-updater');
 
 // ============================================================
@@ -61,6 +63,9 @@ const HOT_UPDATE_APP_ID = 'com.tianming.history';
 const HOT_UPDATE_CHANNEL = 'stable';
 const HOT_UPDATE_PUBLIC_KEY_FILE = path.join(APP_ROOT_DIR, 'resources', 'hot-update-public-key.pem');
 const WORKSHOP_CATALOG_AUTHORIZATIONS = new Map();
+// 测试闸只允许未打包开发进程显式开启。打包产物即使继承了同名环境变量，
+// 也不得替换发布公钥、放行未签名文档、访问 localhost 或导出内部函数。
+const TEST_MODE = !app.isPackaged && process.env.TIANMING_TEST_EXPORTS === '1';
 
 // ============================================================
 //  调试日志 (debug logger)·2026-05-28
@@ -403,7 +408,7 @@ function compareVersions(a, b) {
 let _hotUpdatePublicKey = null;
 function getHotUpdatePublicKey() {
   if (_hotUpdatePublicKey) return _hotUpdatePublicKey;
-  const override = process.env.TIANMING_TEST_EXPORTS && process.env.TIANMING_HOT_UPDATE_PUBLIC_KEY
+  const override = TEST_MODE && process.env.TIANMING_HOT_UPDATE_PUBLIC_KEY
     ? path.resolve(process.env.TIANMING_HOT_UPDATE_PUBLIC_KEY)
     : HOT_UPDATE_PUBLIC_KEY_FILE;
   if (!fs.existsSync(override)) throw new Error('应用缺少固定热更新公钥');
@@ -417,8 +422,7 @@ function getHotUpdateKeyId(key) {
 }
 
 function verifyAuthenticatedUpdateDocument(document, expectedType) {
-  const allowUnsignedTest = !!process.env.TIANMING_TEST_EXPORTS
-    || (!app.isPackaged && process.env.TIANMING_ALLOW_UNSIGNED_HOT_UPDATE === '1');
+  const allowUnsignedTest = TEST_MODE;
   const auth = document && document.auth;
   if (!auth) {
     if (allowUnsignedTest) return document;
@@ -785,6 +789,15 @@ const ALLOWED_HOT_UPDATE_EXTS = new Set([
   '.glb', '.gltf', '.bin', // 3D 资产（御驾亲征兵模等）
   '.onnx' // 本地语义模型；壳层能力自 1.3.4.12 起，发布器会自动抬高 minAppVersion
 ]);
+const WORKSHOP_ZIP_LIMITS = Object.freeze({
+  maxEntries: 4096,
+  maxTotalBytes: 250 * 1024 * 1024,
+  maxFileBytes: 128 * 1024 * 1024,
+  maxCompressionRatio: 250,
+  compressionRatioMinBytes: 1024 * 1024,
+  maxNameBytes: 240,
+  maxDepth: 16
+});
 
 function walkPackFiles(root) {
   const out = [];
@@ -865,15 +878,231 @@ function createTempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-function extractZipToTemp(zipPath) {
-  const temp = createTempDir('tianming-pack-');
-  const zip = new AdmZip(zipPath);
-  zip.getEntries().forEach(entry => {
-    const target = path.resolve(temp, entry.entryName);
-    if (!isInsideDir(temp, target)) throw new Error('压缩包包含越界路径: ' + entry.entryName);
+function openWorkshopZip(zipPath) {
+  return new Promise((resolve, reject) => {
+    yauzl.open(zipPath, {
+      lazyEntries: true,
+      autoClose: false,
+      decodeStrings: true,
+      validateEntrySizes: true,
+      strictFileNames: true
+    }, (error, zip) => error ? reject(error) : resolve(zip));
   });
-  zip.extractAllTo(temp, true);
-  return temp;
+}
+
+function validateWorkshopZipEntry(entry, seenPaths) {
+  const rawName = String(entry && entry.fileName || '');
+  if (!rawName || rawName.indexOf('\0') >= 0) throw new Error('压缩包包含空文件名或 NUL 字节');
+  if (rawName.indexOf('\\') >= 0 || rawName[0] === '/' || /^[a-zA-Z]:/.test(rawName)) {
+    throw new Error('压缩包包含绝对或非规范路径: ' + rawName);
+  }
+  if (Buffer.byteLength(rawName, 'utf8') > WORKSHOP_ZIP_LIMITS.maxNameBytes) {
+    throw new Error('压缩包文件名过长: ' + rawName.slice(0, 80));
+  }
+  const isDirectory = /\/$/.test(rawName);
+  const normalized = isDirectory ? rawName.slice(0, -1) : rawName;
+  const segments = normalized.split('/');
+  if (!normalized || segments.some(part => !part || part === '.' || part === '..')) {
+    throw new Error('压缩包包含越界或非规范路径: ' + rawName);
+  }
+  if (segments.length > WORKSHOP_ZIP_LIMITS.maxDepth) {
+    throw new Error('压缩包目录层级过深: ' + rawName);
+  }
+  const canonical = segments.join('/');
+  const duplicateKey = canonical.toLocaleLowerCase('en-US');
+  if (seenPaths && seenPaths.has(duplicateKey)) throw new Error('压缩包包含重复路径: ' + rawName);
+  if (seenPaths) seenPaths.add(duplicateKey);
+
+  const mode = (Number(entry.externalFileAttributes) >>> 16) & 0xffff;
+  if ((mode & 0xf000) === 0xa000) throw new Error('工坊包不允许包含符号链接: ' + rawName);
+  if ((Number(entry.generalPurposeBitFlag) & 1) !== 0) throw new Error('工坊包不允许加密条目: ' + rawName);
+
+  const compressedSize = Number(entry.compressedSize);
+  const uncompressedSize = Number(entry.uncompressedSize);
+  if (!Number.isSafeInteger(compressedSize) || compressedSize < 0 ||
+      !Number.isSafeInteger(uncompressedSize) || uncompressedSize < 0) {
+    throw new Error('压缩包条目大小非法: ' + rawName);
+  }
+  if (uncompressedSize > WORKSHOP_ZIP_LIMITS.maxFileBytes) {
+    throw new Error('工坊包单文件超过 128MB 上限: ' + rawName);
+  }
+  if (!isDirectory && uncompressedSize >= WORKSHOP_ZIP_LIMITS.compressionRatioMinBytes) {
+    const ratio = compressedSize > 0 ? uncompressedSize / compressedSize : Infinity;
+    if (ratio > WORKSHOP_ZIP_LIMITS.maxCompressionRatio) {
+      throw new Error('工坊包条目压缩比异常，疑似 ZIP 炸弹: ' + rawName);
+    }
+  }
+  if (!isDirectory) {
+    const ext = path.posix.extname(canonical).toLowerCase();
+    if (BLOCKED_PACK_EXTS.has(ext)) throw new Error('工坊包含有禁止类型文件: ' + rawName);
+    if (!ALLOWED_PACK_EXTS.has(ext)) throw new Error('工坊包含有未允许的文件类型: ' + rawName);
+  }
+  return { rawName, canonical, isDirectory, compressedSize, uncompressedSize };
+}
+
+async function preflightWorkshopZip(zipPath) {
+  const archiveStat = fs.statSync(zipPath);
+  if (!archiveStat.isFile()) throw new Error('工坊压缩包不是普通文件');
+  const zip = await openWorkshopZip(zipPath);
+  return new Promise((resolve, reject) => {
+    const seenPaths = new Set();
+    let entries = 0;
+    let files = 0;
+    let totalBytes = 0;
+    let settled = false;
+    function closeQuietly() { try { zip.close(); } catch (_) {} }
+    function fail(error) {
+      if (settled) return;
+      settled = true;
+      closeQuietly();
+      reject(error);
+    }
+    function finish() {
+      if (settled) return;
+      settled = true;
+      closeQuietly();
+      resolve({
+        entries,
+        files,
+        totalBytes,
+        archiveSize: archiveStat.size,
+        archiveMtimeMs: archiveStat.mtimeMs
+      });
+    }
+    zip.on('error', fail);
+    zip.on('entry', entry => {
+      try {
+        entries += 1;
+        if (entries > WORKSHOP_ZIP_LIMITS.maxEntries) throw new Error('工坊包文件数量超过 4096 上限');
+        const info = validateWorkshopZipEntry(entry, seenPaths);
+        if (!info.isDirectory) {
+          files += 1;
+          totalBytes += info.uncompressedSize;
+          if (!Number.isSafeInteger(totalBytes) || totalBytes > WORKSHOP_ZIP_LIMITS.maxTotalBytes) {
+            throw new Error('工坊包声明解压体积超过 250MB 上限');
+          }
+        }
+        zip.readEntry();
+      } catch (error) {
+        fail(error);
+      }
+    });
+    zip.on('end', finish);
+    if (Number(zip.entryCount) > WORKSHOP_ZIP_LIMITS.maxEntries) {
+      fail(new Error('工坊包文件数量超过 4096 上限'));
+      return;
+    }
+    zip.readEntry();
+  });
+}
+
+function streamWorkshopEntry(zip, entry, target, counters) {
+  return new Promise((resolve, reject) => {
+    zip.openReadStream(entry, (openError, readStream) => {
+      if (openError) { reject(openError); return; }
+      let entryBytes = 0;
+      let quotaError = null;
+      const writeStream = fs.createWriteStream(target, { flags: 'wx', mode: 0o600 });
+      readStream.on('data', chunk => {
+        entryBytes += chunk.length;
+        counters.totalBytes += chunk.length;
+        if (entryBytes > WORKSHOP_ZIP_LIMITS.maxFileBytes ||
+            counters.totalBytes > WORKSHOP_ZIP_LIMITS.maxTotalBytes ||
+            entryBytes > Number(entry.uncompressedSize)) {
+          quotaError = new Error('工坊包实际解压体积超过配额: ' + entry.fileName);
+          readStream.destroy(quotaError);
+        }
+      });
+      pipeline(readStream, writeStream, error => {
+        const finalError = quotaError || error;
+        if (finalError) {
+          try { fs.rmSync(target, { force: true }); } catch (_) {}
+          reject(finalError);
+          return;
+        }
+        if (entryBytes !== Number(entry.uncompressedSize)) {
+          try { fs.rmSync(target, { force: true }); } catch (_) {}
+          reject(new Error('工坊包条目解压大小与中央目录不一致: ' + entry.fileName));
+          return;
+        }
+        resolve(entryBytes);
+      });
+    });
+  });
+}
+
+async function extractWorkshopZipStreamed(zipPath, temp, expected) {
+  const zip = await openWorkshopZip(zipPath);
+  return new Promise((resolve, reject) => {
+    const seenPaths = new Set();
+    const counters = { entries: 0, files: 0, totalBytes: 0 };
+    let settled = false;
+    function closeQuietly() { try { zip.close(); } catch (_) {} }
+    function fail(error) {
+      if (settled) return;
+      settled = true;
+      closeQuietly();
+      reject(error);
+    }
+    function finish() {
+      if (settled) return;
+      if (counters.entries !== expected.entries || counters.files !== expected.files ||
+          counters.totalBytes !== expected.totalBytes) {
+        fail(new Error('工坊包在预检后发生变化，拒绝安装'));
+        return;
+      }
+      settled = true;
+      closeQuietly();
+      resolve(counters);
+    }
+    zip.on('error', fail);
+    zip.on('entry', entry => {
+      if (settled) return;
+      let info;
+      try {
+        counters.entries += 1;
+        if (counters.entries > WORKSHOP_ZIP_LIMITS.maxEntries) throw new Error('工坊包文件数量超过 4096 上限');
+        info = validateWorkshopZipEntry(entry, seenPaths);
+        const target = path.resolve(temp, info.canonical);
+        if (!isInsideDir(temp, target)) throw new Error('压缩包包含越界路径: ' + info.rawName);
+        if (info.isDirectory) {
+          fs.mkdirSync(target, { recursive: true });
+          zip.readEntry();
+          return;
+        }
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        counters.files += 1;
+        streamWorkshopEntry(zip, entry, target, counters).then(() => {
+          if (!settled) zip.readEntry();
+        }, fail);
+      } catch (error) {
+        fail(error);
+      }
+    });
+    zip.on('end', finish);
+    zip.readEntry();
+  });
+}
+
+async function extractZipToTemp(zipPath) {
+  // 中央目录配额、路径、类型和压缩比必须在创建输出目录及写出任何条目前全部通过。
+  const preflight = await preflightWorkshopZip(zipPath);
+  const currentStat = fs.statSync(zipPath);
+  if (currentStat.size !== preflight.archiveSize || currentStat.mtimeMs !== preflight.archiveMtimeMs) {
+    throw new Error('工坊包在预检后发生变化，拒绝安装');
+  }
+  const temp = createTempDir('tianming-pack-');
+  try {
+    await extractWorkshopZipStreamed(zipPath, temp, preflight);
+    return temp;
+  } catch (error) {
+    try {
+      if (isInsideDir(os.tmpdir(), temp) && path.basename(temp).indexOf('tianming-pack-') === 0) {
+        fs.rmSync(temp, { recursive: true, force: true });
+      }
+    } catch (_) {}
+    throw error;
+  }
 }
 
 function extractZipToTempChecked(zipPath, prefix) {
@@ -960,12 +1189,12 @@ function isAllowedRemoteUrl(rawUrl) {
   const isLocalHttp = parsed.protocol === 'http:' && /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(parsed.hostname);
   if (parsed.username || parsed.password) return false;
   if (parsed.protocol === 'https:' && parsed.port && parsed.port !== '443') return false;
-  return parsed.protocol === 'https:' || (isLocalHttp && (!app.isPackaged || !!process.env.TIANMING_TEST_EXPORTS));
+  return parsed.protocol === 'https:' || (isLocalHttp && TEST_MODE);
 }
 
 function resolveRemoteUrl(rawUrl, baseUrl) {
   const resolved = new URL(rawUrl, baseUrl || undefined).toString();
-  if (!isAllowedRemoteUrl(resolved)) throw new Error('远程地址必须使用 HTTPS；本机调试允许 localhost HTTP。');
+  if (!isAllowedRemoteUrl(resolved)) throw new Error('远程地址必须使用 HTTPS；显式测试模式才允许 localhost HTTP。');
   return resolved;
 }
 
@@ -1000,8 +1229,8 @@ async function assertSafeRemoteUrl(rawUrl) {
   const resolved = resolveRemoteUrl(rawUrl);
   const parsed = new URL(resolved);
   const hostname = remoteHostname(parsed);
-  const localDev = !app.isPackaged && /^(localhost|127\.0\.0\.1|::1)$/i.test(hostname);
-  if (localDev || (process.env.TIANMING_TEST_EXPORTS && /^(localhost|127\.0\.0\.1|::1)$/i.test(hostname))) return resolved;
+  const localDev = TEST_MODE && /^(localhost|127\.0\.0\.1|::1)$/i.test(hostname);
+  if (localDev) return resolved;
   // 生产网络能力不接受 IP literal。域名需经过下方全部 A/AAAA 记录检查，
   // 避免 127.0.0.1、metadata 与保留网段通过十六进制/IPv6 写法绕过。
   if (nodeNet.isIP(hostname)) throw new Error('远程地址不允许直接使用 IP，已拒绝');
@@ -1308,6 +1537,28 @@ function readAccountSession() {
   };
 }
 
+function toPublicAccountSession(session = readAccountSession()) {
+  const user = session && session.user && typeof session.user === 'object' ? session.user : null;
+  return {
+    loggedIn: !!(session && session.token),
+    user,
+    loggedInAt: session && session.loggedInAt || ''
+  };
+}
+
+function sanitizeOnlineResponse(value, seen = new WeakSet()) {
+  if (value == null || typeof value !== 'object') return value;
+  if (seen.has(value)) return null;
+  seen.add(value);
+  if (Array.isArray(value)) return value.map(item => sanitizeOnlineResponse(item, seen));
+  const out = {};
+  Object.keys(value).forEach(key => {
+    if (/^(?:token|accessToken|refreshToken|idToken|authorization|sessionSecret)$/i.test(key)) return;
+    out[key] = sanitizeOnlineResponse(value[key], seen);
+  });
+  return out;
+}
+
 function writeAccountSession(session) {
   ensureSaveDir();
   writeJson(ACCOUNT_SESSION_FILE, {
@@ -1329,7 +1580,8 @@ function getAccountApiUrl() {
 }
 
 function getAccountAuthHeaders(options = {}) {
-  const token = String(options.token || readAccountSession().token || '').trim();
+  const supplied = Object.prototype.hasOwnProperty.call(options, 'token');
+  const token = String(supplied ? options.token : (readAccountSession().token || '')).trim();
   return token ? { Authorization: 'Bearer ' + token } : {};
 }
 
@@ -1345,6 +1597,85 @@ async function getOnlineApi(pathname, options = {}) {
   const url = new URL(String(pathname || '').replace(/^\//, ''), apiUrl).toString();
   const headers = Object.assign({}, getAccountAuthHeaders(options), options.headers || {});
   return requestJsonRemote(url, { method: 'GET', headers, maxBytes: options.maxBytes });
+}
+
+const ONLINE_RENDERER_ROUTES = Object.freeze({
+  GET: new Set([
+    'health', 'account/me', 'arena', 'arenas', 'chronicles', 'chronicles/chain',
+    'circle', 'circles', 'collection', 'collections', 'commissions', 'feed',
+    'follow', 'friends', 'friends/requests', 'messages/conversation',
+    'messages/inbox', 'notifications', 'revisions', 'workshop/author',
+    'workshop/catalog', 'workshop/comments', 'workshop/favorites',
+    'workshop/featured', 'workshop/lineage', 'workshop/pack'
+  ]),
+  POST: new Set([
+    'account/email-code', 'account/email-login', 'account/login', 'account/logout',
+    'account/register', 'account/request-reset', 'account/reset', 'account/set-email',
+    'arena/create', 'arena/submit', 'chronicles/publish', 'circle/create',
+    'circle/join', 'collection/create', 'collection/item', 'commission/close',
+    'commission/post', 'feed/like', 'feed/post', 'follow', 'friends/remove',
+    'friends/request', 'friends/respond', 'messages/send', 'notifications/read',
+    'revision/propose', 'revision/respond', 'workshop/comment', 'workshop/endorse',
+    'workshop/favorite', 'workshop/rate', 'workshop/upload'
+  ])
+});
+
+function normalizeOnlineRendererRoute(method, rawPathname) {
+  const verb = String(method || '').toUpperCase();
+  if (!ONLINE_RENDERER_ROUTES[verb]) throw new Error('在线请求方法不受支持');
+  const raw = String(rawPathname || '');
+  if (!raw || raw.includes('\\') || raw.includes('#') || /^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith('//')) {
+    throw new Error('在线请求路径非法');
+  }
+  let rawDecodedPath;
+  try { rawDecodedPath = decodeURIComponent(raw.split('?')[0]); } catch (_) { throw new Error('在线请求路径编码非法'); }
+  if (rawDecodedPath.split('/').some(part => part === '.' || part === '..')) throw new Error('在线请求路径非法');
+  const parsed = new URL(raw.replace(/^\/+/, ''), 'https://tianming.invalid/');
+  const route = parsed.pathname.replace(/^\/+/, '');
+  let decoded;
+  try { decoded = decodeURIComponent(route); } catch (_) { throw new Error('在线请求路径编码非法'); }
+  if (!route || decoded.split('/').some(part => part === '.' || part === '..') || !ONLINE_RENDERER_ROUTES[verb].has(route)) {
+    throw new Error('在线请求路径未获授权');
+  }
+  return { method: verb, pathname: route + parsed.search, route };
+}
+
+async function handleOnlineRendererRequest(method, pathname, body) {
+  const req = normalizeOnlineRendererRoute(method, pathname);
+  if (body != null) {
+    const encoded = JSON.stringify(body);
+    if (Buffer.byteLength(encoded, 'utf8') > 260 * 1024 * 1024) throw new Error('在线请求内容超过 260MB 上限');
+  }
+  const noAuth = new Set([
+    'health', 'account/email-code', 'account/email-login', 'account/login',
+    'account/register', 'account/request-reset', 'account/reset'
+  ]);
+  const options = noAuth.has(req.route) ? { token: '' } : {};
+  let response;
+  if (req.route === 'account/logout') {
+    try { response = await postOnlineApi(req.pathname, body || {}, options); }
+    finally { clearAccountSession(); }
+  } else if (req.method === 'GET') {
+    response = await getOnlineApi(req.pathname, options);
+  } else {
+    response = await postOnlineApi(req.pathname, body == null ? {} : body, options);
+  }
+
+  if (response && response.success && response.token
+      && (req.route === 'account/register' || req.route === 'account/login' || req.route === 'account/email-login')) {
+    writeAccountSession({ token: response.token, user: response.user || null });
+  } else if (response && response.success && response.user
+      && (req.route === 'account/me' || req.route === 'account/set-email')) {
+    const current = readAccountSession();
+    if (current.token) writeAccountSession({ token: current.token, user: response.user });
+  }
+
+  const publicResponse = Object.assign({ success: false }, sanitizeOnlineResponse(response || {}));
+  if (/^account\//.test(req.route)) {
+    publicResponse.session = toPublicAccountSession();
+    publicResponse.loggedIn = publicResponse.session.loggedIn;
+  }
+  return publicResponse;
 }
 
 function updateInfoSize(info) {
@@ -3138,7 +3469,15 @@ ipcMain.handle('online-service-status', async (event, options = {}) => {
   }
 });
 
-ipcMain.handle('account-session', async () => ({ success: true, session: readAccountSession() }));
+ipcMain.handle('online-request', async (event, request = {}) => {
+  try {
+    return await handleOnlineRendererRequest(request.method, request.pathname, request.body);
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('account-session', async () => ({ success: true, session: toPublicAccountSession() }));
 
 ipcMain.handle('account-register', async (event, options = {}) => {
   try {
@@ -3151,7 +3490,7 @@ ipcMain.handle('account-register', async (event, options = {}) => {
     if (res && res.success && res.token) {
       writeAccountSession({ token: res.token, apiUrl: getAccountApiUrl(options), user: res.user || null });
     }
-    return Object.assign({ success: false }, res || {});
+    return Object.assign({ success: false }, sanitizeOnlineResponse(res || {}), { session: toPublicAccountSession() });
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -3167,7 +3506,7 @@ ipcMain.handle('account-login', async (event, options = {}) => {
     if (res && res.success && res.token) {
       writeAccountSession({ token: res.token, apiUrl: getAccountApiUrl(options), user: res.user || null });
     }
-    return Object.assign({ success: false }, res || {});
+    return Object.assign({ success: false }, sanitizeOnlineResponse(res || {}), { session: toPublicAccountSession() });
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -3176,12 +3515,12 @@ ipcMain.handle('account-login', async (event, options = {}) => {
 ipcMain.handle('account-me', async (event, options = {}) => {
   try {
     const session = readAccountSession();
-    if (!session.token) return { success: true, loggedIn: false, session };
+    if (!session.token) return { success: true, loggedIn: false, session: toPublicAccountSession(session) };
     const res = await getOnlineApi('account/me', { apiUrl: options.apiUrl || session.apiUrl, token: session.token });
     if (res && res.success && res.user) writeAccountSession({ token: session.token, apiUrl: options.apiUrl || session.apiUrl, user: res.user });
-    return Object.assign({ loggedIn: !!(res && res.user), session: readAccountSession() }, res || {});
+    return Object.assign({ loggedIn: !!(res && res.user) }, sanitizeOnlineResponse(res || {}), { session: toPublicAccountSession() });
   } catch (e) {
-    return { success: false, error: e.message, session: readAccountSession() };
+    return { success: false, error: e.message, session: toPublicAccountSession() };
   }
 });
 
@@ -3278,8 +3617,7 @@ ipcMain.handle('content-status', async () => {
     defaultWorkshopCatalogUrl: DEFAULT_WORKSHOP_CATALOG_URL,
     defaultOnlineApiUrl: DEFAULT_ONLINE_API_URL,
     hotUpdate: getHotUpdatePublicStatus(),
-    account: readAccountSession(),
-    dirs: { saveDir: SAVE_DIR, scenariosDir: SCENARIOS_DIR, bundledScenariosDir: BUNDLED_SCENARIOS_DIR, turnDataDir: TURN_DATA_DIR, updateDir: UPDATE_DIR, officialContentDir: OFFICIAL_CONTENT_DIR, workshopDir: WORKSHOP_DIR, workshopPacksDir: WORKSHOP_PACKS_DIR, hotUpdateDir: HOT_UPDATE_DIR },
+    account: toPublicAccountSession(),
     workshopPacks: listWorkshopPacksInternal()
   };
 });
@@ -3311,7 +3649,7 @@ ipcMain.handle('workshop-install-from-url', async (event, options = {}) => {
     zipPath = path.join(WORKSHOP_DIR, 'downloads', 'tianming-workshop-' + Date.now() + '.tm-pack');
     const fileInfo = await downloadRemoteFile(packageUrl, zipPath, 250 * 1024 * 1024);
     if (expectedHash !== fileInfo.sha256.toLowerCase()) throw new Error('工坊包 sha256 不一致');
-    tempDir = extractZipToTemp(zipPath);
+    tempDir = await extractZipToTemp(zipPath);
     return installWorkshopPackFromDir(tempDir, { overwrite: !!options.overwrite, source: packageUrl });
   } catch (e) {
     return { success: false, error: e.message };
@@ -3369,7 +3707,7 @@ ipcMain.handle('workshop-import-pack', async (event, options = {}) => {
     if (!stat.isDirectory()) {
       const ext = path.extname(selected).toLowerCase();
       if (ext === '.zip' || ext === '.tm-pack') {
-        tempDir = extractZipToTemp(selected);
+        tempDir = await extractZipToTemp(selected);
         sourceDir = tempDir;
       } else if (ext === '.json') {
         tempDir = createScenarioPackFromJson(selected);
@@ -3503,7 +3841,7 @@ app.on('activate', () => {
 //  测试出口·仅 TIANMING_TEST_EXPORTS=1 时暴露·生产零影响
 //  （verify-* 脚本用 Module._load 桩掉 electron 后 require 本文件取内部函数）
 // ============================================================
-if (process.env.TIANMING_TEST_EXPORTS) {
+if (TEST_MODE) {
   module.exports.__test = {
     compareVersions,
     isAllowedRemoteUrl,
@@ -3513,6 +3851,12 @@ if (process.env.TIANMING_TEST_EXPORTS) {
     isPrivateNetworkAddress,
     isTrustedRendererUrl,
     assertTrustedIpcSender,
+    toPublicAccountSession,
+    sanitizeOnlineResponse,
+    normalizeOnlineRendererRoute,
+    preflightWorkshopZip,
+    extractZipToTemp,
+    WORKSHOP_ZIP_LIMITS,
     verifyAuthenticatedUpdateDocument,
     getCurrentComparableVersion,
     getPackageBuildVersion,

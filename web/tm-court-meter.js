@@ -124,12 +124,10 @@ function _showPostTurnCourtPromptAndStartEndTurn() {
 function _postTurnCourtChoose(openCourt) {
   var _bg = _$('post-turn-court-prompt');
   if (_bg) _bg.remove();
+  if (typeof endTurn === 'function') endTurn._preSubmitInFlight = false;
   if (openCourt) {
-    // 先标记 courtDone=false 并启动 AI 推演（后台）
-    GM._pendingShijiModal = { aiReady: false, courtDone: false, payload: null, source: 'post-turn-court', startedTurn: GM.turn || 0 };
-    GM._isPostTurnCourt = true;
     // 并发：启动 endTurn 主流程（不 await·让 AI 在后台跑）
-    _endTurnInternal();
+    _endTurnInternal({ postTurnCourt: true });
     // 同时开朝——先打开 chaoyi-modal 再直跳常朝准备
     setTimeout(function(){
       try {
@@ -151,10 +149,21 @@ function _postTurnCourtChoose(openCourt) {
     }, 200);
   } else {
     // 不开朝——直接跑 endTurn，显示加载条
-    GM._pendingShijiModal = { aiReady: false, courtDone: true, payload: null, source: 'post-turn-skip', startedTurn: GM.turn || 0 };
-    GM._isPostTurnCourt = false;
-    _endTurnInternal();
+    _endTurnInternal({ postTurnCourt: false });
   }
+}
+
+// 后朝状态只由朝会子系统写入；end-turn core 在事务快照后调用本写口。
+function _beginPostTurnCourtState(openCourt) {
+  var shouldOpen = !!openCourt;
+  GM._pendingShijiModal = {
+    aiReady: false,
+    courtDone: !shouldOpen,
+    payload: null,
+    source: shouldOpen ? 'post-turn-court' : 'post-turn-skip',
+    startedTurn: GM.turn || 0
+  };
+  GM._isPostTurnCourt = shouldOpen;
 }
 
 // 底栏进度 banner（朝会期间常驻）

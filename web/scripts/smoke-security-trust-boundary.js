@@ -7,6 +7,7 @@ const Module = require('module');
 const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const AdmZip = require('adm-zip');
 const { verifyAuthenticatedDocument: verifyArtifactDocument } = require(path.resolve(__dirname, '..', '..', 'scripts', 'lib', 'verify-artifacts.js'));
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -32,7 +33,7 @@ const electronStub = {
     getPath: () => path.join(TMP, 'userData'),
     getVersion: () => '1.3.4.11',
     getAppPath: () => ROOT,
-    isPackaged: true,
+    isPackaged: false,
     whenReady: () => new Promise(() => {}),
     on() {}, once() {}, relaunch() {}, exit() {}, quit() {}
   },
@@ -115,9 +116,10 @@ async function main() {
   const stalledError = await stalledRead;
   electronStub.net.fetch = originalNetFetch;
   check(bodyAbortObserved && /aborted/.test(String(stalledError && stalledError.message)), 'caller abort remains connected after response headers and stops a stalled body');
-  // Public key is cached above. Removing the test-export flag exercises the production unsigned branch.
-  delete process.env.TIANMING_TEST_EXPORTS;
-  check(throws(() => T.verifyAuthenticatedUpdateDocument(payload, 'tianming-hot-update-feed'), /缺少 Ed25519/), 'production path rejects unsigned update documents');
+  check(T.verifyAuthenticatedUpdateDocument(payload, 'tianming-hot-update-feed') === payload,
+    'unsigned fixtures are allowed only inside explicit unpackaged test mode');
+  check(T.isAllowedRemoteUrl('http://127.0.0.1/test') === true,
+    'localhost HTTP is available inside explicit unpackaged test mode');
 
   const trustedUrl = pathToFileURL(path.join(ROOT, 'web', 'index.html')).toString();
   const mainFrame = { url: trustedUrl, parent: null };
@@ -134,8 +136,19 @@ async function main() {
   check(T.isAllowedRemoteUrl('https://example.com/path') && !T.isAllowedRemoteUrl('https://example.com:444/path')
     && !T.isAllowedRemoteUrl('https://user:pass@example.com/path'), 'URL parser enforces HTTPS default port and no userinfo');
   let ipError = null;
-  try { await T.assertSafeRemoteUrl('https://127.0.0.1/path'); } catch (error) { ipError = error; }
+  try { await T.assertSafeRemoteUrl('https://10.0.0.1/path'); } catch (error) { ipError = error; }
   check(ipError && /IP/.test(ipError.message), 'production remote requests reject IP literals before fetch');
+
+  const publicSession = T.toPublicAccountSession({ token: 'secret', user: { id: 7 }, loggedInAt: 'now' });
+  check(publicSession.loggedIn === true && publicSession.user.id === 7 && !Object.prototype.hasOwnProperty.call(publicSession, 'token'),
+    'renderer account session exposes identity without bearer token');
+  const sanitized = T.sanitizeOnlineResponse({ success: true, token: 'secret', nested: { refreshToken: 'refresh', value: 1 } });
+  check(sanitized.success && sanitized.nested.value === 1 && !('token' in sanitized) && !('refreshToken' in sanitized.nested),
+    'account responses recursively remove session secrets');
+  check(T.normalizeOnlineRendererRoute('GET', 'workshop/pack?id=x').route === 'workshop/pack'
+    && throws(() => T.normalizeOnlineRendererRoute('GET', 'https://attacker.invalid/steal'), /非法|授权/)
+    && throws(() => T.normalizeOnlineRendererRoute('POST', '../account/login'), /非法|授权/),
+    'renderer online proxy accepts only fixed methods and routes');
 
   const oversizedHeaders = { get: name => name === 'content-length' ? '20' : null };
   let bodyError = null;
@@ -148,6 +161,28 @@ async function main() {
   catch (error) { bodyError = error; }
   check(bodyError && /大小上限/.test(bodyError.message), 'undeclared oversized response is rejected after bounded read');
 
+  const bombPath = path.join(TMP, 'workshop-bomb.tm-pack');
+  const bombZip = new AdmZip();
+  bombZip.addFile('manifest.json', Buffer.from('{"id":"bomb","type":"scenario","entry":"payload.json"}'));
+  bombZip.addFile('payload.json', Buffer.alloc(2 * 1024 * 1024, 0x41));
+  bombZip.writeZip(bombPath);
+  const tempNamesBefore = new Set(fs.readdirSync(os.tmpdir()).filter(name => name.startsWith('tianming-pack-')));
+  let bombError = null;
+  try { await T.extractZipToTemp(bombPath); } catch (error) { bombError = error; }
+  const tempNamesAfter = fs.readdirSync(os.tmpdir()).filter(name => name.startsWith('tianming-pack-'));
+  check(bombError && /压缩比异常|ZIP 炸弹/.test(bombError.message), 'high-ratio workshop ZIP is rejected during central-directory preflight');
+  check(tempNamesAfter.every(name => tempNamesBefore.has(name)), 'rejected ZIP creates no extraction directory and writes no expanded payload');
+
+  const safeZipPath = path.join(TMP, 'workshop-safe.tm-pack');
+  const safeZip = new AdmZip();
+  safeZip.addFile('manifest.json', Buffer.from('{"id":"safe","type":"scenario","entry":"scenario.json"}'));
+  safeZip.addFile('scenario.json', Buffer.from('{"id":"safe-scenario","name":"安全测试"}'));
+  safeZip.writeZip(safeZipPath);
+  const extractedSafe = await T.extractZipToTemp(safeZipPath);
+  check(JSON.parse(fs.readFileSync(path.join(extractedSafe, 'scenario.json'), 'utf8')).id === 'safe-scenario',
+    'valid workshop ZIP is extracted entry-by-entry after preflight');
+  fs.rmSync(extractedSafe, { recursive: true, force: true });
+
   const mainSource = fs.readFileSync(path.join(ROOT, 'main-impl.js'), 'utf8');
   const preloadSource = fs.readFileSync(path.join(ROOT, 'preload-impl.js'), 'utf8');
   const builderSource = fs.readFileSync(path.join(ROOT, 'web', 'tools', 'build-hot-update-package.js'), 'utf8');
@@ -159,6 +194,16 @@ async function main() {
     && !/checkForUpdate:\s*\([^)]*feedUrl/.test(preloadSource), 'renderer bridge cannot provide ordinary/hot update feed URLs');
   check(!builderSource.includes("addLocalFile(path.join(APP_ROOT, 'main")
     && !builderSource.includes("addLocalFile(path.join(APP_ROOT, 'preload"), 'content OTA builder cannot package main/preload executable code');
+
+  // 打包进程即使继承测试环境变量，也不得暴露任何测试出口。
+  electronStub.app.isPackaged = true;
+  delete require.cache[require.resolve(path.join(ROOT, 'main-impl.js'))];
+  const packagedModule = require(path.join(ROOT, 'main-impl.js'));
+  check(!packagedModule.__test, 'packaged build ignores TIANMING_TEST_EXPORTS and exposes no test internals');
+  check(/const allowUnsignedTest = TEST_MODE;/.test(mainSource)
+    && /isLocalHttp && TEST_MODE/.test(mainSource)
+    && /const localDev = TEST_MODE/.test(mainSource),
+    'unsigned updates, localhost HTTP and test exports share the same unpackaged TEST_MODE gate');
 
   console.log('[smoke-security-trust-boundary] PASS assertions=' + assertions);
 }

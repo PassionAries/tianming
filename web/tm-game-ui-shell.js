@@ -54,9 +54,12 @@ function _renderEdictArchiveBody() {
   _bodyEl.innerHTML = _h;
 }
 
-function renderGameState(){
+function renderGameState(options){
+  options = options || {};
   // ★ 财政三字段同步守卫·防 money/balance/ledgers.stock 跑偏导致顶栏与面板数值不一致
-  try { if (typeof _syncFiscalScalars === 'function' && typeof GM !== 'undefined') _syncFiscalScalars(GM); } catch(_syE) { try { window.TM && TM.errors && TM.errors.captureSilent && TM.errors.captureSilent(_syE, 'renderGameState/sync'); } catch(__){} }
+  if (!options.skipStateSync) {
+    try { if (typeof _syncFiscalScalars === 'function' && typeof GM !== 'undefined') _syncFiscalScalars(GM); } catch(_syE) { try { window.TM && TM.errors && TM.errors.captureSilent && TM.errors.captureSilent(_syE, 'renderGameState/sync'); } catch(__){} }
+  }
   // 旧 UI
   renderLeftPanel();
   renderBarResources();

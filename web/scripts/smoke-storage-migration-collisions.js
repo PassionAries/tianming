@@ -158,6 +158,11 @@ function makeFakeIndexedDB(oldRecords) {
     timestamp: 100,
     gameState: { GM: { turn: 1, source: 'local-storage' }, P: { scenario: 'local' } }
   }));
+  localStorage.setItem('tm_save_1', JSON.stringify({
+    name: '决战前备份',
+    timestamp: 300,
+    gameState: { GM: { turn: 3, source: 'same-world' }, P: { scenario: 'same' } }
+  }));
   const indexedDB = makeFakeIndexedDB([{
     id: 'slot_0',
     name: '旧 IndexedDB 档',
@@ -165,6 +170,14 @@ function makeFakeIndexedDB(oldRecords) {
     timestamp: 200,
     turn: 2,
     gameState: JSON.stringify({ GM: { turn: 2, source: 'old-db' }, P: { scenario: 'old-db' } }),
+    _compressed: false
+  }, {
+    id: 'slot_1',
+    name: '自动迁移备份',
+    type: 'manual',
+    timestamp: 301,
+    turn: 3,
+    gameState: JSON.stringify({ GM: { turn: 3, source: 'same-world' }, P: { scenario: 'same' } }),
     _compressed: false
   }]);
   const context = {
@@ -184,11 +197,12 @@ function makeFakeIndexedDB(oldRecords) {
     context.TM_SaveDB.migrateFromLocalStorage(),
     context.TM_SaveDB.migrateFromOldDB()
   ]);
-  check(migrations[0] === 1 && migrations[1] === 1, 'both legacy sources report one handled save');
+  check(migrations[0] === 2 && migrations[1] === 2, 'both legacy sources report every handled save');
 
   const listed = await context.TM_SaveDB.list();
   const ids = listed.map(record => record.id).sort();
-  check(ids.length === 2 && ids[0] === 'slot_0' && ids[1] === 'slot_0-migrated-old-db',
+  check(ids.length === 4 && ids.indexOf('slot_0') >= 0 && ids.indexOf('slot_0-migrated-old-db') >= 0 &&
+    ids.indexOf('slot_1') >= 0 && ids.indexOf('slot_1-migrated-old-db') >= 0,
     'same-id legacy saves receive deterministic distinct target ids');
 
   const localSave = await context.TM_SaveDB.load('slot_0');
@@ -197,7 +211,10 @@ function makeFakeIndexedDB(oldRecords) {
     'localStorage source survives migration without being overwritten');
   check(oldDbSave && oldDbSave.gameState.GM.source === 'old-db' && oldDbSave.gameState.GM.turn === 2,
     'old IndexedDB source survives the id collision under its renamed id');
-  check(localStorage.getItem('tm_save_0') === null && indexedDB.state.oldDeleted === true,
+  const distinctMetadataCopy = await context.TM_SaveDB.load('slot_1-migrated-old-db');
+  check(distinctMetadataCopy && distinctMetadataCopy.name === '自动迁移备份',
+    'same world payload with different user-visible metadata is preserved as a separate save');
+  check(localStorage.getItem('tm_save_0') === null && localStorage.getItem('tm_save_1') === null && indexedDB.state.oldDeleted === true,
     'legacy sources are removed only after target writes and read-back verification succeed');
   check(indexedDB.state.openOrder.join('>') === 'tianming_db>tianming_saves',
     'concurrent public migration calls serialize localStorage before the old database');

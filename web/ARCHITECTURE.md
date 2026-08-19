@@ -213,9 +213,11 @@ endTurn()                          ← tm-endturn-core.js（入口 + 前置 acto
      │     户籍 HujiEngine；环境 EnvCapacityEngine；科举 advanceKejuByDays；
      │     权威 AuthorityEngines；腐败 CorruptionEngine
      │
-     └─ step 'render-and-finalize'  ← tm-endturn-render.js
-           yearlyChronicles.push 摘要 / memorialsLog 归档 / showPostTurnCourtBanner /
-           renderShiji / renderChronicle；GM.turn++；GM.date=getTSText()；autoSave(slot0)
+     ├─ step 'render-and-finalize'  ← tm-endturn-pipeline-steps.js
+     │     准备记录参数；执行 after hooks / 科举 / 路程 / NPC 状态收官；失败即 abort
+     └─ step 'prepare-commit-barrier' ← tm-endturn-core.js + tm-endturn-render.js
+           finalize records → stage turn-data → autosave+slot_0 单事务 → commit →
+           publish turn-data → 清玩家草稿 → 纯 UI render（仅此处可降级）
 ```
 
 **调试技巧**：
@@ -309,7 +311,7 @@ tm-var-drawers / -ext / -final · 变量抽屉的 3 代版本
 
 **已落地（原路线图项）**
 - ✅ 合并 `tm-guoku-p2/p4/p5/p6` → 现仅存 `tm-guoku-engine.js`（`tm-corruption`/`tm-neitang` 的 p2/p4 后补也已并）
-- ✅ endTurn 拆为显式管道：6 step（`prep/plan-prefetch/ai/post-ai-edict/systems/render-and-finalize`，见 §6），每 step 独立 onError
+- ✅ endTurn 拆为显式管道：7 step（`prep/plan-prefetch/ai/post-ai-edict/systems/render-and-finalize/prepare-commit-barrier`，见 §6），每 step 独立 onError
 - ✅ JSDoc/类型：`@ts-check` 已覆盖 `tm-*.js` 的 **78%**（239/306）
 - ✅ 导航债清零：1500+ 行根文件 TOC 覆盖 **62/62 = 100%**（2026-06-13 一刀补齐；`debt-report.js` 已认 `§字母`/`Module:` 等约定）。各大文件顶部均有「章节导航」块，靠 grep 小节标题跳转、不写行号
 

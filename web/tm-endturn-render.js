@@ -2,12 +2,12 @@
 /// <reference path="types.d.ts" />
 // ============================================================
 // EndTurn 渲染模块（从 tm-endturn.js 拆分）
-// 包含：_endTurn_render, Delta面板, 角色高亮, 信息源渲染
+// 包含：_endTurn_finalizeRecords（事务内状态落账）、_endTurn_render（commit 后纯 UI）、Delta面板等
 // Requires: tm-endturn.js (must load before this file)
 //
 // 2026-07-06 重做：弹窗 HTML 组装全部迁至 tm-endturn-shiji-compose.js（御览分卷）。
-// 本文件保留：渲染前清洗（_unescNarr/死亡过滤/年号）·全部副作用（digest/风闻转录/shijiHistory 落账/
-// 起居注/清输入/快照/自动存档/回合收尾）。组装函数纯读零写·弹窗结构见 compose 文件头。
+// 本文件把记录落账与 UI 明确分层：digest/风闻/史记/起居注/指标属于事务内 finalization；
+// DOM、动画和提示只在 canonical 存档 commit 后运行。组装函数纯读零写·弹窗结构见 compose 文件头。
 // Domain: 回合结果展示 (战况 / 兵备 / 财政 / 起居)
 // Refactor notes:
 //   Phase 3·**Codex own·Claude review at merge** (我刚 #5 加 affectedArmies/militarySystems)
@@ -30,10 +30,81 @@ function _clearPreEndturnMarkerAfterSave(expectedId) {
   } catch (_) { return false; }
 }
 
-// 回合存档唯一入口：必须由 pipeline 在 Phase5 全部状态写入后触发。
-// 函数保持 detached 语义，但先绑定局/回合/loadGen 租约；后台等待结束后仍会复验，旧局绝不落库。
-function _endTurn_saveSnapshot() {
-  if (typeof TM_SaveDB === 'undefined' || typeof _buildSaveState !== 'function') return Promise.resolve(false);
+function _endTurn_stripCommittedDraftsFromSnapshot(snapshot) {
+  var snapGM = snapshot && snapshot.GM;
+  if (!snapGM || typeof snapGM !== 'object') return snapshot;
+  try { delete snapGM._savedEdictDrafts; } catch (_) {}
+  if (snapGM._phase8FormalDrafts && typeof snapGM._phase8FormalDrafts === 'object') {
+    snapGM._phase8FormalDrafts.edictDraft = [];
+    snapGM._phase8FormalDrafts.edictDrafts = {};
+    snapGM._phase8FormalDrafts.playerAction = '';
+  }
+  return snapshot;
+}
+
+async function _endTurn_stateChecksum(snapshot) {
+  var json = JSON.stringify(snapshot);
+  try {
+    if (typeof crypto !== 'undefined' && crypto.subtle && typeof TextEncoder !== 'undefined') {
+      var digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+      return Array.prototype.map.call(new Uint8Array(digest), function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+    }
+  } catch (_) {}
+  var hash = 2166136261;
+  for (var i = 0; i < json.length; i++) { hash ^= json.charCodeAt(i); hash = Math.imul(hash, 16777619); }
+  return 'fnv1a-' + (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+async function _endTurn_stageTurnData(ctx, snapshot) {
+  ctx = ctx || { meta: {} };
+  ctx.meta = ctx.meta || {};
+  var presentation = ctx.meta.turnPresentation;
+  if (!(window.tianming && window.tianming.isDesktop && GM.saveName && presentation && presentation.turnData)) return true;
+  if (typeof window.tianming.stageTurnData !== 'function') throw new Error('桌面回合分卷暂存接口缺失');
+  var checksum = await _endTurn_stateChecksum(snapshot);
+  var marker = {
+    saveName: GM.saveName,
+    turn: GM.turn - 1,
+    campaignId: String(GM._campaignId || ''),
+    transactionId: String(ctx.meta.transactionId || ''),
+    stateChecksum: checksum
+  };
+  var result = await window.tianming.stageTurnData(Object.assign({ data: presentation.turnData }, marker));
+  if (!(result && result.success === true)) throw new Error('回合分卷暂存失败' + (result && result.error ? '：' + result.error : ''));
+  ctx.meta.stagedTurnData = marker;
+  GM._pendingTurnDataPublish = deepClone(marker); // arch-ok: end-turn commit coordinator owns durable desktop publish marker
+  snapshot.GM._pendingTurnDataPublish = deepClone(marker);
+  return true;
+}
+
+async function _endTurn_discardStagedTurnData(ctx) {
+  var marker = ctx && ctx.meta && ctx.meta.stagedTurnData;
+  if (!marker) return true;
+  try {
+    if (window.tianming && typeof window.tianming.discardTurnData === 'function') await window.tianming.discardTurnData(marker);
+  } finally {
+    if (GM && GM._pendingTurnDataPublish && GM._pendingTurnDataPublish.transactionId === marker.transactionId) delete GM._pendingTurnDataPublish; // arch-ok: discard owns its staged marker cleanup
+    ctx.meta.stagedTurnData = null;
+  }
+  return true;
+}
+
+async function _endTurn_publishStagedTurnData(ctx) {
+  var marker = ctx && ctx.meta && ctx.meta.stagedTurnData;
+  if (!marker) return true;
+  if (!(window.tianming && typeof window.tianming.publishTurnData === 'function')) throw new Error('桌面回合分卷发布接口缺失');
+  var result = await window.tianming.publishTurnData(marker);
+  if (!(result && result.success === true)) throw new Error('回合分卷发布失败' + (result && result.error ? '：' + result.error : ''));
+  if (GM && GM._pendingTurnDataPublish && GM._pendingTurnDataPublish.transactionId === marker.transactionId) delete GM._pendingTurnDataPublish; // arch-ok: publish owns its committed marker cleanup
+  ctx.meta.stagedTurnData = null;
+  return true;
+}
+
+// 回合存档唯一入口：必须由 core 在全部状态写入和记录最终化后触发。
+// autosave/slot_0 共用一个数据库事务；桌面分卷只在该事务提交后发布。
+function _endTurn_saveSnapshot(ctx) {
+  if (typeof TM_SaveDB === 'undefined' || typeof TM_SaveDB.saveManyAtomic !== 'function' || typeof _buildSaveState !== 'function') return Promise.resolve(false);
+  ctx = ctx || { meta: {} };
   var _endturnSaveGM = GM;
   var _endturnSaveP = P;
   var _endturnSaveLoadGen = (typeof window !== 'undefined' && window._tmLoadGen) || 0;
@@ -57,6 +128,8 @@ function _endTurn_saveSnapshot() {
       try { if (typeof _wtRunFulfillAudit === 'function') _wtRunFulfillAudit(); } catch (_wtFaHkE) {}
       var _autoT0 = Date.now();
       var _autoState = _buildSaveState({format:'idb',gm:_endturnSaveGM,p:_endturnSaveP});
+      _endTurn_stripCommittedDraftsFromSnapshot(_autoState);
+      await _endTurn_stageTurnData(ctx, _autoState);
       var _autoSnapMs = Date.now() - _autoT0;
       if (_autoSnapMs > 800) console.warn('[AutoSave] 端回合 snapshot 耗 '+_autoSnapMs+'ms·考虑 A-2');
       var _sc3 = typeof findScenarioById === 'function' ? findScenarioById(_endturnSaveSid) : null;
@@ -66,25 +139,14 @@ function _endTurn_saveSnapshot() {
         scenarioName: _sc3 ? _sc3.name : '', eraName: _endturnSaveGM.eraName || ''
       };
       var _autoWriteOptions = { writeGuard: _endturnSaveStillCurrent };
-      var _autoWrite = TM_SaveDB.save('autosave', _autoState, _autoMeta, _autoWriteOptions).then(function(ok) {
-        if (ok !== true) throw new Error('autosave 未落库·保留 pre_endturn 恢复标记');
-        return _endturnSaveStillCurrent();
-      }).catch(function(e) {
-        (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'AutoSave] autosave写入失败:') : console.warn('[AutoSave] autosave写入失败:', e);
-        return false;
-      });
-      var _slotWrite = TM_SaveDB.save('slot_0', _autoState, _autoMeta, _autoWriteOptions).then(function(ok) {
-        if (ok !== true) throw new Error('slot_0 未落库·不更新案卷索引');
-        return _endturnSaveStillCurrent();
-      }).catch(function(e) {
-        (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'AutoSave] slot_0写入失败:') : console.warn('[AutoSave] slot_0写入失败:', e);
-        return false;
-      });
-      var _writeResults = await Promise.all([_autoWrite, _slotWrite]);
-      if (_writeResults[0] !== true || _writeResults[1] !== true || !_endturnSaveStillCurrent()) return false;
+      var _writeOk = await TM_SaveDB.saveManyAtomic([
+        { id: 'autosave', gameState: _autoState, meta: _autoMeta },
+        { id: 'slot_0', gameState: _autoState, meta: _autoMeta }
+      ], _autoWriteOptions);
+      if (_writeOk !== true || !_endturnSaveStillCurrent()) throw new Error('canonical 回合存档未原子落库');
       // 两个 canonical 槽位都提交后，才清恢复点并发布“已安全保存”标志。
-      if (!_clearPreEndturnMarkerAfterSave(_endturnSavePreId)) return false;
-      if (typeof _updateSaveIndex === 'function') _updateSaveIndex(0, _autoMeta);
+      try { _clearPreEndturnMarkerAfterSave(_endturnSavePreId); } catch (_) {}
+      try { if (typeof _updateSaveIndex === 'function') _updateSaveIndex(0, _autoMeta); } catch (_) {}
       try {
         localStorage.setItem('tm_autosave_mark', JSON.stringify({
           turn: _autoMeta.turn, timestamp: Date.now(),
@@ -92,11 +154,11 @@ function _endTurn_saveSnapshot() {
         }));
       } catch(e) {
         try { window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-endturn-render'); } catch(_) {}
-        return false;
       }
       return true;
     } catch(e) {
       console.warn('[AutoSave] post-turn save failed:', e);
+      try { await _endTurn_discardStagedTurnData(ctx); } catch (_discardE) { console.warn('[AutoSave] discard staged turn-data failed:', _discardE); }
       return false;
     }
   })();
@@ -176,10 +238,7 @@ function buildWorldChangeDigest() {
   return '【上一回合天下变动】（据此判断时局与战机）\n' + sections.join('\n');
 }
 
-function _endTurn_render(shizhengji, zhengwen, playerStatus, playerInner, edicts, xinglu, oldVars, changeReportHtml, queueResult, suggestions, tyrantResult, turnSummary, shiluText, szjTitle, szjSummary, personnelChanges, hourenXishuo, recordLineage) {
-  // 本地获取结束回合按钮（旧代码曾引用闭包外 btn，导致 ReferenceError）
-  var btn = (typeof _$ === 'function' ? (_$("btn-end") || _$("btn-end-turn")) : null);
-  if (!btn) btn = { textContent:'', style:{} };  // stub，防止 btn.textContent 抛错
+function _endTurn_finalizeRecords(shizhengji, zhengwen, playerStatus, playerInner, edicts, xinglu, oldVars, changeReportHtml, queueResult, suggestions, tyrantResult, turnSummary, shiluText, szjTitle, szjSummary, personnelChanges, hourenXishuo, recordLineage) {
   // 默认参数兼容（旧版调用者未传新参数时不崩）
   shiluText = shiluText || '';
   szjTitle = szjTitle || '';
@@ -243,7 +302,10 @@ function _endTurn_render(shizhengji, zhengwen, playerStatus, playerInner, edicts
 
   // 世界态变更摘要：此刻 turnChanges 已满（reset→AI→apply 之后），压成纯文本存住，供下回合喂 AI
   try { GM._lastTurnDigest = buildWorldChangeDigest(); }
-  catch (_wcdE) { GM._lastTurnDigest = ''; if (window.TM && TM.errors) TM.errors.capture(_wcdE, 'endturn.worldChangeDigest'); }
+  catch (_wcdE) {
+    if (window.TM && TM.errors) TM.errors.capture(_wcdE, 'endturn.worldChangeDigest');
+    throw _wcdE;
+  }
 
   // 一句话总曰·供弹窗头部 tr-summary-bar 与 shijiHistory.turnSummary（弹窗内容已分卷·见 tm-endturn-shiji-compose.js）
   var _summaryText = turnSummary || '';
@@ -277,7 +339,10 @@ function _endTurn_render(shizhengji, zhengwen, playerStatus, playerInner, edicts
         });
       }
     }
-  } catch(_fwE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_fwE, 'shiji→fengwen] NPC evts 转录失败') : console.warn('[shiji→fengwen] NPC evts 转录失败', _fwE); }
+  } catch(_fwE) {
+    (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_fwE, 'shiji→fengwen] NPC evts 转录失败') : console.warn('[shiji→fengwen] NPC evts 转录失败', _fwE);
+    throw _fwE;
+  }
 
   // 史记弹窗·御览分卷组装（tm-endturn-shiji-compose.js·2026-07-06 重做）——
   // 组装为纯函数（读 GM/P·零写入）·素材已经上方 _unescNarr 清洗+死亡过滤·副作用（digest/风闻/落账/存档）全留本函数
@@ -392,19 +457,9 @@ function _endTurn_render(shizhengji, zhengwen, playerStatus, playerInner, edicts
     evidenceRefs: _qijuMeta ? _qijuMeta.basisRefs : [],
     contentHash: _qijuMeta && _qijuMeta.contentHash,
     factStatus: 'recorded_narrative',
-    generatedBy: 'endturn.render'
+    generatedBy: 'endturn.finalize'
   });
-  renderQiju();
-
-  // 9. 清空输入
-  ["edict-pol","edict-mil","edict-dip","edict-eco","edict-oth","xinglu","xinglu-pub","xinglu-prv"].forEach(function(id){var el=_$(id);if(el)el.value="";});
-  try { if (window.TMPhase8FormalBridge && typeof window.TMPhase8FormalBridge.clearEdictDrafts === 'function') window.TMPhase8FormalBridge.clearEdictDrafts(); } catch(_) {}
-
-  // 10. 问对：保留聊天记录（跨回合持久），刷新角色列表，关闭弹窗
-  renderWenduiChars();
-  var _wdm=_$('wendui-modal');if(_wdm)_wdm.remove();
-
-  // 11. 新回合奏疏
+  // 9. 新回合奏疏；属于记录最终化，异常必须触发整回合回滚。
   generateMemorials();
 
   // 11.5/11.6 自然死亡和空缺检查已在 Step 6.90-6.91 中执行，此处不再重复
@@ -432,10 +487,10 @@ function _endTurn_render(shizhengji, zhengwen, playerStatus, playerInner, edicts
   // 11b. 势力历史快照（每回合记录各势力状态，供AI分析趋势）
   if (GM.facs && GM.facs.length > 0) {
     if (!GM._factionHistory) GM._factionHistory = [];
-    var _fSnapshot = { turn: GM.turn, factions: {} };
+    var _fSnapshot = { turn: GM.turn - 1, factions: {} };
     GM.facs.forEach(function(f) {
       _fSnapshot.factions[f.name] = {
-        strength: f.strength || 50,
+        strength: f.strength ?? 50,
         military: f.militaryStrength || 0,
         attitude: f.attitude || '',
         leader: f.leader || ''
@@ -452,106 +507,104 @@ function _endTurn_render(shizhengji, zhengwen, playerStatus, playerInner, edicts
   if (GM.jishiRecords && GM.jishiRecords.length > 400) GM.jishiRecords = GM.jishiRecords.slice(-400);
   // 史料权威补全(纪事)·议政记录皆实录→信史·confidence 按 mode/泄密分级·供史册库权威钤印/置信
   if (Array.isArray(GM.jishiRecords)) GM.jishiRecords.forEach(function(_r){ if (_r && !_r.authorityLevel){ _r.authorityLevel = 'official_record'; _r.confidence = (_r.leaked || _r.secret) ? 0.55 : (_r.mode === 'private' ? 0.68 : 0.78); } });
-  // 12. 更新界面·renderBiannian/renderOfficeTree/renderShijiList 已由 renderGameState 内部重渲·去冗余整树重建（性能）
-  renderGameState();
-
-  // 13. 显示史记弹窗
-  hideLoading();
-  showTurnResult(shijiHtml, GM.shijiHistory.length - 1);
-
-  // 7.2: 预加载——玩家阅读回合结果时预构建固定层prompt缓存
-  setTimeout(function() {
-    if (typeof PromptLayerCache !== 'undefined' && PromptLayerCache.preload) {
-      PromptLayerCache.preload();
-    }
-  }, 500);
-
-  // 释放延迟toast（成就等在settlement期间积攒的提示）
-  if (GM._pendingToasts && GM._pendingToasts.length > 0) {
-    GM._pendingToasts.forEach(function(msg, i) { setTimeout(function(){ toast(msg); }, 500 + i * 800); });
-    GM._pendingToasts = [];
-  }
-
-  // 13a. 自动存档已移至 pipeline 的 save-finalized-turn：必须晚于 normal/deferred Phase5 全部写入。
-
-  // 13b. 写入每回合完整数据（多文件结构）
-  if(window.tianming&&window.tianming.isDesktop&&GM.saveName){
-    try{
-      // 主上下文
-      var turnCtx={turn:GM.turn-1,time:getTSText(GM.turn-1),shizhengji:shizhengji,zhengwen:zhengwen,playerStatus:playerStatus,playerInner:playerInner,vars:deepClone(GM.vars),rels:deepClone(GM.rels),chars:deepClone(GM.chars),officeTree:deepClone(GM.officeTree||[]),families:GM.families?deepClone(GM.families):null,harem:GM.harem?deepClone(GM.harem):null};
-      // 玩家操作
-      var playerInput={edicts:edicts,xinglu:xinglu,memorialResponses:(GM.memorials||[]).map(function(m){return{from:m.from,type:m.type,status:m.status,reply:m.reply};}),tyrantActivities:GM._turnTyrantActivities||[]};
-      // AI推演全部结果（从GM临时存储中提取）
-      try {
-        if (window.TM && TM.MemoryTrace && typeof TM.MemoryTrace.finalizeTurnTrace === 'function') {
-          var _mtTrace = TM.MemoryTrace.finalizeTurnTrace(GM);
-          if (_mtTrace && _mtTrace.summary && typeof recordMemoryDiagnostic === 'function') {
-            recordMemoryDiagnostic('trace', { status: 'finalized', summary: _mtTrace.summary });
-          }
-        }
-      } catch(_mtE) {}
-      var aiResults=GM._turnAiResults||{};
-      // 变量变化
-      var varChanges={_timeScale: P.time ? P.time.perTurn : '1m', _customDays: P.time ? P.time.customDays : null};
-      Object.entries(GM.vars).forEach(function(e){
-        var d=e[1].value-(oldVars[e[0]]||0);
-        if(Math.abs(d)>=0.1) {
-          var entry = {old:oldVars[e[0]]||0, now:e[1].value, delta:d};
-          // 保留编辑者定义的单位信息
-          var unit = e[1].unit || e[1].unitName || e[1].suffix || '';
-          if (unit) entry.unit = unit;
-          varChanges[e[0]] = entry;
-        }
-      });
-      // 剧本快照（首回合）
-      var scenarioData=null;
-      var refTextData=null;
-      if(GM.turn<=2){
-        var _sc4=findScenarioById&&findScenarioById(GM.sid);
-        if(_sc4) scenarioData=deepClone(_sc4);
-        if(_sc4&&_sc4.refText) refTextData=_sc4.refText;
+  // 这些旧 UI 入口过去会在渲染时顺手规范化状态。现在先在事务内完成，
+  // commit 后的 renderer 只读已经准备好的财政、问对和地图展示数据。
+  if (typeof _syncFiscalScalars === 'function') _syncFiscalScalars(GM);
+  if (typeof _wdPrepareAudienceRenderState === 'function') _wdPrepareAudienceRenderState();
+  if (P.map && P.map.enabled && typeof updateMapColors === 'function') updateMapColors({ refresh: false });
+  var _pendingToasts = Array.isArray(GM._pendingToasts) ? GM._pendingToasts.slice() : [];
+  GM._pendingToasts = [];
+  var turnData = null;
+  if (window.tianming && window.tianming.isDesktop && GM.saveName) {
+    if (window.TM && TM.MemoryTrace && typeof TM.MemoryTrace.finalizeTurnTrace === 'function') {
+      var _mtTrace = TM.MemoryTrace.finalizeTurnTrace(GM);
+      if (_mtTrace && _mtTrace.summary && typeof recordMemoryDiagnostic === 'function') {
+        recordMemoryDiagnostic('trace', { status: 'finalized', summary: _mtTrace.summary });
       }
-      var turnData={context:turnCtx,playerInput:playerInput,aiResults:aiResults,varChanges:varChanges};
-      if(scenarioData) turnData.scenario=scenarioData;
-      if(refTextData) turnData.refText=refTextData;
-      window.tianming.writeTurnData(GM.saveName,GM.turn-1,turnData).then(function(result){
-        if (!(result && result.success === true)) throw new Error('回合分卷写入失败' + (result && result.error ? '：' + result.error : ''));
-      }).catch(function(e){ (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'catch] async:') : console.warn('[catch] async:', e); });
-    }catch(e){ console.warn("[catch] \u9759\u9ED8\u5F02\u5E38:", e.message || e); }
-    // Electron 崩溃恢复档只由 tm-save-lifecycle 的 60s 单写口维护；端回合不再并发写同一 __autosave__.json.tmp。
+    }
+    var turnCtx={turn:GM.turn-1,time:getTSText(GM.turn-1),shizhengji:shizhengji,zhengwen:zhengwen,playerStatus:playerStatus,playerInner:playerInner,vars:deepClone(GM.vars),rels:deepClone(GM.rels),chars:deepClone(GM.chars),officeTree:deepClone(GM.officeTree||[]),families:GM.families?deepClone(GM.families):null,harem:GM.harem?deepClone(GM.harem):null};
+    var playerInput={edicts:edicts,xinglu:xinglu,memorialResponses:(GM.memorials||[]).map(function(m){return{from:m.from,type:m.type,status:m.status,reply:m.reply};}),tyrantActivities:GM._turnTyrantActivities||[]};
+    var aiResults=GM._turnAiResults||{};
+    var varChanges={_timeScale: P.time ? P.time.perTurn : '1m', _customDays: P.time ? P.time.customDays : null};
+    Object.entries(GM.vars || {}).forEach(function(e){
+      var oldValue = oldVars && oldVars[e[0]] != null ? oldVars[e[0]] : 0;
+      var d=e[1].value-oldValue;
+      if(Math.abs(d)>=0.1) {
+        var entry = {old:oldValue, now:e[1].value, delta:d};
+        var unit = e[1].unit || e[1].unitName || e[1].suffix || '';
+        if (unit) entry.unit = unit;
+        varChanges[e[0]] = entry;
+      }
+    });
+    var scenarioData=null;
+    var refTextData=null;
+    if(GM.turn<=2){
+      var _sc4=typeof findScenarioById === 'function' && findScenarioById(GM.sid);
+      if(_sc4) scenarioData=deepClone(_sc4);
+      if(_sc4&&_sc4.refText) refTextData=_sc4.refText;
+    }
+    turnData={context:turnCtx,playerInput:playerInput,aiResults:aiResults,varChanges:varChanges};
+    if(scenarioData) turnData.scenario=scenarioData;
+    if(refTextData) turnData.refText=refTextData;
   }
 
-  btn.textContent="\u23F3 \u9759\u5F85\u65F6\u53D8";btn.style.opacity="1";
-
-  // 更新新UI的时间显示和变量显示
-  if (typeof updateTimeDisplay === 'function') {
-    updateTimeDisplay();
+  var _aiDiagnosticSummary = '';
+  var _aiDiag = GM._lastAIDiagnostics;
+  if (_aiDiag && !_aiDiag._announced) {
+    var _fw = Array.isArray(_aiDiag.failedWrites) ? _aiDiag.failedWrites.length : 0;
+    var _warn = Array.isArray(_aiDiag.warnings) ? _aiDiag.warnings.length : 0;
+    var _rep = Array.isArray(_aiDiag.repairedJson) ? _aiDiag.repairedJson.length : 0;
+    if (_fw || _warn || _rep) {
+      _aiDiagnosticSummary = 'write_gate=' + _fw + ', warnings=' + _warn + ', json_repair=' + _rep;
+      _aiDiag._announced = true;
+    }
   }
-  if (typeof updateTopVariables === 'function') {
-    updateTopVariables();
-  }
 
-  // 存档写口已在 13a 统一完成；不再调用 SaveManager.autoSave 重复覆盖 slot_0。
+  return {
+    shijiHtml: shijiHtml,
+    shijiIndex: GM.shijiHistory.length - 1,
+    pendingToasts: _pendingToasts,
+    turnData: turnData,
+    aiDiagnosticSummary: _aiDiagnosticSummary
+  };
+}
 
-  // 输出回合结算日志
+// 玩家输入必须在世界与 canonical 存档都提交以后才清空；失败回滚无需重建 DOM 草稿。
+function _endTurn_clearCommittedInputs() {
+  ["edict-pol","edict-mil","edict-dip","edict-eco","edict-oth","xinglu","xinglu-pub","xinglu-prv"].forEach(function(id){var el=typeof _$ === 'function' ? _$(id) : null;if(el)el.value="";});
+  if (window.TMPhase8FormalBridge && typeof window.TMPhase8FormalBridge.clearEdictDrafts === 'function') window.TMPhase8FormalBridge.clearEdictDrafts();
+}
+
+// 纯展示阶段：只在事务 commit 后调用。这里的异常可降级，不能反向回滚已提交世界。
+function _endTurn_render(presentation) {
+  presentation = presentation || {};
+  var btn = (typeof _$ === 'function' ? (_$("btn-end") || _$("btn-end-turn")) : null);
+  if (typeof renderQiju === 'function') renderQiju();
+  if (typeof renderWenduiChars === 'function') renderWenduiChars(false, { skipStatePreparation: true });
+  var _wdm=typeof _$ === 'function' ? _$('wendui-modal') : null;if(_wdm)_wdm.remove();
+  if (typeof renderGameState === 'function') renderGameState({ skipStateSync: true });
+  if (typeof hideLoading === 'function') hideLoading();
+  if (typeof showTurnResult === 'function') showTurnResult(presentation.shijiHtml || '', presentation.shijiIndex);
+  setTimeout(function() {
+    if (typeof PromptLayerCache !== 'undefined' && PromptLayerCache.preload) PromptLayerCache.preload();
+  }, 500);
+  (presentation.pendingToasts || []).forEach(function(msg, i) { setTimeout(function(){ toast(msg); }, 500 + i * 800); });
+  if (btn) { btn.textContent="\u23F3 \u9759\u5F85\u65F6\u53D8";btn.style.opacity="1"; }
+  if (typeof updateTimeDisplay === 'function') updateTimeDisplay();
+  if (typeof updateTopVariables === 'function') updateTopVariables();
   _dbg('========== 回合结算完成 (T' + GM.turn + ') ==========');
   _dbg('[endTurn] 财务报表:', (typeof AccountingSystem !== 'undefined' && AccountingSystem.getLedger) ? AccountingSystem.getLedger() : null);
   _dbg('[endTurn] 变动队列已清空，准备进入下一回合');
-  try {
-    var _aiDiag = GM._lastAIDiagnostics;
-    if (_aiDiag && !_aiDiag._announced) {
-      var _fw = Array.isArray(_aiDiag.failedWrites) ? _aiDiag.failedWrites.length : 0;
-      var _warn = Array.isArray(_aiDiag.warnings) ? _aiDiag.warnings.length : 0;
-      var _rep = Array.isArray(_aiDiag.repairedJson) ? _aiDiag.repairedJson.length : 0;
-      if (_fw || _warn || _rep) {
-        _dbg('[AIDiagnostics] hidden summary: write_gate=' + _fw + ', warnings=' + _warn + ', json_repair=' + _rep);
-        _aiDiag._announced = true;
-      }
-    }
-  } catch(_aiDiagE) { console.warn('[AIDiagnostics] render summary failed:', _aiDiagE); }
+  if (presentation.aiDiagnosticSummary) _dbg('[AIDiagnostics] hidden summary: ' + presentation.aiDiagnosticSummary);
+  if (P.map && P.map.enabled && typeof refreshMapDisplay === 'function') refreshMapDisplay();
+}
 
-  // 更新地图颜色（根据占领者实时更新）
-  if (P.map && P.map.enabled) {
-    updateMapColors();
+function _endTurn_showRenderFallback(error) {
+  try { if (typeof hideLoading === 'function') hideLoading(); } catch (_) {}
+  var message = String(error && (error.message || error) || 'unknown render error');
+  var safe = message.replace(/[&<>"']/g, function(ch) { return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[ch]; });
+  if (typeof showTurnResult === 'function') {
+    showTurnResult('<div style="padding:1rem;line-height:1.8;color:var(--txt);"><h3 style="color:var(--gold);margin:0 0 0.8rem;">史记弹窗渲染失败</h3><p>本回合已安全保存，但结果界面渲染失败。可继续操作，请把控制台诊断发给开发者。</p><pre style="white-space:pre-wrap;color:var(--red,#c44);">' + safe + '</pre></div>');
   }
+  try { if (typeof toast === 'function') toast('回合已安全保存，但史记弹窗渲染失败，请查看控制台诊断。'); } catch (_) {}
 }

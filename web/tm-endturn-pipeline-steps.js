@@ -586,8 +586,7 @@
             }
           } catch(_) {}
         }
-        // 注：oldVars 在 ctx.input·edicts/xinglu 同
-        // _renderArgs 17 字段顺序按 _endTurn_render 期望
+        // 注：oldVars 在 ctx.input·edicts/xinglu 同；记录最终化在 core 的 commit barrier 前统一执行。
         try {
           if (typeof window !== 'undefined' && window.TM && TM.SocialPoliticalSignals && typeof TM.SocialPoliticalSignals.recordTurnResult === 'function') {
             ctx.results.turnResultSocialSignals = await Promise.resolve(TM.SocialPoliticalSignals.recordTurnResult(GM, ctx, {
@@ -635,6 +634,7 @@
             source: 'sc1d'
           }
         ];
+        ctx.meta.turnRenderArgs = _renderArgs;
         // [slice 6.5·2026-05-07] deferred 路径·shijiModal 后朝进行中
         // 暂存 payload + 用 ctx.deferredSteps 显式登记 phase5·替代闭包模式 (audit 决定 2)
         // 兼容性：仍 mirror 到 _pendingShijiModal.deferredPhase5·让 legacy 触发器继续工作
@@ -734,15 +734,10 @@
                 }
               }
               await _runPostRenderTurnOpeners(ctx);
-              if (!ctx.meta.endTurnSavePromise && typeof _endTurn_saveSnapshot === 'function') {
-                ctx.meta.endTurnSavePromise = _endTurn_saveSnapshot();
-              }
-              if (!ctx.meta.endTurnSavePromise || await ctx.meta.endTurnSavePromise !== true) {
-                throw new Error('朝会收官存档失败');
-              }
-              if (typeof _tmCommitEndTurnTransaction !== 'function' || !_tmCommitEndTurnTransaction(ctx.meta.transaction)) {
-                throw new Error('朝会收官提交时世界身份已变化');
-              }
+              ctx.meta.deferEndTurnSave = false;
+              if (typeof _finishPostTurnCourtState === 'function') _finishPostTurnCourtState();
+              if (typeof _tmFinalizeEndTurnTransaction !== 'function') throw new Error('朝会收官事务入口缺失');
+              await _tmFinalizeEndTurnTransaction(ctx, ctx.meta.transaction);
             } catch (e) {
               try { if (typeof _tmRollbackEndTurnTransaction === 'function') _tmRollbackEndTurnTransaction(ctx.meta.transaction, e); } catch (_) {}
               throw e;
@@ -751,46 +746,7 @@
           return ctx; // deferred 路径完成
         }
 
-        // 非 deferred 路径·正常 render + 4.5 + 4.6 + 5
-        // render 失败时弹 fallback，避免推演已完成但玩家停在 loading 遮罩。
-        if (typeof _endTurn_render === 'function') {
-          try {
-            try { if (typeof showLoading === 'function') showLoading('生成史记弹窗', 97); } catch(_progressE) {}
-            _endTurn_render.apply(null, _renderArgs);
-          } catch(_renderE) {
-            ctx.results.renderError = _renderE;
-            try {
-              if (typeof window !== 'undefined' && window.TM && TM.errors && TM.errors.capture) {
-                TM.errors.capture(_renderE, 'pipeline.render-finalize] render failed');
-              } else {
-                console.error('[pipeline.render-finalize] render failed', _renderE);
-              }
-            } catch(_diagE) {
-              try { console.error('[pipeline.render-finalize] render failure diagnostic failed', _diagE); } catch(_){}
-            }
-            try { if (typeof hideLoading === 'function') hideLoading(); } catch(_hideE) {
-              try { console.warn('[pipeline.render-finalize] hideLoading after render failure failed', _hideE); } catch(_){}
-            }
-            try {
-              if (typeof showTurnResult === 'function') {
-                var _renderErrMsg = (_renderE && (_renderE.message || _renderE.toString())) || 'unknown render error';
-                var _safeRenderErr = String(_renderErrMsg).replace(/[&<>"']/g, function(ch) {
-                  return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[ch];
-                });
-                showTurnResult(
-                  '<div style="padding:1rem;line-height:1.8;color:var(--txt);">' +
-                  '<h3 style="color:var(--gold);margin:0 0 0.8rem;">史记弹窗渲染失败</h3>' +
-                  '<p>本回合推演与数值结算已经完成，但结果弹窗在渲染时出错。游戏已解除等待状态，可继续操作；请把控制台诊断发给开发者。</p>' +
-                  '<pre style="white-space:pre-wrap;color:var(--red,#c44);background:rgba(0,0,0,0.22);padding:0.75rem;border:1px solid rgba(200,80,70,0.35);">' + _safeRenderErr + '</pre>' +
-                  '</div>'
-                );
-              }
-            } catch(_fallbackE) {
-              try { console.warn('[pipeline.render-finalize] fallback render failed', _fallbackE); } catch(_){}
-            }
-            try { if (typeof toast === 'function') toast('回合推演已完成，但史记弹窗渲染失败，请查看控制台诊断。'); } catch(_toastE) {}
-          }
-        }
+        // 所有 GM/P 记录落账由 core 的 finalizeTurnRecords 关键阶段执行；纯 DOM 渲染只在 commit 后运行。
         if (GM._pendingShijiModal) { GM._pendingShijiModal.aiReady = false; GM._pendingShijiModal.payload = null; }
         if (typeof GM !== 'undefined') {
           GM._lastEndturnAiContext = {
@@ -934,10 +890,10 @@
         await _runPostRenderTurnOpeners(ctx);
         return ctx;
       },
-      // 只有上方明确包住的 DOM 渲染允许降级；任何状态结算异常都必须到达外层事务。
+      // 本 step 仅准备记录参数并执行剩余状态结算；纯 UI 渲染已移到 canonical commit 之后。
       onError: 'abort',
       reads: ['ctx.results.aiResult', 'ctx.results.queueResult', 'ctx.results.tyrantResult', 'ctx.input.edicts', 'ctx.input.xinglu', 'ctx.input.oldVars', 'GM._pendingShijiModal'],
-      writes: ['GM.shijiHistory', 'GM.eraName', 'GM._pendingToasts', 'GM._lastFixedExpense', 'GM._facIndex', 'GM.facs[*].derivedHealth', 'ctx.input._renderFinalizeRan']
+      writes: ['GM._lastFixedExpense', 'GM._facIndex', 'GM.facs[*].derivedHealth', 'ctx.input._renderFinalizeRan', 'ctx.meta.turnRenderArgs']
     },
     {
       name: 'prepare-commit-barrier',

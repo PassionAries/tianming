@@ -112,7 +112,22 @@ function _wdCanDirectAudience(ch) {
 /**
  * 渲染问对面板中的角色网格（仅在京臣子可点击）
  */
-function renderWenduiChars(force){
+function _wdPrepareAudienceRenderState() {
+  if (Array.isArray(GM._pendingAudiences) && GM._pendingAudiences.length > 0) {
+    _wdCleansePendingAudiences(function(q) {
+      if (!q || !q.name) return true;
+      if (q.isEnvoy || q.fromFaction || q.isConsort || q._sid || q._opening) return true;
+      var ch = (typeof findCharByName === 'function') ? findCharByName(q.name) : null;
+      if (!ch) return true;
+      if (typeof _tmIsForeignCourtChar === 'function' && _tmIsForeignCourtChar(ch)) return false;
+      return true;
+    });
+  }
+  _wdEnsurePendingQids();
+}
+
+function renderWenduiChars(force, options){
+  options = options || {};
   // 性能·2026-06-10·与纪录类面板同范式:gt-wendui 隐藏时跳过(renderGameState 尾部无条件调它·
   // 全名册数百卡+肖像重建纯浪费)·切到该页时 switchGTab 传 force=true 强制渲染
   if(!force && typeof _gtTabVisible==='function' && !_gtTabVisible('gt-wendui')) return;
@@ -151,17 +166,7 @@ function renderWenduiChars(force){
 
   // 【阶下待见】使节/外藩/AI推送
   // 存量清洗(2026-07-04)：旧版 NPC 社交行动无阵营闸·外邦君主(皇太极等)曾被排进求见队列并喂入推演。渲染时滤除已混入的明确异势力人物·救活污染存档免回档。使节(isEnvoy/fromFaction)/后妃(isConsort·消费侧另有专检)/剧本预置(_sid/_opening·作者意图)/空 faction 者均放行;查无此人留给消费侧既有兜底。
-  if (Array.isArray(GM._pendingAudiences) && GM._pendingAudiences.length > 0) {
-    _wdCleansePendingAudiences(function(q) {
-      if (!q || !q.name) return true;
-      if (q.isEnvoy || q.fromFaction || q.isConsort || q._sid || q._opening) return true;
-      var _qCh = (typeof findCharByName === 'function') ? findCharByName(q.name) : null;
-      if (!_qCh) return true;
-      if (typeof _tmIsForeignCourtChar === 'function' && _tmIsForeignCourtChar(_qCh)) return false;
-      return true;
-    });
-  }
-  _wdEnsurePendingQids();
+  if (!options.skipStatePreparation) _wdPrepareAudienceRenderState();
   if (Array.isArray(GM._pendingAudiences) && GM._pendingAudiences.length > 0) {
     html += '<div class="wdp-group wdp-g-envoy">';
     html += '<div class="wdp-group-title"><span class="tag">\u9636 \u4E0B \u5F85 \u89C1</span><span class="desc">\u4F7F\u8282\u00B7\u5916\u85E9\u00B7\u7279\u8BF7\u00B7\u7B49\u5F85\u9661\u4E0B\u51B3\u65AD</span><span class="count">' + GM._pendingAudiences.length + ' \u4EBA</span></div>';

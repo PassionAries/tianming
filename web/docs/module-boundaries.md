@@ -142,12 +142,12 @@ tm-endturn-core (调 / 间接·tm-player-core (endTurn 按钮)
 
 | 项 | 内容 |
 |---|---|
-| owns | _endTurn_render 主入口·渲染前清洗（_unescNarr/死亡过滤/年号）·全部副作用（worldChangeDigest·风闻转录·shijiHistory 落账·起居注·清输入·快照·自动存档·回合收尾） |
+| owns | `_endTurn_finalizeRecords` 事务内记录落账·`_endTurn_saveSnapshot` canonical 双槽原子保存与桌面分卷暂存·`_endTurn_render` commit 后纯展示 |
 | does not own | 弹窗 HTML 组装 (→ tm-endturn-shiji-compose·2026-07-06 迁)·AI 推演 (→ tm-endturn-ai-infer)·业务结算 (→ tm-endturn-systems)·battle 数据 (→ tm-military) |
-| public API | `_endTurn_render` (内部由 ai-infer 末尾调用) |
+| public API | `_endTurn_finalizeRecords` / `_endTurn_saveSnapshot` / `_endTurn_render`（由 core commit barrier 调用） |
 | depends on | tm-endturn-shiji-compose (`_composeShijiHtml`·**必须先加载**)·tm-endturn-helpers / tm-utils |
-| used by | tm-endturn-ai-infer (Region 5 末尾·由 core 末尾) |
-| 新功能加哪 | 回合收尾副作用 → 加这里；结果展示 → tm-endturn-shiji-compose |
+| used by | tm-endturn-core（normal/deferred 共用提交屏障） |
+| 新功能加哪 | 状态记录落账 → finalizer；结果 HTML 组装 → tm-endturn-shiji-compose；DOM 动画 → renderer |
 | smoke | `render-smoke` (7 targets·13 pass) |
 
 ---

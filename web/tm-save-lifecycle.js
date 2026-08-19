@@ -368,7 +368,8 @@ function _prepareGMForSave(GM, P) {
   }
   // 系统序列化
   // 注意：GM._chronicle是编年事件数组，不可与ChronicleSystem的月/年摘要对象混用——分开存
-  GM._chronicleSysState = typeof ChronicleSystem !== 'undefined' ? ChronicleSystem.serialize() : null;
+  // 编年状态已经属于传入的 GM 快照；不得从当前全局世界重新读取后覆盖跨档快照。
+  GM._chronicleSysState = typeof ChronicleSystem !== 'undefined' ? ChronicleSystem.serialize(GM) : null;
   GM._warTruces = typeof WarWeightSystem !== 'undefined' ? WarWeightSystem.serialize() : null;
   GM._rngState = typeof getRngState === 'function' ? getRngState() : null;
   // 亲疏/得罪/反弹/观感
@@ -953,7 +954,8 @@ function fullLoadGame(data, loadOptions){
       if (!GM._chronicleSysState) GM._chronicleSysState = GM._chronicle;
       GM._chronicle = [];
     }
-    if(GM._chronicleSysState && typeof ChronicleSystem !== 'undefined') ChronicleSystem.deserialize(GM._chronicleSysState);
+    // 每次读档都绑定（包括没有旧字段的空档），避免沿用上一战役的进程级单例残留。
+    if(typeof ChronicleSystem !== 'undefined') ChronicleSystem.deserialize(GM._chronicleSysState || null, GM);
     if(GM._warTruces && typeof WarWeightSystem !== 'undefined') WarWeightSystem.deserialize(GM._warTruces);
 
     // 恢复所有_saved*字段

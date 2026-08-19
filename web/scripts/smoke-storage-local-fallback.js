@@ -71,6 +71,13 @@ async function exerciseFallback(indexedDB, label) {
   check(raw._compressed === false, label + ': localStorage record must not claim gzip compression');
   check(typeof raw.gameState === 'string' && raw.gameState.indexOf('fallback-smoke') >= 0,
     label + ': localStorage record must retain the JSON payload instead of serializing Blob to {}');
+  const metadata = JSON.parse(context.localStorage.getItem('tm_idb_saveMetadata_fallback'));
+  check(metadata && metadata.id === 'fallback' && !Object.prototype.hasOwnProperty.call(metadata, 'gameState'),
+    label + ': fallback save must maintain a payload-free metadata record');
+
+  const listed = await context.TM_SaveDB.list();
+  check(listed.length === 1 && listed[0].id === 'fallback' && !Object.prototype.hasOwnProperty.call(listed[0], 'gameState'),
+    label + ': fallback list must read the lightweight metadata view');
 
   const loaded = await context.TM_SaveDB.load('fallback');
   check(JSON.stringify(loaded.gameState) === JSON.stringify(expected), label + ': save/load must round-trip deeply');

@@ -41,7 +41,9 @@ function makeIndexedDB(initial, failPutAt, failureName) {
   const stores = new Map([
     ['saves', new Map(Object.entries(initial && initial.saves || {}).map(([k, v]) => [k, clone(v)]))],
     ['saveMetadata', new Map(Object.entries(initial && initial.saveMetadata || {}).map(([k, v]) => [k, clone(v)]))],
-    ['projects', new Map()]
+    ['projects', new Map()],
+    ['chronicleRecords', new Map(Object.entries(initial && initial.chronicleRecords || {}).map(([k, v]) => [k, clone(v)]))],
+    ['turnPublishReceipts', new Map(Object.entries(initial && initial.turnPublishReceipts || {}).map(([k, v]) => [k, clone(v)]))]
   ]);
   const stats = { readwriteTransactions: 0, puts: 0 };
   const db = {
@@ -113,6 +115,26 @@ function makeContext(indexedDB, localStorage) {
   ]);
   check(ok === true && idb.stats.readwriteTransactions === 1, 'both canonical slots use one IndexedDB readwrite transaction');
   check(idb.stores.get('saves').size === 2 && idb.stores.get('saveMetadata').size === 2, 'payloads and metadata commit together');
+
+  const batchReceiptMarker = {
+    campaignId: 'campaign-batch-receipt', transactionId: 'turn-batch-receipt-12345678', saveName: '测试档',
+    turn: 50, stateChecksum: 'checksum-batch-12345678'
+  };
+  const receiptBatchIdb = makeIndexedDB();
+  const receiptBatchCtx = makeContext(receiptBatchIdb, makeLocalStorage());
+  await receiptBatchCtx.TM_SaveDB.open();
+  const receiptBatchSaved = await receiptBatchCtx.TM_SaveDB.saveManyAtomic([
+    { id: 'autosave', gameState: state, meta: { type: 'auto', turn: 50 } },
+    { id: 'slot_0', gameState: state, meta: { type: 'auto', turn: 50 } }
+  ], { turnPublishReceipt: batchReceiptMarker });
+  check(receiptBatchSaved === true && receiptBatchIdb.stats.readwriteTransactions === 1
+    && receiptBatchIdb.stores.get('saves').size === 2 && receiptBatchIdb.stores.get('turnPublishReceipts').size === 1,
+  'canonical worlds and the world-committed turn receipt commit in one IndexedDB transaction');
+  const receiptBatchPuts = receiptBatchIdb.stats.puts;
+  const receiptBatchDeleted = await receiptBatchCtx.TM_SaveDB.deleteTurnPublishReceipt(batchReceiptMarker);
+  check(receiptBatchDeleted === true && receiptBatchIdb.stats.puts === receiptBatchPuts
+    && receiptBatchIdb.stores.get('saves').size === 2 && receiptBatchIdb.stores.get('turnPublishReceipts').size === 0,
+  'publishing clears only the lightweight receipt and never rewrites either world payload');
   let duplicateRejected = false;
   try {
     await ctx.TM_SaveDB.saveManyAtomic([
@@ -179,6 +201,57 @@ function makeContext(indexedDB, localStorage) {
     && noDisposableIdb.stores.get('saves').get('slot_0').gameState === 'old-slot',
   'quota recovery never deletes either canonical slot when no disposable auto save exists');
 
+  const singleOnlySlotIdb = makeIndexedDB({ saves: { slot_0: oldSlot }, saveMetadata: {
+    slot_0: { id: 'slot_0', type: 'auto', turn: 49, timestamp: 1 }
+  } }, 1, 'QuotaExceededError');
+  const singleOnlySlotCtx = makeContext(singleOnlySlotIdb, makeLocalStorage());
+  await singleOnlySlotCtx.TM_SaveDB.open();
+  const singleOnlySlotSaved = await singleOnlySlotCtx.TM_SaveDB.save('slot_0', state, { type: 'auto', turn: 50 });
+  check(singleOnlySlotSaved === false && singleOnlySlotIdb.stores.get('saves').get('slot_0').gameState === 'old-slot',
+    'single-slot quota recovery never deletes the old target when no disposable save exists');
+
+  const singleCanonicalIdb = makeIndexedDB({ saves: { autosave: oldAuto, slot_0: oldSlot }, saveMetadata: {
+    autosave: { id: 'autosave', type: 'auto', turn: 49, timestamp: 1 },
+    slot_0: { id: 'slot_0', type: 'auto', turn: 49, timestamp: 2 }
+  } }, 1, 'QuotaExceededError');
+  const singleCanonicalCtx = makeContext(singleCanonicalIdb, makeLocalStorage());
+  await singleCanonicalCtx.TM_SaveDB.open();
+  const singleCanonicalSaved = await singleCanonicalCtx.TM_SaveDB.save('slot_0', state, { type: 'auto', turn: 50 });
+  check(singleCanonicalSaved === false
+    && singleCanonicalIdb.stores.get('saves').get('autosave').gameState === 'old-auto'
+    && singleCanonicalIdb.stores.get('saves').get('slot_0').gameState === 'old-slot',
+  'single-slot quota recovery protects every canonical recovery slot');
+
+  const singleDisposableIdb = makeIndexedDB(quotaInitial, 1, 'QuotaExceededError');
+  const singleDisposableCtx = makeContext(singleDisposableIdb, makeLocalStorage());
+  await singleDisposableCtx.TM_SaveDB.open();
+  const singleDisposableSaved = await singleDisposableCtx.TM_SaveDB.save('slot_0', state, { type: 'auto', turn: 50 });
+  check(singleDisposableSaved === true
+    && !singleDisposableIdb.stores.get('saves').has('older_auto_1')
+    && singleDisposableIdb.stores.get('saves').get('autosave').gameState === 'old-auto'
+    && JSON.parse(singleDisposableIdb.stores.get('saves').get('slot_0').gameState).GM.turn === 50,
+  'single-slot quota recovery removes only a disposable auto save before retrying the target');
+
+  const chronicleSaved = await ctx.TM_SaveDB.saveChronicleRecord({
+    campaignId: 'campaign-chronicle', year: 2025, requestId: 'req-1', loadGeneration: 3,
+    generatedAt: 123, chronicle: { content: '年度正史', afterword: '史评', read: false }
+  });
+  const chronicleRows = await ctx.TM_SaveDB.listChronicleRecords('campaign-chronicle');
+  check(chronicleSaved === true && chronicleRows.length === 1
+    && chronicleRows[0].chronicle.content === '年度正史' && idb.stores.get('saves').size === 2,
+  'annual chronicles checkpoint in a lightweight store without rewriting world saves');
+
+  const receiptMarker = {
+    campaignId: 'campaign-receipt', transactionId: 'turn-receipt-12345678', saveName: '测试档',
+    turn: 50, stateChecksum: 'checksum-12345678'
+  };
+  const receiptSaved = await ctx.TM_SaveDB.saveTurnPublishReceipt(receiptMarker, 'world-committed');
+  const receiptRows = await ctx.TM_SaveDB.listTurnPublishReceipts('campaign-receipt', 'world-committed');
+  const receiptDeleted = await ctx.TM_SaveDB.deleteTurnPublishReceipt(receiptMarker);
+  check(receiptSaved === true && receiptRows.length === 1 && receiptRows[0].transactionId === receiptMarker.transactionId
+    && receiptDeleted === true && idb.stores.get('turnPublishReceipts').size === 0,
+  'turn bundle receipts use an independent lightweight store with explicit lifecycle');
+
   const marker = { transactionId: 'turn-marker-12345678', campaignId: 'campaign-1', turn: 50 };
   const markerState = { GM: { turn: 51, _pendingTurnDataPublish: marker }, P: {} };
   const markerIdb = makeIndexedDB({ saves: {
@@ -213,6 +286,17 @@ function makeContext(indexedDB, localStorage) {
   check(rejected && Object.entries(initial).every(([k, v]) => local.getItem(k) === v), 'localStorage failure restores all four prior values');
   check(local.getItem('tm_save_batch_journal_v1') === null, 'successful rollback removes the local batch journal');
 
+  const localReceipt = makeLocalStorage();
+  const localReceiptCtx = makeContext(null, localReceipt);
+  await localReceiptCtx.TM_SaveDB.open();
+  const localReceiptSaved = await localReceiptCtx.TM_SaveDB.saveManyAtomic([
+    { id: 'autosave', gameState: state, meta: { type: 'auto', turn: 50 } },
+    { id: 'slot_0', gameState: state, meta: { type: 'auto', turn: 50 } }
+  ], { turnPublishReceipt: batchReceiptMarker });
+  const localReceiptKey = Array.from(localReceipt.rows.keys()).find(key => key.indexOf('tm_idb_turnPublishReceipts_') === 0);
+  check(localReceiptSaved === true && !!localReceiptKey && localReceipt.getItem('tm_save_batch_journal_v1') === null,
+    'localStorage journal commits canonical worlds and the lightweight receipt as one recoverable batch');
+
   const localQuotaInitial = {
     [keys.auto]: JSON.stringify({ id: 'autosave', type: 'auto', name: 'old auto', timestamp: 20, turn: 49, gameState: JSON.stringify({ GM: { turn: 49 }, P: {} }) }),
     [keys.autoMeta]: JSON.stringify({ id: 'autosave', type: 'auto', name: 'old auto', turn: 49, timestamp: 20 }),
@@ -235,6 +319,16 @@ function makeContext(indexedDB, localStorage) {
   check(JSON.parse(JSON.parse(localQuota.getItem(keys.auto)).gameState).GM.turn === 50
     && JSON.parse(JSON.parse(localQuota.getItem(keys.slot)).gameState).GM.turn === 50,
   'localStorage quota recovery still advances both canonical slots together');
+
+  const localSingleQuota = makeLocalStorage(localQuotaInitial, keys.slotMeta, 'QuotaExceededError');
+  const localSingleQuotaCtx = makeContext(null, localSingleQuota);
+  await localSingleQuotaCtx.TM_SaveDB.open();
+  const localSingleSaved = await localSingleQuotaCtx.TM_SaveDB.save('slot_0', state, { type: 'auto', turn: 50 });
+  check(localSingleSaved === true
+    && localSingleQuota.getItem('tm_idb_saves_older_auto_1') === null
+    && JSON.parse(localSingleQuota.getItem(keys.auto)).gameState === JSON.parse(localQuotaInitial[keys.auto]).gameState
+    && JSON.parse(JSON.parse(localSingleQuota.getItem(keys.slot)).gameState).GM.turn === 50,
+  'localStorage single-slot quota recovery preserves canonical slots and removes only disposable autos');
 
   const preparedItems = Object.entries(initial).map(([key, previous]) => ({ key, previous }));
   const crashLocal = makeLocalStorage(Object.assign({}, initial, {

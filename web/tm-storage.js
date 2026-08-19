@@ -2,7 +2,7 @@
 /// <reference path="types.d.ts" />
 // ============================================================
 // IndexedDB 存储层 — 替代 localStorage 的 5MB 限制
-// 两个 store：saves（游戏存档）+ projects（剧本项目P）
+// 分层 store：大型存档、轻量元数据、剧本项目、年度编年与回合分卷 receipt
 // 带 localStorage 回退
 // ============================================================
 
@@ -52,15 +52,22 @@ var TM_SaveDB = (function() {
   'use strict';
 
   var DB_NAME = 'tianming_db'; // 统一数据库名
-  var DB_VERSION = 3; // v3: 存档 payload 与列表 metadata 分离
+  var DB_VERSION = 4; // v4: 年度编年与回合分卷 receipt 独立轻量持久化
   var SAVE_STORE = 'saves';
   var SAVE_META_STORE = 'saveMetadata';
   var PROJECT_STORE = 'projects';
+  var CHRONICLE_RECORD_STORE = 'chronicleRecords';
+  var TURN_PUBLISH_RECEIPT_STORE = 'turnPublishReceipts';
   var _db = null;
   var _available = false;
   var _openPromise = null; // 防止重复打开
   var _migrationTail = Promise.resolve(); // 两类旧源必须串行探测/占用目标 ID
   var LOCAL_SAVE_BATCH_JOURNAL = 'tm_save_batch_journal_v1';
+  var PROTECTED_SAVE_IDS = Object.freeze({
+    autosave: true,
+    slot_0: true,
+    pre_endturn: true
+  });
 
   function _restoreLocalSaveBatchItems(items) {
     items = Array.isArray(items) ? items : [];
@@ -121,6 +128,12 @@ var TM_SaveDB = (function() {
         }
         if (!db.objectStoreNames.contains(PROJECT_STORE)) {
           db.createObjectStore(PROJECT_STORE, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(CHRONICLE_RECORD_STORE)) {
+          db.createObjectStore(CHRONICLE_RECORD_STORE, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(TURN_PUBLISH_RECEIPT_STORE)) {
+          db.createObjectStore(TURN_PUBLISH_RECEIPT_STORE, { keyPath: 'id' });
         }
         // v2→v3 只在升级事务中遍历一次旧 payload，之后列表永远只读轻量 metadata。
         if (e.oldVersion > 0 && e.oldVersion < 3 && saveStore && metadataStore) {
@@ -191,11 +204,13 @@ var TM_SaveDB = (function() {
 
   function _dropOldestAutoSave(writeGuard, excludedIds) {
     if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
-    excludedIds = excludedIds || {};
+    var protectedIds = Object.create(null);
+    Object.keys(PROTECTED_SAVE_IDS).forEach(function(id) { protectedIds[id] = true; });
+    Object.keys(excludedIds || {}).forEach(function(id) { protectedIds[String(id)] = true; });
     return _listSaveMetadata().then(function(records) {
       // 列表读取本身是异步的；失效请求不得为了一个已取消的写入删除仍可恢复的旧 autosave。
       if (!_writeGuardAllows(writeGuard)) return false;
-      var autos = (records || []).filter(function(r){ return r.type === 'auto' && !excludedIds[String(r.id)]; })
+      var autos = (records || []).filter(function(r){ return r.type === 'auto' && !protectedIds[String(r.id)]; })
                                  .sort(function(a,b){ return (a.timestamp||0) - (b.timestamp||0); });
       if (autos.length === 0) return false; // 没 auto 可清
       var victim = autos[0];
@@ -223,6 +238,17 @@ var TM_SaveDB = (function() {
           if (previousMetadata == null) localStorage.removeItem(metadataKey);
           else localStorage.setItem(metadataKey, previousMetadata);
         } catch (_) {}
+        if (e && e.name === 'QuotaExceededError' && !_retryCount) {
+          var excludedLocal = Object.create(null);
+          excludedLocal[String(record.id)] = true;
+          if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
+          return _dropOldestAutoSave(writeGuard, excludedLocal).then(function(dropped) {
+            if (!_writeGuardAllows(writeGuard)) return false;
+            if (dropped) return _putSaveRecord(record, 1, writeGuard);
+            if (typeof window.toast === 'function') window.toast('❌ 存档空间满·请手动删除旧存档后重试');
+            return false;
+          });
+        }
         return Promise.reject(e);
       }
     }
@@ -240,7 +266,9 @@ var TM_SaveDB = (function() {
           var isQuota = err && err.name === 'QuotaExceededError';
           if (isQuota && !_retryCount) {
             if (!_writeGuardAllows(writeGuard)) { resolve(false); return; }
-            _dropOldestAutoSave(writeGuard).then(function(dropped) {
+            var excluded = Object.create(null);
+            excluded[String(record.id)] = true;
+            _dropOldestAutoSave(writeGuard, excluded).then(function(dropped) {
               if (!_writeGuardAllows(writeGuard)) { resolve(false); return; }
               if (dropped) _putSaveRecord(record, 1, writeGuard).then(resolve, reject);
               else {
@@ -258,7 +286,7 @@ var TM_SaveDB = (function() {
     });
   }
 
-  function _putSaveRecordsAtomic(records, writeGuard, _retryCount) {
+  function _putSaveRecordsAtomic(records, writeGuard, _retryCount, turnPublishReceipt) {
     records = Array.isArray(records) ? records : [];
     if (!records.length) return Promise.resolve(false);
     if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
@@ -270,6 +298,11 @@ var TM_SaveDB = (function() {
         items.push({ key: payloadKey, previous: localStorage.getItem(payloadKey) });
         items.push({ key: metadataKey, previous: localStorage.getItem(metadataKey) });
       });
+      var receiptKey = '';
+      if (turnPublishReceipt) {
+        receiptKey = 'tm_idb_' + TURN_PUBLISH_RECEIPT_STORE + '_' + turnPublishReceipt.id;
+        items.push({ key: receiptKey, previous: localStorage.getItem(receiptKey) });
+      }
       var journal = { version: 1, phase: 'prepared', createdAt: Date.now(), items: items };
       try {
         localStorage.setItem(LOCAL_SAVE_BATCH_JOURNAL, JSON.stringify(journal));
@@ -277,6 +310,7 @@ var TM_SaveDB = (function() {
           localStorage.setItem('tm_idb_' + SAVE_STORE + '_' + record.id, JSON.stringify(record));
           localStorage.setItem('tm_idb_' + SAVE_META_STORE + '_' + record.id, JSON.stringify(_toSaveMetadata(record)));
         });
+        if (turnPublishReceipt) localStorage.setItem(receiptKey, JSON.stringify(turnPublishReceipt));
         journal.phase = 'committed';
         localStorage.setItem(LOCAL_SAVE_BATCH_JOURNAL, JSON.stringify(journal));
         localStorage.removeItem(LOCAL_SAVE_BATCH_JOURNAL);
@@ -296,7 +330,7 @@ var TM_SaveDB = (function() {
           if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
           return _dropOldestAutoSave(writeGuard, excludedLocal).then(function(dropped) {
             if (!_writeGuardAllows(writeGuard)) return false;
-            if (dropped) return _putSaveRecordsAtomic(records, writeGuard, 1);
+            if (dropped) return _putSaveRecordsAtomic(records, writeGuard, 1, turnPublishReceipt);
             if (typeof window.toast === 'function') window.toast('❌ 存档空间满·请手动删除旧存档后重试');
             return false;
           });
@@ -307,7 +341,9 @@ var TM_SaveDB = (function() {
     return new Promise(function(resolve, reject) {
       try {
         if (!_writeGuardAllows(writeGuard)) { resolve(false); return; }
-        var tx = _db.transaction([SAVE_STORE, SAVE_META_STORE], 'readwrite');
+        var txStores = [SAVE_STORE, SAVE_META_STORE];
+        if (turnPublishReceipt) txStores.push(TURN_PUBLISH_RECEIPT_STORE);
+        var tx = _db.transaction(txStores, 'readwrite');
         var payloadStore = tx.objectStore(SAVE_STORE);
         var metadataStore = tx.objectStore(SAVE_META_STORE);
         var settled = false;
@@ -315,6 +351,7 @@ var TM_SaveDB = (function() {
           payloadStore.put(record);
           metadataStore.put(_toSaveMetadata(record));
         });
+        if (turnPublishReceipt) tx.objectStore(TURN_PUBLISH_RECEIPT_STORE).put(turnPublishReceipt);
         tx.oncomplete = function() { if (!settled) { settled = true; resolve(true); } };
         function fail(e) {
           if (settled) return;
@@ -327,7 +364,7 @@ var TM_SaveDB = (function() {
             console.warn('[SaveDB] canonical 批量存档配额已满·整批回滚后清理旧自动档并重试');
             _dropOldestAutoSave(writeGuard, excluded).then(function(dropped) {
               if (!_writeGuardAllows(writeGuard)) { resolve(false); return; }
-              if (dropped) _putSaveRecordsAtomic(records, writeGuard, 1).then(resolve, reject);
+              if (dropped) _putSaveRecordsAtomic(records, writeGuard, 1, turnPublishReceipt).then(resolve, reject);
               else {
                 if (typeof window.toast === 'function') window.toast('❌ 存档空间满·请手动删除旧存档后重试');
                 resolve(false);
@@ -355,6 +392,17 @@ var TM_SaveDB = (function() {
         return Promise.resolve(true);
       } catch(e) {
         console.error('[SaveDB] localStorage写入失败:', e.message);
+        if (e && e.name === 'QuotaExceededError' && storeName === SAVE_STORE && !_retryCount) {
+          var excludedLocal = Object.create(null);
+          excludedLocal[String(record.id)] = true;
+          if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
+          return _dropOldestAutoSave(writeGuard, excludedLocal).then(function(dropped) {
+            if (!_writeGuardAllows(writeGuard)) return false;
+            if (dropped) return _put(storeName, record, 1, writeGuard);
+            if (typeof window.toast === 'function') window.toast('❌ 存档空间满·请手动删除旧存档后重试');
+            return false;
+          });
+        }
         return Promise.reject(e);
       }
     }
@@ -372,7 +420,9 @@ var TM_SaveDB = (function() {
           if (isQuota && storeName === SAVE_STORE && !_retryCount) {
             if (!_writeGuardAllows(writeGuard)) { resolve(false); return; }
             console.warn('[SaveDB] 配额已满·尝试清最老自动存档后重试');
-            _dropOldestAutoSave(writeGuard).then(function(dropped) {
+            var excluded = Object.create(null);
+            excluded[String(record.id)] = true;
+            _dropOldestAutoSave(writeGuard, excluded).then(function(dropped) {
               if (!_writeGuardAllows(writeGuard)) { resolve(false); return; }
               if (dropped) {
                 // 重试（带 flag 防止无限递归）
@@ -463,7 +513,8 @@ var TM_SaveDB = (function() {
   }
 
   // ── 通用删除 ──
-  function _del(storeName, id) {
+  function _del(storeName, id, writeGuard) {
+    if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
     if (!_available || !_db) {
       try { localStorage.removeItem('tm_idb_' + storeName + '_' + id); } catch(e) { return Promise.reject(e); }
       return Promise.resolve(true);
@@ -634,6 +685,7 @@ var TM_SaveDB = (function() {
       catch (_) { return false; }
     }
     var frozen;
+    var frozenTurnPublishReceipt = null;
     try {
       var seenIds = Object.create(null);
       frozen = entries.map(function(entry) {
@@ -645,6 +697,9 @@ var TM_SaveDB = (function() {
         if (typeof json !== 'string') throw new Error('批量存档正文不可序列化：' + id);
         return { id: id, json: json, meta: Object.assign({}, entry.meta || {}) };
       });
+      if (options.turnPublishReceipt) {
+        frozenTurnPublishReceipt = _normalizeTurnPublishReceipt(options.turnPublishReceipt, 'world-committed');
+      }
     } catch (error) { return Promise.reject(error); }
     if (!_writeStillAllowed()) return Promise.resolve(false);
     return _ensureOpen().then(async function() {
@@ -671,11 +726,11 @@ var TM_SaveDB = (function() {
         });
       }
       if (!_writeStillAllowed()) return false;
-      return _putSaveRecordsAtomic(records, _writeStillAllowed);
+      return _putSaveRecordsAtomic(records, _writeStillAllowed, 0, frozenTurnPublishReceipt);
     });
   }
 
-  /** 分卷发布成功后，以同一批量事务清除 canonical 槽位中的 durable publish marker。 */
+  /** v4 以前的兼容迁移：清除烘在 canonical 槽位正文中的旧 publish marker。 */
   function clearPendingTurnDataPublishAtomic(ids, transactionId, options) {
     ids = Array.isArray(ids) ? ids.map(String) : [];
     transactionId = String(transactionId || '');
@@ -704,6 +759,110 @@ var TM_SaveDB = (function() {
       }
       if (!changed) return true;
       return saveManyAtomic(entries, { writeGuard: stillAllowed });
+    });
+  }
+
+  function _auxRecordId(prefix, campaignId, suffix) {
+    campaignId = String(campaignId || '');
+    suffix = String(suffix == null ? '' : suffix);
+    if (!campaignId || campaignId.length > 128 || !/^[A-Za-z0-9_-]+$/.test(campaignId)) {
+      throw new Error('轻量记录缺少合法 campaignId');
+    }
+    if (!suffix || suffix.length > 160) throw new Error('轻量记录缺少合法键');
+    return prefix + ':' + campaignId + ':' + suffix;
+  }
+
+  /** 年度正史独立 checkpoint；AI 成功结果不必等待下一次大型世界存档。 */
+  function saveChronicleRecord(input, options) {
+    input = input || {};
+    options = options || {};
+    var campaignId = String(input.campaignId || '');
+    var year = Number(input.year);
+    if (!Number.isSafeInteger(year)) return Promise.reject(new Error('年度正史缺少合法年份'));
+    var chronicle;
+    try { chronicle = JSON.parse(JSON.stringify(input.chronicle)); }
+    catch (error) { return Promise.reject(error); }
+    if (!chronicle || typeof chronicle !== 'object' || Array.isArray(chronicle)) {
+      return Promise.reject(new Error('年度正史内容不可持久化'));
+    }
+    var record;
+    try {
+      record = {
+        id: _auxRecordId('chronicle', campaignId, year),
+        campaignId: campaignId,
+        year: year,
+        requestId: String(input.requestId || ''),
+        loadGeneration: Number(input.loadGeneration) || 0,
+        generatedAt: Number(input.generatedAt) || Date.now(),
+        chronicle: chronicle
+      };
+    } catch (error) { return Promise.reject(error); }
+    return _ensureOpen().then(function() {
+      return _put(CHRONICLE_RECORD_STORE, record, 0, options.writeGuard);
+    });
+  }
+
+  function listChronicleRecords(campaignId) {
+    campaignId = String(campaignId || '');
+    if (!campaignId) return Promise.resolve([]);
+    return _ensureOpen().then(function() { return _listAll(CHRONICLE_RECORD_STORE); }).then(function(records) {
+      return (records || []).filter(function(record) { return record && String(record.campaignId || '') === campaignId; });
+    });
+  }
+
+  function _normalizeTurnPublishReceipt(marker, status) {
+    marker = marker || {};
+    var campaignId = String(marker.campaignId || '');
+    var transactionId = String(marker.transactionId || '');
+    var normalizedStatus = String(status || marker.status || 'world-committed');
+    if (['staged', 'world-committed', 'published'].indexOf(normalizedStatus) < 0) {
+      throw new Error('回合分卷 receipt 状态无效');
+    }
+    var record = {
+      id: _auxRecordId('turn-publish', campaignId, transactionId),
+      campaignId: campaignId,
+      transactionId: transactionId,
+      saveName: String(marker.saveName || ''),
+      turn: Number(marker.turn),
+      stateChecksum: String(marker.stateChecksum || ''),
+      status: normalizedStatus,
+      createdAt: Number(marker.createdAt) || Date.now(),
+      updatedAt: Date.now()
+    };
+    if (!Number.isSafeInteger(record.turn) || record.turn < 0) throw new Error('回合分卷 receipt 回合号无效');
+    if (!record.stateChecksum || record.stateChecksum.length > 128) throw new Error('回合分卷 receipt checksum 无效');
+    return record;
+  }
+
+  function saveTurnPublishReceipt(marker, status, options) {
+    options = options || {};
+    var record;
+    try { record = _normalizeTurnPublishReceipt(marker, status); }
+    catch (error) { return Promise.reject(error); }
+    return _ensureOpen().then(function() {
+      return _put(TURN_PUBLISH_RECEIPT_STORE, record, 0, options.writeGuard);
+    });
+  }
+
+  function listTurnPublishReceipts(campaignId, status) {
+    campaignId = String(campaignId || '');
+    status = status == null ? '' : String(status);
+    if (!campaignId) return Promise.resolve([]);
+    return _ensureOpen().then(function() { return _listAll(TURN_PUBLISH_RECEIPT_STORE); }).then(function(records) {
+      return (records || []).filter(function(record) {
+        return record && String(record.campaignId || '') === campaignId && (!status || String(record.status || '') === status);
+      });
+    });
+  }
+
+  function deleteTurnPublishReceipt(marker, options) {
+    marker = marker || {};
+    options = options || {};
+    var id;
+    try { id = _auxRecordId('turn-publish', marker.campaignId, marker.transactionId); }
+    catch (error) { return Promise.reject(error); }
+    return _ensureOpen().then(function() {
+      return _del(TURN_PUBLISH_RECEIPT_STORE, String(id), options.writeGuard);
     });
   }
 
@@ -991,6 +1150,11 @@ var TM_SaveDB = (function() {
     save: save,
     saveManyAtomic: saveManyAtomic,
     clearPendingTurnDataPublishAtomic: clearPendingTurnDataPublishAtomic,
+    saveChronicleRecord: saveChronicleRecord,
+    listChronicleRecords: listChronicleRecords,
+    saveTurnPublishReceipt: saveTurnPublishReceipt,
+    listTurnPublishReceipts: listTurnPublishReceipts,
+    deleteTurnPublishReceipt: deleteTurnPublishReceipt,
     load: load,
     list: list,
     delete: deleteSave,

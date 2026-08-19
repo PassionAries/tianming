@@ -144,7 +144,9 @@ function makeLocalStorage() {
   context.SaveCompression.compress = (text) => Promise.resolve(text);
 
   await context.TM_SaveDB.open();
-  check(indexedDB.counters.openedVersion === 3, 'storage schema must open IndexedDB version 3');
+  check(indexedDB.counters.openedVersion === 4, 'storage schema must open IndexedDB version 4');
+  check(indexedDB.stores.has('chronicleRecords') && indexedDB.stores.has('turnPublishReceipts'),
+    'v4 upgrade creates lightweight chronicle and turn receipt stores');
 
   const payload = 'x'.repeat(64 * 1024);
   await Promise.all(Array.from({ length: 100 }, (_, index) => context.TM_SaveDB.save(

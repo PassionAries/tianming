@@ -78,6 +78,34 @@ function _chronicleRequestId() {
   return 'chronicle-' + Date.now() + '-' + ChronicleSystem._requestSeq;
 }
 
+function _chronicleTrimYears(state, targetP) {
+  if (!state || !state.yearChronicles) return;
+  var keepYears = Number(targetP && targetP.conf && targetP.conf.chronicleKeep);
+  if (!isFinite(keepYears) || keepYears <= 0) keepYears = 10;
+  var maxYears = Math.max(1, Math.floor(keepYears)) * 2;
+  var yearKeys = Object.keys(state.yearChronicles).map(Number).filter(function(year) {
+    return Number.isSafeInteger(year);
+  }).sort(function(a, b) { return a - b; });
+  if (yearKeys.length <= maxYears) return;
+  yearKeys.slice(0, yearKeys.length - maxYears).forEach(function(year) {
+    delete state.yearChronicles[year];
+  });
+}
+
+function _chronicleWaitForWorldCommit(targetGM, leaseIsCurrent) {
+  if (!targetGM || !targetGM._endTurnCommitPending) return Promise.resolve(true);
+  var startedAt = Date.now();
+  return new Promise(function(resolve) {
+    function poll() {
+      if (!leaseIsCurrent()) { resolve(false); return; }
+      if (!targetGM._endTurnCommitPending) { resolve(true); return; }
+      if (Date.now() - startedAt > 90000) { resolve(false); return; }
+      setTimeout(poll, 25);
+    }
+    poll();
+  });
+}
+
 var ChronicleSystem = {
   _inFlight: [],
   _requestSeq: 0,
@@ -209,8 +237,9 @@ var ChronicleSystem = {
     // 6.1联动：注入该年回收的伏笔因果链
     if (targetGM._foreshadowings) {
       var _yearResolved = targetGM._foreshadowings.filter(function(f) {
-        return f.resolved && f.resolveTurn && (typeof calcDateFromTurn === 'function') &&
-          calcDateFromTurn(f.resolveTurn) && calcDateFromTurn(f.resolveTurn).adYear === year;
+        if (!(f && f.resolved && f.resolveTurn)) return false;
+        var resolvedDate = _chronicleDateForTurn(f.resolveTurn);
+        return resolvedDate && resolvedDate.year === year;
       });
       if (_yearResolved.length > 0) {
         prompt += '\n\u672C\u5E74\u56DE\u6536\u7684\u4F0F\u7B14\u56E0\u679C\u94FE\uFF08\u7F16\u5E74\u4E2D\u5E94\u81EA\u7136\u5448\u73B0\u8FD9\u4E9B\u524D\u56E0\u540E\u679C\uFF09\uFF1A\n';
@@ -221,15 +250,26 @@ var ChronicleSystem = {
     }
     // 6.5联动：注入每回合一句话摘要
     if (targetGM._yearlyDigest && targetGM._yearlyDigest.length > 0) {
-      prompt += '\n\u672C\u5E74\u5404\u56DE\u5408\u4E00\u53E5\u8BDD\u6458\u8981\uFF1A\n';
-      targetGM._yearlyDigest.forEach(function(d) { prompt += 'T' + d.turn + ': ' + d.summary + '\n'; });
+      var yearDigests = targetGM._yearlyDigest.filter(function(d) {
+        if (!d) return false;
+        var digestYear = (d.year != null && d.year !== '') ? Number(d.year) : NaN;
+        if (!Number.isSafeInteger(digestYear)) {
+          var digestDate = _chronicleDateForTurn(d.turn);
+          digestYear = digestDate && digestDate.year;
+        }
+        return digestYear === year;
+      });
+      if (yearDigests.length > 0) {
+        prompt += '\n\u672C\u5E74\u5404\u56DE\u5408\u4E00\u53E5\u8BDD\u6458\u8981\uFF1A\n';
+        yearDigests.forEach(function(d) { prompt += 'T' + d.turn + ': ' + d.summary + '\n'; });
+      }
     }
     // 6.7联动：本年度下达诏令+其后续影响（colorEdicts + _chainEffects）
     if (targetGM._edictTracker && targetGM._edictTracker.length > 0) {
       var _yearEdicts = targetGM._edictTracker.filter(function(e) {
         if (!e || !e.turn) return false;
-        var _d = (typeof calcDateFromTurn === 'function') ? calcDateFromTurn(e.turn) : null;
-        return _d && _d.adYear === year;
+        var _d = _chronicleDateForTurn(e.turn);
+        return _d && _d.year === year;
       });
       if (_yearEdicts.length > 0) {
         prompt += '\n\u3010\u672C\u5E74\u9881\u4E0B\u8BCF\u4EE4\u00B7\u7F16\u5E74\u4E2D\u5FC5\u987B\u8BB0\u5176\u9881\u5E03\u00B7\u6267\u884C\u00B7\u4F59\u6CE2\u3011\n';
@@ -277,27 +317,42 @@ var ChronicleSystem = {
       if (!leaseIsCurrent()) return { ok: false, stale: true };
       var parsed = extractJSON(result);
       if (parsed) {
-        targetState.yearChronicles[year] = {
-          content: parsed.chronicle || result,
-          afterword: parsed.afterword || '',
+        var chronicleText = (parsed && typeof parsed === 'object') ? parsed.chronicle : '';
+        if (typeof chronicleText !== 'string' || !chronicleText.trim()) {
+          chronicleText = typeof result === 'string' ? result : '';
+        }
+        if (!chronicleText.trim()) return { ok: false, reason: 'invalid-result' };
+        var afterwordText = (parsed && typeof parsed === 'object' && typeof parsed.afterword === 'string') ? parsed.afterword : '';
+        var chronicleEntry = {
+          content: chronicleText.slice(0, 20000),
+          afterword: afterwordText.slice(0, 5000),
           read: false,
           generatedAt: Date.now(),
           authorityLevel: 'official_record',
           confidence: 0.8
         };
-
-        // 限制年度正史数量
-        var yearKeys = Object.keys(targetState.yearChronicles);
-        var maxYears = ((targetP.conf && targetP.conf.chronicleKeep) || 10) * 2;
-        if (yearKeys.length > maxYears) {
-          yearKeys.sort(function(a,b){return a-b;});
-          var removeYears = yearKeys.slice(0, yearKeys.length - maxYears);
-          removeYears.forEach(function(k) { delete targetState.yearChronicles[k]; });
-        }
-
-        _dbg('[Chronicle] 年度正史生成完成:', year);
-        if (typeof addEB === 'function') addEB('正史', year + '年编年史已完成');
-        return { ok: true, year: year };
+        return _chronicleWaitForWorldCommit(targetGM, leaseIsCurrent).then(function(worldCommitted) {
+          if (!worldCommitted || !leaseIsCurrent()) return { ok: false, stale: true };
+          if (!(typeof TM_SaveDB !== 'undefined' && TM_SaveDB && typeof TM_SaveDB.saveChronicleRecord === 'function')) {
+            throw new Error('年度正史轻量持久化接口缺失');
+          }
+          return TM_SaveDB.saveChronicleRecord({
+            campaignId: lease.campaignId,
+            year: year,
+            requestId: lease.requestId,
+            loadGeneration: lease.loadGen,
+            generatedAt: chronicleEntry.generatedAt,
+            chronicle: chronicleEntry
+          }, { writeGuard: leaseIsCurrent }).then(function(saved) {
+            if (saved !== true) throw new Error('年度正史轻量 checkpoint 未提交');
+            if (!leaseIsCurrent()) return { ok: false, stale: true };
+            targetState.yearChronicles[year] = chronicleEntry;
+            _chronicleTrimYears(targetState, targetP);
+            _dbg('[Chronicle] 年度正史生成完成:', year);
+            if (typeof addEB === 'function') addEB('正史', year + '年编年史已完成');
+            return { ok: true, year: year, durable: true };
+          });
+        });
       }
       return { ok: false, reason: 'invalid-result' };
     }).catch(function(e) {
@@ -318,7 +373,53 @@ var ChronicleSystem = {
 
   /** 获取所有已生成年份 */
   getAvailableYears: function() {
-    return Object.keys(ChronicleSystem.yearChronicles).map(Number).sort();
+    return Object.keys(ChronicleSystem.yearChronicles).map(Number).filter(function(year) {
+      return Number.isSafeInteger(year);
+    }).sort(function(a, b) { return a - b; });
+  },
+
+  /** 从独立轻量 store 合并当前战役已完成的年度正史。 */
+  hydrateDurableRecords: function(targetGM, targetP) {
+    targetGM = targetGM || ((typeof GM !== 'undefined' && GM) ? GM : null);
+    targetP = targetP || ((typeof P !== 'undefined' && P) ? P : null);
+    if (!targetGM || !targetP) return Promise.resolve({ ok: false, reason: 'missing-world' });
+    if (!(typeof TM_SaveDB !== 'undefined' && TM_SaveDB && typeof TM_SaveDB.listChronicleRecords === 'function')) {
+      return Promise.resolve({ ok: false, reason: 'storage-unavailable' });
+    }
+    var targetState = _chronicleState(targetGM, true);
+    var campaignId = String(targetGM._campaignId || '');
+    var loadGen = (typeof window !== 'undefined' && window._tmLoadGen) || 0;
+    function leaseIsCurrent() {
+      return typeof GM !== 'undefined' && typeof P !== 'undefined' &&
+        GM === targetGM && P === targetP &&
+        (((typeof window !== 'undefined' && window._tmLoadGen) || 0) === loadGen) &&
+        String((GM && GM._campaignId) || '') === campaignId &&
+        _chronicleState(targetGM, false) === targetState;
+    }
+    return TM_SaveDB.listChronicleRecords(campaignId).then(function(records) {
+      if (!leaseIsCurrent()) return { ok: false, stale: true };
+      var merged = 0;
+      (records || []).sort(function(a, b) { return Number(a && a.generatedAt || 0) - Number(b && b.generatedAt || 0); }).forEach(function(record) {
+        if (!record || String(record.campaignId || '') !== campaignId) return;
+        var year = Number(record.year);
+        var incoming = record.chronicle;
+        if (!Number.isSafeInteger(year) || !incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return;
+        if (typeof incoming.content !== 'string' || !incoming.content) return;
+        var current = targetState.yearChronicles[year];
+        if (current && Number(current.generatedAt || 0) >= Number(record.generatedAt || incoming.generatedAt || 0)) return;
+        var cloned = null;
+        try { cloned = JSON.parse(JSON.stringify(incoming)); } catch (_) { cloned = null; }
+        if (!cloned) return;
+        if (current && current.read === true) cloned.read = true;
+        targetState.yearChronicles[year] = cloned;
+        merged++;
+      });
+      _chronicleTrimYears(targetState, targetP);
+      if (merged && leaseIsCurrent() && typeof renderBiannian === 'function') {
+        try { renderBiannian(); } catch (_) {}
+      }
+      return { ok: true, merged: merged };
+    });
   },
 
   /** 标记已读 */

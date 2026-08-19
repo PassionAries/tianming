@@ -866,26 +866,52 @@ var PREF_CONF_KEYS = [
 ];
 
 function _recoverPendingTurnDataPublish() {
-  if (!(GM && GM._pendingTurnDataPublish && window.tianming && typeof window.tianming.recoverTurnData === 'function')) return;
+  if (!(GM && window.tianming && typeof window.tianming.recoverTurnData === 'function')) return;
   var targetGM = GM;
   var targetP = P;
   var targetLoadGen = (typeof window !== 'undefined' && window._tmLoadGen) || 0;
-  var marker = deepClone(GM._pendingTurnDataPublish);
-  function recoveryLeaseCurrent() {
+  var campaignId = String((GM && GM._campaignId) || '');
+  function baseRecoveryLeaseCurrent() {
     return GM === targetGM && P === targetP &&
       (((typeof window !== 'undefined' && window._tmLoadGen) || 0) === targetLoadGen) &&
-      String((GM && GM._campaignId) || '') === String(marker.campaignId || '') &&
-      !!GM._pendingTurnDataPublish && GM._pendingTurnDataPublish.transactionId === marker.transactionId;
+      String((GM && GM._campaignId) || '') === campaignId;
   }
-  window.tianming.recoverTurnData(marker).then(async function(result) {
-    if (!recoveryLeaseCurrent()) return;
-    if (!(result && result.success === true)) throw new Error(result && result.error || '回合分卷恢复失败');
-    if (!(typeof TM_SaveDB !== 'undefined' && typeof TM_SaveDB.clearPendingTurnDataPublishAtomic === 'function')) {
-      throw new Error('回合分卷恢复标记 checkpoint 接口缺失');
+
+  Promise.resolve().then(async function() {
+    // v4 以前的存档把 marker 烘进两个大世界正文；仅在兼容迁移时做一次全量清理。
+    if (targetGM._pendingTurnDataPublish) {
+      var legacyMarker = deepClone(targetGM._pendingTurnDataPublish);
+      function legacyLeaseCurrent() {
+        return baseRecoveryLeaseCurrent() && !!targetGM._pendingTurnDataPublish &&
+          targetGM._pendingTurnDataPublish.transactionId === legacyMarker.transactionId;
+      }
+      var legacyResult = await window.tianming.recoverTurnData(legacyMarker);
+      if (!legacyLeaseCurrent()) return;
+      if (!(legacyResult && legacyResult.success === true)) throw new Error(legacyResult && legacyResult.error || '旧回合分卷恢复失败');
+      if (!(typeof TM_SaveDB !== 'undefined' && typeof TM_SaveDB.clearPendingTurnDataPublishAtomic === 'function')) {
+        throw new Error('旧回合分卷 marker 迁移接口缺失');
+      }
+      var legacyCleared = await TM_SaveDB.clearPendingTurnDataPublishAtomic(['autosave', 'slot_0'], legacyMarker.transactionId, { writeGuard: legacyLeaseCurrent });
+      if (legacyCleared !== true || !legacyLeaseCurrent()) throw new Error('旧回合分卷已恢复，但 canonical marker 清理失败');
+      delete targetGM._pendingTurnDataPublish;
     }
-    var cleared = await TM_SaveDB.clearPendingTurnDataPublishAtomic(['autosave', 'slot_0'], marker.transactionId, { writeGuard: recoveryLeaseCurrent });
-    if (cleared !== true || !recoveryLeaseCurrent()) throw new Error('回合分卷已恢复，但 canonical 标记清理失败');
-    delete GM._pendingTurnDataPublish;
+
+    if (!baseRecoveryLeaseCurrent()) return;
+    if (!(typeof TM_SaveDB !== 'undefined' && TM_SaveDB &&
+      typeof TM_SaveDB.listTurnPublishReceipts === 'function' && typeof TM_SaveDB.deleteTurnPublishReceipt === 'function')) return;
+    var receipts = await TM_SaveDB.listTurnPublishReceipts(campaignId, 'world-committed');
+    receipts = (receipts || []).slice().sort(function(a, b) {
+      return Number(a && a.turn || 0) - Number(b && b.turn || 0) || Number(a && a.createdAt || 0) - Number(b && b.createdAt || 0);
+    });
+    for (var i = 0; i < receipts.length; i++) {
+      if (!baseRecoveryLeaseCurrent()) return;
+      var marker = receipts[i];
+      var result = await window.tianming.recoverTurnData(marker);
+      if (!baseRecoveryLeaseCurrent()) return;
+      if (!(result && result.success === true)) throw new Error(result && result.error || '回合分卷恢复失败');
+      var deleted = await TM_SaveDB.deleteTurnPublishReceipt(marker, { writeGuard: baseRecoveryLeaseCurrent });
+      if (deleted !== true || !baseRecoveryLeaseCurrent()) throw new Error('回合分卷已恢复，但 receipt 清理失败');
+    }
   }).catch(function(error) {
     if (GM !== targetGM) return;
     try { if (window.TM && TM.errors && TM.errors.capture) TM.errors.capture(error, 'fullLoadGame] recover turn-data'); } catch (_) {}
@@ -968,7 +994,14 @@ function fullLoadGame(data, loadOptions){
       GM._chronicle = [];
     }
     // 每次读档都绑定（包括没有旧字段的空档），避免沿用上一战役的进程级单例残留。
-    if(typeof ChronicleSystem !== 'undefined') ChronicleSystem.deserialize(GM._chronicleSysState || null, GM);
+    if(typeof ChronicleSystem !== 'undefined') {
+      ChronicleSystem.deserialize(GM._chronicleSysState || null, GM);
+      if (typeof ChronicleSystem.hydrateDurableRecords === 'function') {
+        ChronicleSystem.hydrateDurableRecords(GM, P).catch(function(error) {
+          try { if (window.TM && TM.errors && TM.errors.captureSilent) TM.errors.captureSilent(error, 'fullLoadGame·chronicle hydrate'); } catch (_) {}
+        });
+      }
+    }
     if(GM._warTruces && typeof WarWeightSystem !== 'undefined') WarWeightSystem.deserialize(GM._warTruces);
 
     // 恢复所有_saved*字段

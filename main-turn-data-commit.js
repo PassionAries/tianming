@@ -2,8 +2,8 @@
 
 // Desktop turn bundles use a two-phase protocol:
 //   renderer finalizes records -> stage files -> canonical saves commit -> publish directory.
-// A committed save keeps the transaction descriptor, so an interrupted publish is idempotently
-// recoverable on the next load without exposing an uncommitted turn directory.
+// The canonical save transaction commits a lightweight receipt alongside the world payload, so an
+// interrupted publish is idempotently recoverable on the next load without rewriting either save.
 function createTurnDataCommitter(deps) {
   const fs = deps.fs;
   const path = deps.path;

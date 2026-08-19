@@ -102,9 +102,13 @@ ok(/auto-save-session-rotate/.test(mainImpl) && /autoSaveSessionMatches\(request
 ok(/rotateAutoSaveSession/.test(preloadImpl) && /_tmRotateDesktopAutoSaveSession\('full-load'/.test(lifecycle)
   && /_tmRotateDesktopAutoSaveSession\('new-game'/.test(startPatch), 'preload + 读档 + 新局共同切换 auto-save session');
 ok(/stageTurnData\([\s\S]*?result\.success === true[\s\S]*?回合分卷暂存失败/.test(render)
-  && /_tmCommitEndTurnTransaction[\s\S]*?await _endTurn_publishStagedTurnData/.test(core), '回合分卷先暂存并仅在世界 commit 后发布');
-ok(/function _recoverPendingTurnDataPublish\(\)[\s\S]*?function recoveryLeaseCurrent\(\)[\s\S]*?_tmLoadGen[\s\S]*?transactionId === marker\.transactionId[\s\S]*?recoverTurnData\(marker\)[\s\S]*?clearPendingTurnDataPublishAtomic\(\['autosave', 'slot_0'\][\s\S]*?delete GM\._pendingTurnDataPublish/.test(lifecycle),
-  '读档按世界身份和 transactionId 租约补发，并在双槽 checkpoint 后清除 durable marker');
+  && /turnPublishReceipt:\s*ctx\.meta\.stagedTurnData/.test(render)
+  && /_tmCommitEndTurnTransaction[\s\S]*?await _endTurn_publishStagedTurnData/.test(core), '回合分卷先暂存·receipt 与世界同事务提交·仅在 commit 后发布');
+ok(/function _recoverPendingTurnDataPublish\(\)[\s\S]*?baseRecoveryLeaseCurrent[\s\S]*?listTurnPublishReceipts\(campaignId, 'world-committed'\)[\s\S]*?recoverTurnData\(marker\)[\s\S]*?deleteTurnPublishReceipt\(marker/.test(lifecycle),
+  '读档按世界身份租约补发独立 receipt，并只删除轻量事务记录');
+ok(/function _endTurn_publishStagedTurnData\([\s\S]*?deleteTurnPublishReceipt\(marker[\s\S]*?ctx\.meta\.stagedTurnData = null/.test(render)
+  && !/function _endTurn_publishStagedTurnData\([\s\S]*?clearPendingTurnDataPublishAtomic/.test(render),
+  '正常分卷发布不再解压、重压并重写两个 canonical 世界');
 {
   const finalizerFn = sliceFn(render, 'function _endTurn_finalizeRecords(');
   const uiRenderFn = sliceFn(render, 'function _endTurn_render(');
@@ -201,6 +205,76 @@ async function runDynamicLeaseSmokes() {
     ok(saved === true && order.indexOf('phase5') < order.indexOf('snapshot:after') && writes.length === 2 && writes.every(w => w[1] === 'after'), '真实 save helper 只快照 Phase5 后状态并同时写 autosave/slot_0');
   }
   {
+    let staged = 0, published = 0, deleted = 0, capturedOptions = null;
+    const ctx = {
+      GM: { turn: 50, sid: 's1', saveName: 'desktop-save', _campaignId: 'campaign-receipt', eraName: '某年号' }, P: {},
+      window: {
+        _tmLoadGen: 2,
+        _tmActivePreEndturnSnapshotId: 'pre-50',
+        TM: { errors: { capture() {}, captureSilent() {} } },
+        tianming: {
+          isDesktop: true,
+          async stageTurnData() { staged++; return { success: true }; },
+          async publishTurnData() { published++; return { success: true }; }
+        }
+      },
+      TM: { errors: { capture() {}, captureSilent() {} } }, console, Promise, Date, JSON, Math, Error, setTimeout,
+      deepClone: value => JSON.parse(JSON.stringify(value)),
+      localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+      _awaitPostTurnJobsForSave: async () => {}, _prepareGMForSave() {},
+      _buildSaveState: opts => ({ GM: JSON.parse(JSON.stringify(opts.gm)), P: opts.p }),
+      findScenarioById: () => ({ name: '测试剧本' }), getTSText: () => '某日',
+      TM_SaveDB: {
+        async saveManyAtomic(entries, options) { capturedOptions = options; return entries.length === 2; },
+        async deleteTurnPublishReceipt() { deleted++; return true; }
+      }
+    };
+    ctx.window.window = ctx.window;
+    vm.createContext(ctx); vm.runInContext(render, ctx);
+    const saveCtx = { meta: { transactionId: 'turn-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', turnPresentation: { turnData: { context: { turn: 49 } } } } };
+    const saved = await ctx._endTurn_saveSnapshot(saveCtx);
+    const publishedOk = await ctx._endTurn_publishStagedTurnData(saveCtx);
+    ok(saved === true && publishedOk === true && staged === 1 && published === 1 && deleted === 1
+      && capturedOptions.turnPublishReceipt.transactionId === 'turn-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+      && !ctx.GM._pendingTurnDataPublish,
+    'desktop receipt commits with canonical worlds and publish cleanup never mutates the world payload');
+  }
+  {
+    const receipt = {
+      id: 'turn-publish:campaign-recover:turn-recover-1', campaignId: 'campaign-recover',
+      transactionId: 'turn-recover-1', saveName: '测试档', turn: 50,
+      stateChecksum: 'checksum-recover-1', status: 'world-committed'
+    };
+    let recovered = 0, deleted = 0;
+    const ctx = {
+      GM: { _campaignId: 'campaign-recover' }, P: { id: 'p-recover' },
+      window: {
+        _tmLoadGen: 4,
+        tianming: { async recoverTurnData(marker) { recovered++; return { success: marker.transactionId === receipt.transactionId }; } },
+        TM: { errors: { capture() {} } }
+      },
+      TM: { errors: { capture() {} } }, Promise, JSON, Error, console,
+      deepClone: value => JSON.parse(JSON.stringify(value)),
+      TM_SaveDB: {
+        async listTurnPublishReceipts(campaignId, status) {
+          return campaignId === receipt.campaignId && status === 'world-committed' ? [receipt] : [];
+        },
+        async deleteTurnPublishReceipt(marker, options) {
+          if (options.writeGuard() !== true) return false;
+          deleted++;
+          return marker.transactionId === receipt.transactionId;
+        }
+      },
+      toast() {}
+    };
+    ctx.window.window = ctx.window;
+    vm.createContext(ctx); vm.runInContext(sliceFn(lifecycle, 'function _recoverPendingTurnDataPublish('), ctx);
+    ctx._recoverPendingTurnDataPublish();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    ok(recovered === 1 && deleted === 1 && !ctx.GM._pendingTurnDataPublish,
+      'load recovery publishes and removes an independent receipt without touching the canonical world');
+  }
+  {
     let staged = 0, discarded = 0;
     const ctx = {
       GM: { turn: 50, sid: 's1', saveName: 'desktop-save', _campaignId: 'campaign-a', eraName: '某年号' }, P: {},
@@ -228,6 +302,42 @@ async function runDynamicLeaseSmokes() {
     const saved = await ctx._endTurn_saveSnapshot(saveCtx);
     ok(saved === false && staged === 1 && discarded === 1 && !ctx.GM._pendingTurnDataPublish,
       'canonical batch failure discards desktop staging and leaves no formal publish marker');
+  }
+  {
+    let staged = 0, discarded = 0, committedReceipt = null;
+    const ctx = {
+      GM: { turn: 50, sid: 's1', saveName: 'desktop-save', _campaignId: 'campaign-cross-load', eraName: '某年号' }, P: {},
+      window: {
+        _tmLoadGen: 2,
+        _tmActivePreEndturnSnapshotId: 'pre-50',
+        TM: { errors: { capture() {}, captureSilent() {} } },
+        tianming: {
+          isDesktop: true,
+          async stageTurnData() { staged++; return { success: true }; },
+          async discardTurnData() { discarded++; return { success: true }; }
+        }
+      },
+      TM: { errors: { capture() {}, captureSilent() {} } }, console, Promise, Date, JSON, Math, Error, setTimeout,
+      deepClone: value => JSON.parse(JSON.stringify(value)),
+      localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+      _awaitPostTurnJobsForSave: async () => {}, _prepareGMForSave() {},
+      _buildSaveState: opts => ({ GM: JSON.parse(JSON.stringify(opts.gm)), P: opts.p }),
+      findScenarioById: () => ({ name: '测试剧本' }), getTSText: () => '某日',
+      TM_SaveDB: {
+        async saveManyAtomic(entries, options) {
+          committedReceipt = options.turnPublishReceipt;
+          ctx.window._tmLoadGen++;
+          return entries.length === 2;
+        },
+        async deleteTurnPublishReceipt() { throw new Error('committed receipt must remain'); }
+      }
+    };
+    ctx.window.window = ctx.window;
+    vm.createContext(ctx); vm.runInContext(render, ctx);
+    const saveCtx = { meta: { transactionId: 'turn-cross-load-12345678', turnPresentation: { turnData: { context: { turn: 49 } } } } };
+    const saved = await ctx._endTurn_saveSnapshot(saveCtx);
+    ok(saved === false && staged === 1 && discarded === 0 && committedReceipt.transactionId === 'turn-cross-load-12345678',
+      'a post-commit load switch preserves staging and its durable receipt for the original campaign');
   }
   {
     let src = storage;

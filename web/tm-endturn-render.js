@@ -72,8 +72,6 @@ async function _endTurn_stageTurnData(ctx, snapshot) {
   var result = await window.tianming.stageTurnData(Object.assign({ data: presentation.turnData }, marker));
   if (!(result && result.success === true)) throw new Error('回合分卷暂存失败' + (result && result.error ? '：' + result.error : ''));
   ctx.meta.stagedTurnData = marker;
-  GM._pendingTurnDataPublish = deepClone(marker); // arch-ok: end-turn commit coordinator owns durable desktop publish marker
-  snapshot.GM._pendingTurnDataPublish = deepClone(marker);
   return true;
 }
 
@@ -83,7 +81,9 @@ async function _endTurn_discardStagedTurnData(ctx) {
   try {
     if (window.tianming && typeof window.tianming.discardTurnData === 'function') await window.tianming.discardTurnData(marker);
   } finally {
-    if (GM && GM._pendingTurnDataPublish && GM._pendingTurnDataPublish.transactionId === marker.transactionId) delete GM._pendingTurnDataPublish; // arch-ok: discard owns its staged marker cleanup
+    if (typeof TM_SaveDB !== 'undefined' && TM_SaveDB && typeof TM_SaveDB.deleteTurnPublishReceipt === 'function') {
+      try { await TM_SaveDB.deleteTurnPublishReceipt(marker); } catch (_) {}
+    }
     ctx.meta.stagedTurnData = null;
   }
   return true;
@@ -104,15 +104,12 @@ async function _endTurn_publishStagedTurnData(ctx) {
   var result = await window.tianming.publishTurnData(marker);
   if (!(result && result.success === true)) throw new Error('回合分卷发布失败' + (result && result.error ? '：' + result.error : ''));
   if (!publishLeaseCurrent()) throw new Error('回合分卷发布完成时世界身份已变化');
-  if (targetGM._pendingTurnDataPublish && targetGM._pendingTurnDataPublish.transactionId === marker.transactionId) delete targetGM._pendingTurnDataPublish; // arch-ok: publish owns its committed marker cleanup
-  if (!(typeof TM_SaveDB !== 'undefined' && typeof TM_SaveDB.clearPendingTurnDataPublishAtomic === 'function')) {
-    targetGM._pendingTurnDataPublish = deepClone(marker); // arch-ok: keep recoverable receipt when durable checkpoint is unavailable
-    throw new Error('回合分卷发布标记 checkpoint 接口缺失');
+  if (!(typeof TM_SaveDB !== 'undefined' && TM_SaveDB && typeof TM_SaveDB.deleteTurnPublishReceipt === 'function')) {
+    throw new Error('回合分卷 receipt 清理接口缺失');
   }
-  var cleared = await TM_SaveDB.clearPendingTurnDataPublishAtomic(['autosave', 'slot_0'], marker.transactionId, { writeGuard: publishLeaseCurrent });
+  var cleared = await TM_SaveDB.deleteTurnPublishReceipt(marker, { writeGuard: publishLeaseCurrent });
   if (cleared !== true) {
-    if (publishLeaseCurrent()) targetGM._pendingTurnDataPublish = deepClone(marker); // arch-ok: failed checkpoint remains idempotently recoverable
-    throw new Error('回合分卷已发布，但 canonical 标记清理失败');
+    throw new Error('回合分卷已发布，但 receipt 清理失败');
   }
   ctx.meta.stagedTurnData = null;
   return true;
@@ -138,6 +135,7 @@ function _endTurn_saveSnapshot(ctx) {
       && (!_livePreId || _livePreId === _endturnSavePreId);
   };
   return (async function() {
+    var _canonicalCommitted = false;
     try {
       if (typeof _awaitPostTurnJobsForSave === 'function') {
         await _awaitPostTurnJobsForSave(typeof _postTurnSaveRequiredIds === 'function' ? _postTurnSaveRequiredIds() : ['sc25', 'sc25c']);
@@ -156,12 +154,17 @@ function _endTurn_saveSnapshot(ctx) {
         type: 'auto', turn: _endturnSaveTurn,
         scenarioName: _sc3 ? _sc3.name : '', eraName: _endturnSaveGM.eraName || ''
       };
-      var _autoWriteOptions = { writeGuard: _endturnSaveStillCurrent };
+      var _autoWriteOptions = {
+        writeGuard: _endturnSaveStillCurrent,
+        turnPublishReceipt: ctx.meta.stagedTurnData || null
+      };
       var _writeOk = await TM_SaveDB.saveManyAtomic([
         { id: 'autosave', gameState: _autoState, meta: _autoMeta },
         { id: 'slot_0', gameState: _autoState, meta: _autoMeta }
       ], _autoWriteOptions);
-      if (_writeOk !== true || !_endturnSaveStillCurrent()) throw new Error('canonical 回合存档未原子落库');
+      if (_writeOk !== true) throw new Error('canonical 回合存档未原子落库');
+      _canonicalCommitted = true;
+      if (!_endturnSaveStillCurrent()) throw new Error('canonical 回合存档完成时世界身份已变化');
       // 两个 canonical 槽位都提交后，才清恢复点并发布“已安全保存”标志。
       try { _clearPreEndturnMarkerAfterSave(_endturnSavePreId); } catch (_) {}
       try { if (typeof _updateSaveIndex === 'function') _updateSaveIndex(0, _autoMeta); } catch (_) {}
@@ -176,7 +179,12 @@ function _endTurn_saveSnapshot(ctx) {
       return true;
     } catch(e) {
       console.warn('[AutoSave] post-turn save failed:', e);
-      try { await _endTurn_discardStagedTurnData(ctx); } catch (_discardE) { console.warn('[AutoSave] discard staged turn-data failed:', _discardE); }
+      if (!_canonicalCommitted) {
+        try { await _endTurn_discardStagedTurnData(ctx); } catch (_discardE) { console.warn('[AutoSave] discard staged turn-data failed:', _discardE); }
+      } else {
+        // 世界已与 receipt 同事务落库；若此刻恰好跨档，只保留 staging 供该战役下次加载补发。
+        ctx.meta.stagedTurnData = null;
+      }
       return false;
     }
   })();
@@ -433,10 +441,16 @@ function _endTurn_finalizeRecords(shizhengji, zhengwen, playerStatus, playerInne
   if (GM.shijiHistory.length > 200) GM.shijiHistory.splice(0, GM.shijiHistory.length - 200); // arch-ok·史记封顶防长局存档膨胀·生成式 cap（同文件 _factionHistory/_metricHistory）
   // 6.5: 每回合一句话摘要存入年度素材
   if (!GM._yearlyDigest) GM._yearlyDigest = [];
-  GM._yearlyDigest.push({turn: GM.turn-1, summary: _summaryText || (shizhengji||'').split(/[\u3002\n]/)[0] || ''});
-  // 按年度清理（只保留当年）
+  var _digestTurn = GM.turn - 1;
+  var _digestDate = (typeof _chronicleDateForTurn === 'function') ? _chronicleDateForTurn(_digestTurn) : null;
+  GM._yearlyDigest.push({
+    turn: _digestTurn,
+    year: _digestDate && Number.isSafeInteger(_digestDate.year) ? _digestDate.year : undefined,
+    summary: _summaryText || (shizhengji||'').split(/[\u3002\n]/)[0] || ''
+  });
+  // 保留两年重试素材；年度 prompt 会再次按 canonical year 精确过滤。
   var _yTurns = (typeof turnsForDuration === 'function') ? turnsForDuration('year') : 12;
-  if (GM._yearlyDigest.length > _yTurns * 2) GM._yearlyDigest = GM._yearlyDigest.slice(-_yTurns);
+  if (GM._yearlyDigest.length > _yTurns * 2) GM._yearlyDigest = GM._yearlyDigest.slice(-_yTurns * 2);
   // 纪传体：记录月度摘要
   // 编年史草稿：优先使用实录(正式体)+时政记；后人戏说作为辅助材料
   // 实录本就是正史体，最适合喂给编年体系统；否则回落到shizhengji+zhengwen

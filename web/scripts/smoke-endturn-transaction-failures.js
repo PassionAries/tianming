@@ -278,7 +278,7 @@ async function main() {
     'canonical save failure aborts before commit');
   ok(clearDraftCalls === 0 && txn.committed === false, 'player input drafts remain untouched when final save fails');
 
-  resetWorld({ _pendingTurnDataPublish: { transactionId: 'turn-publish-retry' } });
+  resetWorld();
   txn = ctx._tmCaptureEndTurnTransaction();
   clearDraftCalls = 0;
   ctx._endTurn_finalizeRecords = function() { return { shijiHtml: 'committed' }; };
@@ -288,10 +288,12 @@ async function main() {
   ctx._endTurn_render = function() {};
   const publishCtx = buildStepCtx();
   publishCtx.meta.turnRenderArgs = [];
+  publishCtx.meta.stagedTurnData = { transactionId: 'turn-publish-retry' };
   ok(await ctx._tmFinalizeEndTurnTransaction(publishCtx, txn) === true && txn.committed === true,
     'turn-data publish failure cannot roll back an already committed world');
-  ok(clearDraftCalls === 1 && ctx.GM._pendingTurnDataPublish.transactionId === 'turn-publish-retry' && publishCtx.results.turnDataPublishError,
-    'publish failure keeps its recovery marker while post-commit input cleanup proceeds');
+  ok(clearDraftCalls === 1 && publishCtx.meta.stagedTurnData.transactionId === 'turn-publish-retry'
+    && !ctx.GM._pendingTurnDataPublish && publishCtx.results.turnDataPublishError,
+    'publish failure leaves the independent recovery receipt intact while post-commit input cleanup proceeds');
 
   resetWorld({ _pendingShijiModal: { courtDone: false, aiReady: false, payload: null } });
   ctx.P.keju = { currentExam: true };

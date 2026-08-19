@@ -413,14 +413,14 @@ function openEditorHtml(scnId){
         preMsg += '）·恢复至本回合操作前？\n（本回合的诏令/批复/对话/调动将保留·AI推演需重新执行）';
         if (confirm(preMsg)) {
           showLoading('展卷恢复中……', 40);
-          TM_SaveDB.load('pre_endturn').then(function(record) {
+          TM_SaveDB.load('pre_endturn').then(async function(record) {
             var _preCheck = (typeof _validatePreEndturnSnapshot === 'function')
               ? _validatePreEndturnSnapshot(record, preInfo, true)
               : { ok: false, reason: 'validator-missing' };
             if (_preCheck.ok) {
               if (typeof fullLoadGame === 'function') {
                 try {
-                  fullLoadGame({ gameState: record.gameState });
+                  await fullLoadGame({ gameState: record.gameState }, { source: 'startup-pre-endturn' });
                   toast('已恢复至过回合前·第' + _preCheck.turn + '回合');
                   try { localStorage.removeItem('tm_pre_endturn_mark'); } catch(_){}
                 } catch (_psrE) {
@@ -464,10 +464,10 @@ function openEditorHtml(scnId){
     msg += '），是否改为读取？';
     if (confirm(msg)) {
       showLoading('展卷恢复中……', 40);
-      TM_SaveDB.load('autosave').then(function(record) {
+      TM_SaveDB.load('autosave').then(async function(record) {
         if (record && record.gameState) {
           if (typeof fullLoadGame === 'function') {
-            try { fullLoadGame({ gameState: record.gameState }); toast('已恢复：第' + info.turn + '回合'); }
+            try { await fullLoadGame({ gameState: record.gameState }, { source: 'startup-autosave' }); toast('已恢复：第' + info.turn + '回合'); }
             catch (_asE) { console.error('[autosave] 恢复失败', _asE); toast('恢复失败: ' + (_asE.message||_asE)); }
             finally { hideLoading(); }
           } else { hideLoading(); }

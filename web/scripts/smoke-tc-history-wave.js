@@ -60,7 +60,10 @@ function baseSandbox(extra) {
   sb.window = sb; sb.globalThis = sb; sb.root = sb; sb.global = sb; sb.self = sb;
   sb.getTSText = (t) => 'T' + t;
   sb.findCharByName = () => null;
-  sb.GM = { turn: 7, year: 1627, chars: [{ name: '张三', alive: true, officialTitle: '首辅', faction: '明' }, { name: '李四', alive: false, dead: true, deathTurn: 3 }] };
+  sb.GM = {
+    turn: 7, year: 1627, _campaignId: 'tc-history-campaign', _timelineId: 'tml_tc_history_12345678',
+    chars: [{ name: '张三', alive: true, officialTitle: '首辅', faction: '明' }, { name: '李四', alive: false, dead: true, deathTurn: 3 }]
+  };
   sb.P = { time: { year: 1627, seasons: ['春', '夏', '秋', '冬'] }, playerInfo: { factionName: '明' }, conf: {} };
   if (extra) Object.keys(extra).forEach((k) => { sb[k] = extra[k]; });
   vm.createContext(sb);

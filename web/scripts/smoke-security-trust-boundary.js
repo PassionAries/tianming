@@ -27,6 +27,7 @@ const publicKeyPath = path.join(TMP, 'public.pem');
 fs.writeFileSync(publicKeyPath, keys.publicKey.export({ type: 'spki', format: 'pem' }));
 process.env.TIANMING_TEST_EXPORTS = '1';
 process.env.TIANMING_HOT_UPDATE_PUBLIC_KEY = publicKeyPath;
+const ipcHandlers = new Map();
 
 const electronStub = {
   app: {
@@ -38,7 +39,7 @@ const electronStub = {
     on() {}, once() {}, relaunch() {}, exit() {}, quit() {}
   },
   BrowserWindow: function BrowserWindow() {},
-  ipcMain: { handle() {}, on() {} },
+  ipcMain: { handle(channel, listener) { ipcHandlers.set(channel, listener); }, on() {} },
   dialog: {}, shell: {}, Menu: {},
   protocol: { registerSchemesAsPrivileged() {}, handle() {} },
   net: { fetch: (url, init) => fetch(url, init) },
@@ -179,6 +180,18 @@ async function main() {
   catch (error) { bodyError = error; }
   check(bodyError && /大小上限/.test(bodyError.message), 'undeclared oversized response is rejected after bounded read');
 
+  const hostileSaveName = '<img src=x onerror="globalThis.__desktopSaveOwned=1">';
+  const sidecar = T.desktopSaveMetadataFromData({
+    _saveMeta: { name: hostileSaveName, scenario: '<script>owned()</script>', turn: 0 },
+    gameState: { turn: 0, _campaignId: 'campaign-sidecar', _timelineId: 'tml_sidecar_12345678', privatePayload: 'must-not-leak' }
+  }, 'manual-save-key');
+  check(sidecar.name === hostileSaveName && sidecar.meta.turn === 0
+    && sidecar.meta.campaignId === 'campaign-sidecar' && sidecar.meta.timelineId === 'tml_sidecar_12345678'
+    && !Object.prototype.hasOwnProperty.call(sidecar, 'gameState') && !Object.prototype.hasOwnProperty.call(sidecar.meta, 'privatePayload'),
+  'desktop save sidecar preserves display text and identity but never copies world payloads');
+  const autoSidecar = T.desktopSaveMetadataFromData({ gameState: { turn: 3, saveName: '玩家档名' } }, '__autosave__');
+  check(autoSidecar.name === '__autosave__', 'desktop canonical autosave remains hidden from manual-save listings');
+
   const bombPath = path.join(TMP, 'workshop-bomb.tm-pack');
   const bombZip = new AdmZip();
   bombZip.addFile('manifest.json', Buffer.from('{"id":"bomb","type":"scenario","entry":"payload.json"}'));
@@ -224,6 +237,43 @@ async function main() {
   const builderSource = fs.readFileSync(path.join(ROOT, 'web', 'tools', 'build-hot-update-package.js'), 'utf8');
   const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const packageLock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
+  const listSavesStart = mainSource.indexOf("ipcMain.handle('list-saves'");
+  const listSavesEnd = mainSource.indexOf("ipcMain.handle('delete-save'", listSavesStart);
+  const listSavesSource = mainSource.slice(listSavesStart, listSavesEnd);
+  check(listSavesStart >= 0 && listSavesEnd > listSavesStart
+    && /readDesktopSaveMetadata\(storageKey\)/.test(listSavesSource)
+    && !/readFileSync\(fp|JSON\.parse\(raw/.test(listSavesSource),
+  'desktop save listing reads lightweight sidecars without parsing every world payload');
+  const desktopSaveDir = path.join(TMP, 'userData', 'saves');
+  const desktopMetadataDir = path.join(desktopSaveDir, '.metadata');
+  fs.mkdirSync(desktopMetadataDir, { recursive: true });
+  for (let i = 0; i < 100; i++) {
+    const storageKey = 'large-save-' + i;
+    fs.writeFileSync(path.join(desktopSaveDir, storageKey + '.json'), '<invalid-json>' + 'x'.repeat(64 * 1024));
+    fs.writeFileSync(path.join(desktopMetadataDir, storageKey + '.json'), JSON.stringify({
+      version: 1,
+      storageKey,
+      name: '大型存档 ' + i,
+      meta: { scenario: '测试剧本', turn: i, campaignId: 'campaign-sidecars', timelineId: 'tml_sidecars_12345678' },
+      updatedAt: Date.now()
+    }));
+  }
+  const listHandler = ipcHandlers.get('list-saves');
+  check(typeof listHandler === 'function', 'desktop list-saves IPC handler is registered through the trusted gate');
+  const readPaths = [];
+  const originalReadFile = fs.promises.readFile;
+  fs.promises.readFile = function(file) {
+    readPaths.push(path.resolve(String(file)));
+    return originalReadFile.apply(this, arguments);
+  };
+  let listed;
+  try { listed = await listHandler({ senderFrame: mainFrame, sender: { mainFrame } }); }
+  finally { fs.promises.readFile = originalReadFile; }
+  check(listed && listed.success === true && listed.files.length === 100
+    && listed.files.every(file => file.meta && file.meta.timelineId === 'tml_sidecars_12345678'),
+  '100 desktop saves list successfully even when every full payload is deliberately unparsable');
+  check(readPaths.length === 100 && readPaths.every(file => path.dirname(file) === path.resolve(desktopMetadataDir)),
+    'desktop listing reads only 100 small sidecars and zero world payload files');
   check(mainSource.includes("redirect: 'manual'") && mainSource.includes('dns.lookup(hostname, { all: true')
     && mainSource.includes("credentials: 'omit'") && mainSource.includes("referrerPolicy: 'no-referrer'"), 'network proxy revalidates DNS/redirects and omits ambient credentials');
   check(mainSource.includes('WORKSHOP_CATALOG_AUTHORIZATIONS.get(packageUrl)')

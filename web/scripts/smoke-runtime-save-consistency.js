@@ -104,8 +104,26 @@ ok(/rotateAutoSaveSession/.test(preloadImpl) && /_tmRotateDesktopAutoSaveSession
 ok(/stageTurnData\([\s\S]*?result\.success === true[\s\S]*?回合分卷暂存失败/.test(render)
   && /turnPublishReceipt:\s*ctx\.meta\.stagedTurnData/.test(render)
   && /_tmCommitEndTurnTransaction[\s\S]*?await _endTurn_publishStagedTurnData/.test(core), '回合分卷先暂存·receipt 与世界同事务提交·仅在 commit 后发布');
-ok(/function _recoverPendingTurnDataPublish\(\)[\s\S]*?baseRecoveryLeaseCurrent[\s\S]*?listTurnPublishReceipts\(campaignId, 'world-committed'\)[\s\S]*?recoverTurnData\(marker\)[\s\S]*?deleteTurnPublishReceipt\(marker/.test(lifecycle),
+ok(/function _recoverPendingTurnDataPublish\(\)[\s\S]*?baseRecoveryLeaseCurrent[\s\S]*?listTurnPublishReceipts\(campaignId, timelineId, 'world-committed'\)[\s\S]*?recoverTurnData\(marker\)[\s\S]*?deleteTurnPublishReceipt\(marker/.test(lifecycle),
   '读档按世界身份租约补发独立 receipt，并只删除轻量事务记录');
+{
+  const loadImpl = sliceFn(lifecycle, 'async function _fullLoadGameImpl(');
+  const hydrateAt = loadImpl.indexOf('await ChronicleSystem.hydrateDurableRecords(GM, P)');
+  const receiptAt = loadImpl.indexOf('await _recoverPendingTurnDataPublish()');
+  const forkAt = loadImpl.indexOf('_tmForkLoadedTimeline(GM');
+  const enableAt = loadImpl.indexOf('GM.busy = false');
+  const showWorldAt = loadImpl.indexOf('_$("G").style.display="grid"');
+  const enterAt = loadImpl.indexOf('enterGame()');
+  ok(/function fullLoadGame\(data, loadOptions\)[\s\S]*?window\._tmLoadBarrier = promise/.test(lifecycle)
+    && hydrateAt >= 0 && receiptAt > hydrateAt && forkAt > receiptAt && enableAt > forkAt
+    && showWorldAt > enableAt && enterAt > showWorldAt,
+  '读档以显式 Promise 屏障等待编年 hydration 和 receipt 恢复后才开放玩法');
+  ok(/GM\.busy = true;[\s\S]*?GM\._loadHydrationPending = true;/.test(loadImpl)
+    && /doSaveGame=async function\(\)\{\s*await _tmAwaitLoadBarrier\(\)/.test(lifecycle)
+    && /desktopDoSave=async function\(\)\{\s*await _tmAwaitLoadBarrier\(\)/.test(lifecycle)
+    && /saveToSlot:\s*async function[\s\S]*?await _tmAwaitLoadBarrier\(\)/.test(manager),
+  'hydration 期间 busy 阻止过回合，所有主要手动保存入口也等待同一屏障');
+}
 ok(/function _endTurn_publishStagedTurnData\([\s\S]*?deleteTurnPublishReceipt\(marker[\s\S]*?ctx\.meta\.stagedTurnData = null/.test(render)
   && !/function _endTurn_publishStagedTurnData\([\s\S]*?clearPendingTurnDataPublishAtomic/.test(render),
   '正常分卷发布不再解压、重压并重写两个 canonical 世界');
@@ -181,6 +199,24 @@ ok(/setInterval\(async function\(\)\{[\s\S]*?if\(!GM \|\| !GM\.running\) return;
 async function runDynamicLeaseSmokes() {
   console.log('=== 4. dynamic write lease regressions ===');
   {
+    let releaseBarrier;
+    let settled = false;
+    const ctx = {
+      window: {}, Promise,
+      setTimeout, clearTimeout
+    };
+    ctx.window.window = ctx.window;
+    vm.createContext(ctx);
+    vm.runInContext(sliceFn(lifecycle, 'function _tmAwaitLoadBarrier('), ctx);
+    ctx.window._tmLoadBarrier = new Promise(resolve => { releaseBarrier = resolve; });
+    const waiting = ctx._tmAwaitLoadBarrier().then(() => { settled = true; });
+    await new Promise(resolve => setTimeout(resolve, 5));
+    ok(settled === false, '保存/玩法共享的 load barrier 在 hydration 完成前保持未决');
+    releaseBarrier(true);
+    await waiting;
+    ok(settled === true, 'hydration 完成后 load barrier 才放行等待中的操作');
+  }
+  {
     const writes = [], order = [];
     const ls = new Map([['tm_pre_endturn_mark', JSON.stringify({ snapshotId: 'pre-9' })]]);
     const ctx = {
@@ -207,7 +243,7 @@ async function runDynamicLeaseSmokes() {
   {
     let staged = 0, published = 0, deleted = 0, capturedOptions = null;
     const ctx = {
-      GM: { turn: 50, sid: 's1', saveName: 'desktop-save', _campaignId: 'campaign-receipt', eraName: '某年号' }, P: {},
+      GM: { turn: 50, sid: 's1', saveName: 'desktop-save', _campaignId: 'campaign-receipt', _timelineId: 'tml_receipt_12345678', eraName: '某年号' }, P: {},
       window: {
         _tmLoadGen: 2,
         _tmActivePreEndturnSnapshotId: 'pre-50',
@@ -241,13 +277,15 @@ async function runDynamicLeaseSmokes() {
   }
   {
     const receipt = {
-      id: 'turn-publish:campaign-recover:turn-recover-1', campaignId: 'campaign-recover',
+      id: 'turn-publish:campaign-recover:tml_recover_12345678:turn-recover-1', campaignId: 'campaign-recover', timelineId: 'tml_recover_12345678',
       transactionId: 'turn-recover-1', saveName: '测试档', turn: 50,
       stateChecksum: 'checksum-recover-1', status: 'world-committed'
     };
+    const futureReceipt = Object.assign({}, receipt, { id: receipt.id + '-future', transactionId: 'turn-recover-future', turn: 80 });
+    const foreignReceipt = Object.assign({}, receipt, { id: receipt.id + '-foreign', transactionId: 'turn-recover-foreign', timelineId: 'tml_foreign_12345678' });
     let recovered = 0, deleted = 0;
     const ctx = {
-      GM: { _campaignId: 'campaign-recover' }, P: { id: 'p-recover' },
+      GM: { turn: 51, _campaignId: 'campaign-recover', _timelineId: 'tml_recover_12345678' }, P: { id: 'p-recover' },
       window: {
         _tmLoadGen: 4,
         tianming: { async recoverTurnData(marker) { recovered++; return { success: marker.transactionId === receipt.transactionId }; } },
@@ -256,8 +294,9 @@ async function runDynamicLeaseSmokes() {
       TM: { errors: { capture() {} } }, Promise, JSON, Error, console,
       deepClone: value => JSON.parse(JSON.stringify(value)),
       TM_SaveDB: {
-        async listTurnPublishReceipts(campaignId, status) {
-          return campaignId === receipt.campaignId && status === 'world-committed' ? [receipt] : [];
+        async listTurnPublishReceipts(campaignId, timelineId, status) {
+          return campaignId === receipt.campaignId && timelineId === receipt.timelineId && status === 'world-committed'
+            ? [futureReceipt, foreignReceipt, receipt] : [];
         },
         async deleteTurnPublishReceipt(marker, options) {
           if (options.writeGuard() !== true) return false;
@@ -269,15 +308,14 @@ async function runDynamicLeaseSmokes() {
     };
     ctx.window.window = ctx.window;
     vm.createContext(ctx); vm.runInContext(sliceFn(lifecycle, 'function _recoverPendingTurnDataPublish('), ctx);
-    ctx._recoverPendingTurnDataPublish();
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await ctx._recoverPendingTurnDataPublish();
     ok(recovered === 1 && deleted === 1 && !ctx.GM._pendingTurnDataPublish,
-      'load recovery publishes and removes an independent receipt without touching the canonical world');
+      'load recovery publishes only matching, non-future receipts and leaves other branches untouched');
   }
   {
     let staged = 0, discarded = 0;
     const ctx = {
-      GM: { turn: 50, sid: 's1', saveName: 'desktop-save', _campaignId: 'campaign-a', eraName: '某年号' }, P: {},
+      GM: { turn: 50, sid: 's1', saveName: 'desktop-save', _campaignId: 'campaign-a', _timelineId: 'tml_campaign_a_12345678', eraName: '某年号' }, P: {},
       window: {
         _tmLoadGen: 2,
         _tmActivePreEndturnSnapshotId: 'pre-50',
@@ -306,7 +344,7 @@ async function runDynamicLeaseSmokes() {
   {
     let staged = 0, discarded = 0, committedReceipt = null;
     const ctx = {
-      GM: { turn: 50, sid: 's1', saveName: 'desktop-save', _campaignId: 'campaign-cross-load', eraName: '某年号' }, P: {},
+      GM: { turn: 50, sid: 's1', saveName: 'desktop-save', _campaignId: 'campaign-cross-load', _timelineId: 'tml_cross_load_12345678', eraName: '某年号' }, P: {},
       window: {
         _tmLoadGen: 2,
         _tmActivePreEndturnSnapshotId: 'pre-50',
@@ -349,6 +387,11 @@ async function runDynamicLeaseSmokes() {
       transaction() {
         const tx = {};
         tx.objectStore = (storeName) => ({
+          get() {
+            const req = {};
+            setTimeout(() => { req.result = undefined; req.onsuccess({ target: req }); }, 0);
+            return req;
+          },
           put() {
             if (storeName !== 'saves') return;
             writeAttempts++;

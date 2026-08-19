@@ -38,7 +38,7 @@ const committer = createTurnDataCommitter({
 
 try {
   const descriptor = {
-    saveName: '测试档', turn: 50, campaignId: 'campaign-a',
+    saveName: '测试档', turn: 50, campaignId: 'campaign-a', timelineId: 'tml_campaign_a_12345678',
     transactionId: 'turn-11111111-2222-4333-8444-555555555555',
     stateChecksum: 'sha256-probe',
     data: { context: { turn: 50 }, playerInput: { edicts: ['甲'] }, aiResults: { sc1: 'ok' }, varChanges: { money: -1 } }
@@ -52,7 +52,8 @@ try {
   const published = committer.publish(descriptor);
   check(published.success === true && fs.existsSync(path.join(finalDir, 'context.json')), 'publish atomically exposes the committed turn');
   const manifest = JSON.parse(fs.readFileSync(path.join(finalDir, 'transaction.json'), 'utf8'));
-  check(manifest.transactionId === descriptor.transactionId && manifest.stateChecksum === 'sha256-probe' && manifest.status === 'committed',
+  check(manifest.transactionId === descriptor.transactionId && manifest.timelineId === descriptor.timelineId
+    && manifest.stateChecksum === 'sha256-probe' && manifest.status === 'committed',
     'published manifest binds transaction/world checksum and records the committed phase');
 
   const recovered = committer.recover(descriptor);

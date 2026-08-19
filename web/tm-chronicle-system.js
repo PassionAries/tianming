@@ -13,7 +13,7 @@
 // ============================================================
 
 function _chronicleEmptyState() {
-  return { version: 2, monthDrafts: {}, yearChronicles: {} };
+  return { version: 3, monthDrafts: {}, yearChronicles: {}, yearBases: {} };
 }
 
 var _chronicleDetachedState = _chronicleEmptyState();
@@ -29,7 +29,8 @@ function _chronicleState(targetGM, create) {
   }
   if (!state.monthDrafts || typeof state.monthDrafts !== 'object' || Array.isArray(state.monthDrafts)) state.monthDrafts = {};
   if (!state.yearChronicles || typeof state.yearChronicles !== 'object' || Array.isArray(state.yearChronicles)) state.yearChronicles = {};
-  state.version = 2;
+  if (!state.yearBases || typeof state.yearBases !== 'object' || Array.isArray(state.yearBases)) state.yearBases = {};
+  state.version = 3;
   return state;
 }
 
@@ -40,7 +41,8 @@ function _chronicleCloneState(data) {
     if (!cloned || typeof cloned !== 'object') return _chronicleEmptyState();
     if (!cloned.monthDrafts || typeof cloned.monthDrafts !== 'object' || Array.isArray(cloned.monthDrafts)) cloned.monthDrafts = {};
     if (!cloned.yearChronicles || typeof cloned.yearChronicles !== 'object' || Array.isArray(cloned.yearChronicles)) cloned.yearChronicles = {};
-    cloned.version = 2;
+    if (!cloned.yearBases || typeof cloned.yearBases !== 'object' || Array.isArray(cloned.yearBases)) cloned.yearBases = {};
+    cloned.version = 3;
     return cloned;
   } catch (_) {
     return _chronicleEmptyState();
@@ -78,6 +80,69 @@ function _chronicleRequestId() {
   return 'chronicle-' + Date.now() + '-' + ChronicleSystem._requestSeq;
 }
 
+function _chronicleStableHash(value) {
+  var text = JSON.stringify(value);
+  var hash = 2166136261;
+  for (var i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return 'chb_' + (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function _chronicleBuildYearBasis(targetGM, state, year) {
+  targetGM = targetGM || ((typeof GM !== 'undefined' && GM) ? GM : null);
+  state = state || _chronicleState(targetGM, false);
+  year = Number(year);
+  var drafts = [];
+  Object.keys(state && state.monthDrafts || {}).forEach(function(key) {
+    var draft = state.monthDrafts[key];
+    if (!draft || Number(draft.year) !== year) return;
+    drafts.push({
+      turn: Number(draft.turn) || 0, year: Number(draft.year), month: Number(draft.month) || 0,
+      day: Number(draft.day) || 0, summary: String(draft.summary || ''), narrative: String(draft.narrative || '')
+    });
+  });
+  drafts.sort(function(a, b) { return a.turn - b.turn; });
+  var digests = (targetGM && Array.isArray(targetGM._yearlyDigest) ? targetGM._yearlyDigest : []).filter(function(item) {
+    if (!item) return false;
+    var itemYear = Number(item.year);
+    if (!Number.isSafeInteger(itemYear)) {
+      var date = _chronicleDateForTurn(item.turn);
+      itemYear = date && date.year;
+    }
+    return itemYear === year;
+  }).map(function(item) {
+    return { turn: Number(item.turn) || 0, summary: String(item.summary || '') };
+  }).sort(function(a, b) { return a.turn - b.turn; });
+  var foreshadowings = (targetGM && Array.isArray(targetGM._foreshadowings) ? targetGM._foreshadowings : []).filter(function(item) {
+    if (!(item && item.resolved && item.resolveTurn)) return false;
+    var date = _chronicleDateForTurn(item.resolveTurn);
+    return date && date.year === year;
+  }).map(function(item) {
+    return {
+      plantTurn: Number(item.plantTurn) || 0, resolveTurn: Number(item.resolveTurn) || 0,
+      content: String(item.content || ''), resolveContent: String(item.resolveContent || '')
+    };
+  }).sort(function(a, b) { return a.resolveTurn - b.resolveTurn || a.plantTurn - b.plantTurn; });
+  var edicts = (targetGM && Array.isArray(targetGM._edictTracker) ? targetGM._edictTracker : []).filter(function(item) {
+    if (!(item && item.turn)) return false;
+    var date = _chronicleDateForTurn(item.turn);
+    return date && date.year === year;
+  }).map(function(item) {
+    return {
+      turn: Number(item.turn) || 0, category: String(item.category || ''), content: String(item.content || ''),
+      status: String(item.status || ''), assignee: String(item.assignee || ''), feedback: String(item.feedback || '')
+    };
+  }).sort(function(a, b) { return a.turn - b.turn; });
+  var sourceTurn = drafts.reduce(function(max, draft) { return Math.max(max, draft.turn); }, 0);
+  return {
+    year: year,
+    sourceTurn: sourceTurn,
+    historyBasisHash: _chronicleStableHash({ year: year, drafts: drafts, digests: digests, foreshadowings: foreshadowings, edicts: edicts })
+  };
+}
+
 function _chronicleTrimYears(state, targetP) {
   if (!state || !state.yearChronicles) return;
   var keepYears = Number(targetP && targetP.conf && targetP.conf.chronicleKeep);
@@ -89,6 +154,7 @@ function _chronicleTrimYears(state, targetP) {
   if (yearKeys.length <= maxYears) return;
   yearKeys.slice(0, yearKeys.length - maxYears).forEach(function(year) {
     delete state.yearChronicles[year];
+    if (state.yearBases) delete state.yearBases[year];
   });
 }
 
@@ -152,6 +218,7 @@ var ChronicleSystem = {
     // 使用统一历法判断“本回合结束后跨年”，不复制固定 365/91.25 天公式。
     var nextDate = _chronicleDateForTurn(turn + 1);
     if (nextDate && nextDate.year > date.year) {
+      state.yearBases[date.year] = _chronicleBuildYearBasis(GM, state, date.year);
       ChronicleSystem._tryGenerateYearChronicle(date.year);
     }
     return state.monthDrafts[key];
@@ -182,6 +249,13 @@ var ChronicleSystem = {
     if (drafts.length === 0) return Promise.resolve({ ok: false, reason: 'missing-drafts' });
 
     drafts.sort(function(a, b) { return a.turn - b.turn; });
+    var timelineId = '';
+    try {
+      timelineId = typeof _tmEnsureTimelineId === 'function' ? _tmEnsureTimelineId(targetGM) : String(targetGM._timelineId || '');
+    } catch (_) { timelineId = String(targetGM._timelineId || ''); }
+    if (!timelineId) return Promise.resolve({ ok: false, reason: 'missing-timeline' });
+    var historyBasis = targetState.yearBases[year] || _chronicleBuildYearBasis(targetGM, targetState, year);
+    targetState.yearBases[year] = historyBasis;
 
     var lease = {
       requestId: _chronicleRequestId(),
@@ -189,8 +263,11 @@ var ChronicleSystem = {
       pRef: targetP,
       stateRef: targetState,
       campaignId: String(targetGM._campaignId || ''),
+      timelineId: timelineId,
       loadGen: (typeof window !== 'undefined' && window._tmLoadGen) || 0,
       year: year,
+      sourceTurn: historyBasis.sourceTurn,
+      historyBasisHash: historyBasis.historyBasisHash,
       promise: null
     };
     function leaseIsCurrent() {
@@ -198,6 +275,7 @@ var ChronicleSystem = {
         GM === lease.gmRef && P === lease.pRef &&
         (((typeof window !== 'undefined' && window._tmLoadGen) || 0) === lease.loadGen) &&
         String((GM && GM._campaignId) || '') === lease.campaignId &&
+        String((GM && GM._timelineId) || '') === lease.timelineId &&
         _chronicleState(lease.gmRef, false) === lease.stateRef &&
         ChronicleSystem._inFlight.some(function(item) { return item && item.requestId === lease.requestId; });
     }
@@ -338,10 +416,14 @@ var ChronicleSystem = {
           }
           return TM_SaveDB.saveChronicleRecord({
             campaignId: lease.campaignId,
+            timelineId: lease.timelineId,
             year: year,
+            sourceTurn: lease.sourceTurn,
+            historyBasisHash: lease.historyBasisHash,
             requestId: lease.requestId,
             loadGeneration: lease.loadGen,
             generatedAt: chronicleEntry.generatedAt,
+            maxYears: Math.max(1, Math.floor(Number(targetP && targetP.conf && targetP.conf.chronicleKeep) || 10)) * 2,
             chronicle: chronicleEntry
           }, { writeGuard: leaseIsCurrent }).then(function(saved) {
             if (saved !== true) throw new Error('年度正史轻量 checkpoint 未提交');
@@ -388,23 +470,30 @@ var ChronicleSystem = {
     }
     var targetState = _chronicleState(targetGM, true);
     var campaignId = String(targetGM._campaignId || '');
+    var timelineId = String(targetGM._timelineId || '');
     var loadGen = (typeof window !== 'undefined' && window._tmLoadGen) || 0;
     function leaseIsCurrent() {
       return typeof GM !== 'undefined' && typeof P !== 'undefined' &&
         GM === targetGM && P === targetP &&
         (((typeof window !== 'undefined' && window._tmLoadGen) || 0) === loadGen) &&
         String((GM && GM._campaignId) || '') === campaignId &&
+        String((GM && GM._timelineId) || '') === timelineId &&
         _chronicleState(targetGM, false) === targetState;
     }
-    return TM_SaveDB.listChronicleRecords(campaignId).then(function(records) {
+    return TM_SaveDB.listChronicleRecords(campaignId, timelineId).then(function(records) {
       if (!leaseIsCurrent()) return { ok: false, stale: true };
       var merged = 0;
       (records || []).sort(function(a, b) { return Number(a && a.generatedAt || 0) - Number(b && b.generatedAt || 0); }).forEach(function(record) {
-        if (!record || String(record.campaignId || '') !== campaignId) return;
+        if (!record || String(record.campaignId || '') !== campaignId || String(record.timelineId || '') !== timelineId) return;
         var year = Number(record.year);
         var incoming = record.chronicle;
         if (!Number.isSafeInteger(year) || !incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return;
         if (typeof incoming.content !== 'string' || !incoming.content) return;
+        var sourceTurn = Number(record.sourceTurn);
+        if (!Number.isSafeInteger(sourceTurn) || sourceTurn < 0 || sourceTurn > Number(targetGM.turn || 0)) return;
+        var currentBasis = targetState.yearBases[year] || _chronicleBuildYearBasis(targetGM, targetState, year);
+        if (!currentBasis || currentBasis.sourceTurn !== sourceTurn || currentBasis.historyBasisHash !== String(record.historyBasisHash || '')) return;
+        targetState.yearBases[year] = currentBasis;
         var current = targetState.yearChronicles[year];
         if (current && Number(current.generatedAt || 0) >= Number(record.generatedAt || incoming.generatedAt || 0)) return;
         var cloned = null;

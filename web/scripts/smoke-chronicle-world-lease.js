@@ -64,11 +64,11 @@ const ctx = {
   TM_SaveDB: {
     async saveChronicleRecord(record, options) {
       if (options && typeof options.writeGuard === 'function' && options.writeGuard() !== true) return false;
-      durableChronicles.set(record.campaignId + ':' + record.year, clone(record));
+      durableChronicles.set(record.campaignId + ':' + record.timelineId + ':' + record.year, clone(record));
       return true;
     },
-    async listChronicleRecords(campaignId) {
-      return Array.from(durableChronicles.values()).filter(record => record.campaignId === campaignId).map(clone);
+    async listChronicleRecords(campaignId, timelineId) {
+      return Array.from(durableChronicles.values()).filter(record => record.campaignId === campaignId && record.timelineId === timelineId).map(clone);
     }
   },
   _dbg() {},
@@ -76,6 +76,7 @@ const ctx = {
   buildIndices() {},
   renderGameState() {},
   _tmLoadGen: 0,
+  _tmEnsureTimelineId(gm) { return gm && gm._timelineId; },
   TM: { errors: { capture() {} } }
 };
 ctx.window = ctx;
@@ -84,8 +85,9 @@ vm.runInContext(timeSource, ctx, { filename: 'tm-time-utils.js' });
 vm.runInContext(chronicleSource, ctx, { filename: 'tm-chronicle-system.js' });
 vm.runInContext(sourceBetween(coreSource, 'function _tmCaptureEndTurnObject', 'async function _tmFinalizeEndTurnTransaction'), ctx, { filename: 'tm-endturn-core-transaction.js' });
 
-function setWorld(id, time) {
-  ctx.GM = { turn: 1, sid: 'scenario-1', _campaignId: id, busy: false };
+function setWorld(id, time, timelineId) {
+  timelineId = timelineId || ('tml_' + String(id).replace(/[^A-Za-z0-9_-]/g, '_') + '_12345678');
+  ctx.GM = { turn: 1, sid: 'scenario-1', _campaignId: id, _timelineId: timelineId, busy: false };
   ctx.P = {
     ai: { key: 'test-key' }, conf: { chronicleKeep: 10 }, chronicleConfig: {},
     time: Object.assign({ year: 2026, startYear: 2026, startMonth: 1, startDay: 1 }, time || {})
@@ -138,6 +140,8 @@ function setWorld(id, time) {
   aiQueue = [];
   aiPrompts = [];
   const filteredRequest = ctx.ChronicleSystem._tryGenerateYearChronicle(2025);
+  const canonicalBeforeBackgroundResult = ctx.ChronicleSystem.serialize();
+  const annualTimeline = ctx.GM._timelineId;
   check(aiPrompts.length === 1 && !aiPrompts[0].includes('上一年摘要不得出现')
     && aiPrompts[0].includes('本年显式摘要') && aiPrompts[0].includes('本年旧格式摘要'),
   'annual prompt includes only digests belonging to the canonical target year');
@@ -145,21 +149,47 @@ function setWorld(id, time) {
     'edict and foreshadowing year filters share the canonical calendar');
   aiQueue.shift().resolve(JSON.stringify({ chronicle: '二年正史', afterword: '二年史评' }));
   await new Promise(resolve => setTimeout(resolve, 5));
-  check(!durableChronicles.has('annual-filter:2025') && !ctx.ChronicleSystem.yearChronicles[2025],
+  check(!durableChronicles.has('annual-filter:' + annualTimeline + ':2025') && !ctx.ChronicleSystem.yearChronicles[2025],
     'annual result waits for the world commit barrier before becoming durable');
   ctx.GM._endTurnCommitPending = false;
   const filteredGenerated = await filteredRequest;
   check(filteredGenerated && filteredGenerated.ok === true && filteredGenerated.durable === true
-    && durableChronicles.has('annual-filter:2025'),
+    && durableChronicles.has('annual-filter:' + annualTimeline + ':2025'),
   'annual result checkpoints durably before it is exposed in campaign memory');
 
   ctx._tmLoadGen++;
-  setWorld('annual-filter', { year: 2024, startYear: 2024, startMonth: 1, startDay: 1 });
+  setWorld('annual-filter', { year: 2024, startYear: 2024, startMonth: 1, startDay: 1 }, annualTimeline);
+  ctx.GM.turn = first2025Turn + 1;
+  ctx.ChronicleSystem.deserialize(canonicalBeforeBackgroundResult, ctx.GM);
   check(!ctx.ChronicleSystem.yearChronicles[2025], 'canonical world snapshot may predate the completed background chronicle');
   const hydrated = await ctx.ChronicleSystem.hydrateDurableRecords(ctx.GM, ctx.P);
   check(hydrated && hydrated.ok === true && hydrated.merged === 1
     && ctx.ChronicleSystem.yearChronicles[2025].content === '二年正史',
   'immediate reload restores a background chronicle from the lightweight checkpoint');
+
+  const branchTimeline = 'tml_annual_branch_12345678';
+  setWorld('annual-filter', { year: 2024, startYear: 2024, startMonth: 1, startDay: 1 }, branchTimeline);
+  ctx.GM.turn = first2025Turn + 1;
+  ctx.ChronicleSystem.deserialize(canonicalBeforeBackgroundResult, ctx.GM);
+  const branchHydrated = await ctx.ChronicleSystem.hydrateDurableRecords(ctx.GM, ctx.P);
+  check(branchHydrated.merged === 0 && !ctx.ChronicleSystem.yearChronicles[2025],
+    'same-campaign durable chronicle never crosses into a different timeline');
+
+  setWorld('annual-filter', { year: 2024, startYear: 2024, startMonth: 1, startDay: 1 }, annualTimeline);
+  ctx.GM.turn = first2025Turn + 1;
+  ctx.ChronicleSystem.deserialize(canonicalBeforeBackgroundResult, ctx.GM);
+  ctx.ChronicleSystem.monthDrafts[String(first2025Turn)].summary = '分支改写后的年度素材';
+  delete ctx.GM._chronicleSysState.yearBases[2025];
+  const divergentHydrated = await ctx.ChronicleSystem.hydrateDurableRecords(ctx.GM, ctx.P);
+  check(divergentHydrated.merged === 0 && !ctx.ChronicleSystem.yearChronicles[2025],
+    'history-basis mismatch rejects a same-year record from a divergent branch');
+
+  setWorld('annual-filter', { year: 2024, startYear: 2024, startMonth: 1, startDay: 1 }, annualTimeline);
+  ctx.GM.turn = first2025Turn - 1;
+  ctx.ChronicleSystem.deserialize(canonicalBeforeBackgroundResult, ctx.GM);
+  const futureHydrated = await ctx.ChronicleSystem.hydrateDurableRecords(ctx.GM, ctx.P);
+  check(futureHydrated.merged === 0 && !ctx.ChronicleSystem.yearChronicles[2025],
+    'record sourceTurn later than the loaded save is never hydrated');
 
   ctx.ChronicleSystem.yearChronicles = { 100: { content: '百年' }, 9: { content: '九年' }, 10: { content: '十年' } };
   check(ctx.ChronicleSystem.getAvailableYears().join(',') === '9,10,100', 'chronicle years sort numerically');

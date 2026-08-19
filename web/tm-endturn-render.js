@@ -66,6 +66,7 @@ async function _endTurn_stageTurnData(ctx, snapshot) {
     saveName: GM.saveName,
     turn: GM.turn - 1,
     campaignId: String(GM._campaignId || ''),
+    timelineId: String(GM._timelineId || ''),
     transactionId: String(ctx.meta.transactionId || ''),
     stateChecksum: checksum
   };
@@ -99,7 +100,8 @@ async function _endTurn_publishStagedTurnData(ctx) {
   function publishLeaseCurrent() {
     return GM === targetGM && P === targetP &&
       (((typeof window !== 'undefined' && window._tmLoadGen) || 0) === targetLoadGen) &&
-      String((GM && GM._campaignId) || '') === String(marker.campaignId || '');
+      String((GM && GM._campaignId) || '') === String(marker.campaignId || '') &&
+      String((GM && GM._timelineId) || '') === String(marker.timelineId || '');
   }
   var result = await window.tianming.publishTurnData(marker);
   if (!(result && result.success === true)) throw new Error('回合分卷发布失败' + (result && result.error ? '：' + result.error : ''));

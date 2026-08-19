@@ -60,9 +60,38 @@ var TM_SaveDB = (function() {
   var _available = false;
   var _openPromise = null; // 防止重复打开
   var _migrationTail = Promise.resolve(); // 两类旧源必须串行探测/占用目标 ID
+  var LOCAL_SAVE_BATCH_JOURNAL = 'tm_save_batch_journal_v1';
+
+  function _restoreLocalSaveBatchItems(items) {
+    items = Array.isArray(items) ? items : [];
+    for (var i = items.length - 1; i >= 0; i--) {
+      var item = items[i] || {};
+      if (!item.key) continue;
+      if (item.previous == null) localStorage.removeItem(item.key);
+      else localStorage.setItem(item.key, item.previous);
+    }
+  }
+
+  // localStorage 没有事务。批量存档在任何 payload/metadata 写入前先持久化旧值；
+  // 页面若在中途崩溃，下次 open() 会恢复整批旧值，避免 autosave/slot_0 分叉。
+  function _recoverLocalSaveBatchJournal() {
+    var raw = localStorage.getItem(LOCAL_SAVE_BATCH_JOURNAL);
+    if (!raw) return;
+    var journal;
+    try { journal = JSON.parse(raw); }
+    catch (_) { localStorage.removeItem(LOCAL_SAVE_BATCH_JOURNAL); return; }
+    if (!journal || !Array.isArray(journal.items)) {
+      localStorage.removeItem(LOCAL_SAVE_BATCH_JOURNAL);
+      return;
+    }
+    if (journal.phase !== 'committed') _restoreLocalSaveBatchItems(journal.items);
+    localStorage.removeItem(LOCAL_SAVE_BATCH_JOURNAL);
+  }
 
   // ── 打开数据库 ──
   function open() {
+    try { _recoverLocalSaveBatchJournal(); }
+    catch (journalError) { return Promise.reject(new Error('localStorage 批量存档恢复失败：' + (journalError && journalError.message || journalError))); }
     if (_db) return Promise.resolve(_db);
     if (_openPromise) return _openPromise;
 
@@ -225,6 +254,62 @@ var TM_SaveDB = (function() {
         tx.onerror = handleWriteFailure;
         tx.onabort = handleWriteFailure;
       } catch (e) { reject(e); }
+    });
+  }
+
+  function _putSaveRecordsAtomic(records, writeGuard) {
+    records = Array.isArray(records) ? records : [];
+    if (!records.length) return Promise.resolve(false);
+    if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
+    if (!_available || !_db) {
+      var items = [];
+      records.forEach(function(record) {
+        var payloadKey = 'tm_idb_' + SAVE_STORE + '_' + record.id;
+        var metadataKey = 'tm_idb_' + SAVE_META_STORE + '_' + record.id;
+        items.push({ key: payloadKey, previous: localStorage.getItem(payloadKey) });
+        items.push({ key: metadataKey, previous: localStorage.getItem(metadataKey) });
+      });
+      var journal = { version: 1, phase: 'prepared', createdAt: Date.now(), items: items };
+      try {
+        localStorage.setItem(LOCAL_SAVE_BATCH_JOURNAL, JSON.stringify(journal));
+        records.forEach(function(record) {
+          localStorage.setItem('tm_idb_' + SAVE_STORE + '_' + record.id, JSON.stringify(record));
+          localStorage.setItem('tm_idb_' + SAVE_META_STORE + '_' + record.id, JSON.stringify(_toSaveMetadata(record)));
+        });
+        journal.phase = 'committed';
+        localStorage.setItem(LOCAL_SAVE_BATCH_JOURNAL, JSON.stringify(journal));
+        localStorage.removeItem(LOCAL_SAVE_BATCH_JOURNAL);
+        return Promise.resolve(true);
+      } catch (error) {
+        try {
+          _restoreLocalSaveBatchItems(items);
+          localStorage.removeItem(LOCAL_SAVE_BATCH_JOURNAL);
+        } catch (_) {
+          // 保留 prepared journal；下次 open() 会继续恢复旧值。
+        }
+        return Promise.reject(error);
+      }
+    }
+    return new Promise(function(resolve, reject) {
+      try {
+        if (!_writeGuardAllows(writeGuard)) { resolve(false); return; }
+        var tx = _db.transaction([SAVE_STORE, SAVE_META_STORE], 'readwrite');
+        var payloadStore = tx.objectStore(SAVE_STORE);
+        var metadataStore = tx.objectStore(SAVE_META_STORE);
+        var settled = false;
+        records.forEach(function(record) {
+          payloadStore.put(record);
+          metadataStore.put(_toSaveMetadata(record));
+        });
+        tx.oncomplete = function() { if (!settled) { settled = true; resolve(true); } };
+        function fail(e) {
+          if (settled) return;
+          settled = true;
+          reject(e && e.target && e.target.error || tx.error || new Error('IndexedDB 批量存档事务失败'));
+        }
+        tx.onerror = fail;
+        tx.onabort = fail;
+      } catch (error) { reject(error); }
     });
   }
 
@@ -508,6 +593,58 @@ var TM_SaveDB = (function() {
     });
   }
 
+  /** 同一事务保存多个 canonical 槽位；任一 payload/metadata 失败则整批不推进。 */
+  function saveManyAtomic(entries, options) {
+    entries = Array.isArray(entries) ? entries : [];
+    options = options || {};
+    if (!entries.length) return Promise.resolve(false);
+    function _writeStillAllowed() {
+      if (typeof options.writeGuard !== 'function') return true;
+      try { return options.writeGuard() === true; }
+      catch (_) { return false; }
+    }
+    var frozen;
+    try {
+      var seenIds = Object.create(null);
+      frozen = entries.map(function(entry) {
+        if (!entry || entry.id == null || entry.id === '') throw new Error('批量存档缺少 id');
+        var id = String(entry.id);
+        if (seenIds[id]) throw new Error('批量存档 id 重复：' + id);
+        seenIds[id] = true;
+        var json = JSON.stringify(entry.gameState);
+        if (typeof json !== 'string') throw new Error('批量存档正文不可序列化：' + id);
+        return { id: id, json: json, meta: Object.assign({}, entry.meta || {}) };
+      });
+    } catch (error) { return Promise.reject(error); }
+    if (!_writeStillAllowed()) return Promise.resolve(false);
+    return _ensureOpen().then(async function() {
+      var timestamp = Date.now();
+      var records = [];
+      for (var i = 0; i < frozen.length; i++) {
+        var item = frozen[i];
+        var compressed = await SaveCompression.compress(item.json);
+        var isCompressed = !!(_available && _db && compressed !== item.json);
+        records.push({
+          id: item.id,
+          type: item.meta.type || 'manual',
+          name: item.meta.name || item.id,
+          timestamp: timestamp,
+          turn: item.meta.turn != null ? item.meta.turn : 0,
+          scenarioName: item.meta.scenarioName || '',
+          eraName: item.meta.eraName || '',
+          date: item.meta.date || '',
+          dynastyPhase: item.meta.dynastyPhase || '',
+          snapshotId: item.meta.snapshotId || '',
+          commitState: item.meta.commitState || '',
+          gameState: isCompressed ? compressed : item.json,
+          _compressed: isCompressed
+        });
+      }
+      if (!_writeStillAllowed()) return false;
+      return _putSaveRecordsAtomic(records, _writeStillAllowed);
+    });
+  }
+
   /** 读取游戏存档（7.1: 支持gzip解压，兼容旧存档） */
   function load(id) {
     return _ensureOpen().then(function() {
@@ -585,10 +722,33 @@ var TM_SaveDB = (function() {
     try { return 'j:' + JSON.stringify(payload); } catch (_) { return null; }
   }
 
+  function _migrationStableValue(value) {
+    if (Array.isArray(value)) return value.map(_migrationStableValue);
+    if (value && typeof value === 'object') {
+      var out = {};
+      Object.keys(value).sort().forEach(function(key) { out[key] = _migrationStableValue(value[key]); });
+      return out;
+    }
+    return value;
+  }
+
+  function _migrationMetadataSignature(record) {
+    if (!record || typeof record !== 'object') return null;
+    var metadata = {};
+    Object.keys(record).sort().forEach(function(key) {
+      if (key === 'id' || key === 'gameState' || key === '_compressed') return;
+      metadata[key] = _migrationStableValue(record[key]);
+    });
+    try { return JSON.stringify(metadata); } catch (_) { return null; }
+  }
+
   function _migrationRecordsEquivalent(left, right) {
     var leftSig = _migrationPayloadSignature(left);
     var rightSig = _migrationPayloadSignature(right);
-    return leftSig != null && rightSig != null && leftSig === rightSig;
+    var leftMeta = _migrationMetadataSignature(left);
+    var rightMeta = _migrationMetadataSignature(right);
+    return leftSig != null && rightSig != null && leftSig === rightSig &&
+      leftMeta != null && rightMeta != null && leftMeta === rightMeta;
   }
 
   async function _prepareMigrationRecords(records, sourceTag) {
@@ -767,6 +927,7 @@ var TM_SaveDB = (function() {
   return {
     open: open,
     save: save,
+    saveManyAtomic: saveManyAtomic,
     load: load,
     list: list,
     delete: deleteSave,

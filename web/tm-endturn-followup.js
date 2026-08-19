@@ -217,13 +217,6 @@
     }
     function _recordNpcDeepApplyFailure(id, outcome) {
       var error = outcome && outcome.error;
-      if (!Array.isArray(GM._npcDeepApplyFailures)) GM._npcDeepApplyFailures = [];
-      GM._npcDeepApplyFailures.push({
-        id: id,
-        turn: GM.turn || 0,
-        message: String(error && (error.message || error) || 'unknown apply error')
-      });
-      if (GM._npcDeepApplyFailures.length > 10) GM._npcDeepApplyFailures = GM._npcDeepApplyFailures.slice(-10);
       try { if (typeof recordSubcallError === 'function') recordSubcallError(id, 'apply', error || new Error('NPC deep result apply failed')); } catch (_) {}
     }
       // §5 sc15-sc27 后续子调用 + 收尾（NPC 深度·势力·财政·军事·审计·丰化·叙事）

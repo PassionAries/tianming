@@ -120,7 +120,7 @@ function migrateLegacyRuntimeMap(legacyMap) {
   var migrated = cloneMapValue(legacyMap);
   normalizeGameMapRuntime(migrated);
   migrated.mapSchemaVersion = TM_RUNTIME_MAP_SCHEMA_VERSION;
-  if (typeof GM !== 'undefined' && GM) GM.mapData = migrated;
+  if (typeof GM !== 'undefined' && GM) GM.mapData = migrated; // arch-ok: runtime-map owner performs the one-time legacy map migration
   return migrated;
 }
 

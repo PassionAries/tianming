@@ -15,7 +15,7 @@
 //   ⑥ 写即报告(产出焊缝:type:'change' 与模式 a 同构·render 一视同仁·_turnReport 直接 push)
 //
 // 焊死:写=报告条目。`_turnReport` 在 `_*` 黑名单内→**直接 push**(不经守护写·守护写不能改 _ 字段)。
-// 3 工具:set_field / adjust_field / push_field(通用·path 化·任意 GM 字段)。语义糖(任免/调动)留 S4 按需。
+// 3 工具:set_field / adjust_field / push_field(path 化；push 仅开放 evtLog，军队走领域 sink)。语义糖(任免/调动)留 S4 按需。
 // ============================================================
 
 (function (root) {
@@ -584,7 +584,7 @@
   var DEFS = [
     { name: 'set_field', description: '设置存档任意字段为新值(路径化)。如 path="chars.0.mood" value="忧"。用于剧情/心境/关系等软字段。【勿用于国库/任职等硬核结构化账·那些用 adjust_treasury/appoint_official】', parameters: { type: 'object', properties: { path: { type: 'string' }, value: { description: '新值·任意类型(数/串/对象/数组)' }, reason: { type: 'string', description: '推演依据·会进回合报告' } }, required: ['path', 'value'] } },
     { name: 'adjust_field', description: '对数值字段增减(在原值上 +delta)。如 path="minxin" delta=-5。用于软数值。【国库增减用 adjust_treasury·勿裸改 guoku】', parameters: { type: 'object', properties: { path: { type: 'string' }, delta: { type: 'number' }, reason: { type: 'string', description: '推演依据·会进回合报告' } }, required: ['path', 'delta'] } },
-    { name: 'push_field', description: '向数组字段追加一项。如 path="evtLog" value={turn,type,text}。新增事件/记录/条目时用。', parameters: { type: 'object', properties: { path: { type: 'string' }, value: { description: '要追加的项·任意类型' }, reason: { type: 'string', description: '推演依据·会进回合报告' } }, required: ['path', 'value'] } },
+    { name: 'push_field', description: '向已声明的事件日志 evtLog 追加一项，value 必须是 {turn?,type?,text,time?} 且 text 非空。人物/战争/奏疏/灾害等集合必须用对应领域工具。', parameters: { type: 'object', properties: { path: { type: 'string', description: '当前只允许 evtLog' }, value: { type: 'object', properties: { turn: { type: 'integer', minimum: 0 }, type: { type: 'string' }, text: { type: 'string' }, time: { type: 'string' } }, required: ['text'], additionalProperties: false }, reason: { type: 'string', description: '推演依据·会进回合报告' } }, required: ['path', 'value'] } },
     // ── 语义写工具:硬核结构化账走真引擎(裸 path 写会落错字段) ──
     { name: 'adjust_treasury', description: '增减国库(走财政引擎·正确记账+面板同步)。delta 负=支出(赈灾/赏赐/军费)·正=入账(贡赋/赔款/互市)。currency: money(默认)/grain/cloth。**改国库必须用此·勿用 set_field/adjust_field 裸改 guoku**。', parameters: { type: 'object', properties: { delta: { type: 'number' }, currency: { type: 'string', description: 'money(默认)/grain/cloth' }, reason: { type: 'string', description: '推演依据·会进回合报告' } }, required: ['delta'] } },
     { name: 'appoint_official', description: '任命官员到某职位(走人事引擎·联动仕途/俸禄/公库/势力)。**改任职用此·勿裸改 chars**。', parameters: { type: 'object', properties: { name: { type: 'string', description: '人物名' }, position: { type: 'string', description: '官职' }, reason: { type: 'string' } }, required: ['name', 'position'] } },

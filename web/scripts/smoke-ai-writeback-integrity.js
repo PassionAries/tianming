@@ -210,6 +210,38 @@ async function main() {
   check(compatibleMerge.ok === true && ctx.GM.custom.settings.enabled === false && ctx.GM.custom.settings.nested.level === 2,
     'schema-compatible scalar leaf merge must remain available');
 
+  // B5. 通用 push 必须逐集合声明元素 schema；领域集合不能靠“目标是数组”就塞入畸形元素。
+  ctx.GM = baseGM({
+    chars: [{ name: '真人', id: 'char-real', alive: true }],
+    activeWars: [{ id: 'war-1', attacker: '甲', defender: '乙', status: 'active' }],
+    memorials: [], evtLog: [], custom: { score: 40 }
+  });
+  const malformedPush = ctx.applyAITurnChanges({
+    changes: [
+      { path: 'custom.score', op: 'delta', delta: 5, reason: '合法兄弟项也须回滚' },
+      { path: 'activeWars', op: 'push', value: { wrongField: true } },
+      { path: 'chars', op: 'push', value: '不是人物对象' },
+      { path: 'memorials', op: 'push', value: 123 }
+    ]
+  });
+  check(malformedPush.ok === false && malformedPush.rolledBack === true,
+    'undeclared collection push schemas reject the whole AI batch');
+  check(ctx.GM.custom.score === 40 && ctx.GM.activeWars.length === 1 && ctx.GM.chars.length === 1 && ctx.GM.memorials.length === 0,
+    'malformed push rollback restores all sibling writes and collections');
+  check(malformedPush.applied.failed.filter((row) => /declared collection schema or domain operation/.test(row.reason || '')).length === 3,
+    'war, character and memorial push rejections remain individually observable');
+
+  const eventPush = ctx.applyAITurnChanges({
+    changes: [{ path: 'evtLog', op: 'push', value: { turn: 9, type: '政务', text: '核饷毕' } }]
+  });
+  check(eventPush.ok === true && ctx.GM.evtLog.length === 1 && ctx.GM.evtLog[0].text === '核饷毕',
+    'declared evtLog element schema preserves the legitimate append path');
+  const badEventPush = ctx.applyAITurnChanges({
+    changes: [{ path: 'evtLog', op: 'push', value: { turn: '9', text: '', unknown: true } }]
+  });
+  check(badEventPush.ok === false && badEventPush.rolledBack === true && ctx.GM.evtLog.length === 1,
+    'evtLog schema rejects wrong types, empty text and unknown fields without disturbing prior events');
+
   // C. faction leader 与 army commander 的最终 sink 只接受真实活人，并同步所有镜像。
   ctx.GM = baseGM({
     chars: [{ name: '韩旷', id: 'char_hankuang', alive: true }, { name: '亡将', alive: false, dead: true }],

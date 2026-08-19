@@ -102,7 +102,7 @@ render 从 `_turnReport` 渲染 → **UI/报告构造上不可能背离状态**�
 
 ### 4.2 守护写工具(全局·自主·复用现成)
 - **核心复用** applier 的 `_applyPathSet`/`_applyPathPush`/`_applyPathDelta` + `_isPathBlocked`。
-- 形态:通用 `set_field`/`push_field`/`adjust_field`(path 化·任意 GM 字段) + 少量语义糖(任命/调动/发事件…→ 内部仍走通用写+引擎入口)。
+- 形态:`set_field`/`adjust_field` 只改已声明标量；`push_field` 仅向有元素 schema 的 `evtLog` 追加，人物/战争/奏疏/灾害等集合走领域工具；另有任命/调动等语义写口。
 - 每次写:① 黑名单拦截 ② clamp/类型校验 ③ 引用完整性 ④ 玩家保护 ⑤ **引擎让步标记**(写引擎域→打标→systems/派生重算见标即跳) ⑥ 成功 push `_turnReport`。
 - 这套**就是产出**(写=报告条目)，焊死。
 

@@ -44,8 +44,8 @@ function makeGM() {
   r = await WT.handle('adjust_field', { path: 'agentTest.counter', delta: 5, reason: '增5' }, ctx);
   assert(r.ok && gm.agentTest.counter === 15, 'adjust_field 真改(10+5=15)');
 
-  r = await WT.handle('push_field', { path: 'agentTest.list', value: { x: 1 }, reason: '追加' }, ctx);
-  assert(r.ok && gm.agentTest.list.length === 1 && gm.agentTest.list[0].x === 1, 'push_field 真追加数组');
+  r = await WT.handle('push_field', { path: 'evtLog', value: { turn: 7, type: '测试', text: '守护追加' }, reason: '追加' }, ctx);
+  assert(r.ok && gm.evtLog.length === 1 && gm.evtLog[0].text === '守护追加', 'push_field 只向带元素 schema 的 evtLog 真追加');
 
   // ── ⑥ 写即报告(产出焊缝)──
   assert(Array.isArray(gm._turnReport) && gm._turnReport.length === 3, '3 次成功写 → _turnReport 3 条');

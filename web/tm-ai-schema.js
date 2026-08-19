@@ -253,7 +253,7 @@
     institutions:       { type: 'array', desc: '制度（旧格式）', consumedBy: ['ai-change-applier'] },
     regions:            { type: 'array', desc: '地区（旧格式）', consumedBy: ['ai-change-applier'] },
     localActions:       { type: 'array', desc: '地方行动（旧格式）', consumedBy: ['ai-change-applier'] },
-    anyPathChanges:     { type: 'array', desc: '运行态 GM 任意路径变更（set/delta/push/merge/delete；拒绝 P.*、内部/原型/死亡/任职/首领/统帅路径）', consumedBy: ['endturn-apply-stages', 'ai-change-applier'] },
+    anyPathChanges:     { type: 'array', desc: '运行态 GM 守护路径变更（set/delta/merge/delete；push 仅限已声明集合 evtLog，armies 转军队领域入口；拒绝 P.*、内部/原型/死亡/任职/首领/统帅路径）', consumedBy: ['endturn-apply-stages', 'ai-change-applier'] },
     geoData:            { type: 'object', desc: '地理推算数据（行军/围城需要）' },
     memorials:          { type: 'array', desc: '奏疏文本' },
     letters:            { type: 'array', desc: 'NPC 主动传书' },

@@ -1352,8 +1352,8 @@
     tp += '        - 叙事里一定要写明"帑廪已空·户部尚书泣请/南京仓无可调/漕运绝流"而不得回避\n';
     tp += '  · 势力/党派/阶层/区域变化 → faction_updates / party_updates / class_updates / region_updates\n';
     tp += '  · 工程/运动/战役启动 → project_updates 保存进度；相应 fiscal_adjustments 记支出\n';
-    tp += '  · 任何其他非敏感深层字段（人物属性、忠诚、好感、记忆、派系关系、异象、科举阶段等）→ anyPathChanges op:"set/delta/push/merge"\n';
-    tp += '    ★ anyPathChanges/changes 严禁写任意层级 _内部字段、__proto__/constructor/prototype、人物死亡、官职 holder、势力首领、军队统帅；这些必须走上列结构化语义字段。delta 必须是真数值，不得用字符串数字。\n';
+    tp += '  · 任何其他非敏感深层字段（人物属性、忠诚、好感、记忆、派系关系、异象、科举阶段等）→ anyPathChanges op:"set/delta/merge"；通用 push 仅允许 evtLog，军队追加会转军队领域入口\n';
+    tp += '    ★ anyPathChanges/changes 严禁写任意层级 _内部字段、__proto__/constructor/prototype、人物死亡、官职 holder、势力首领、军队统帅；人物/战争/奏疏/灾害等集合增项必须走上列结构化语义字段。delta 必须是真数值，不得用字符串数字。\n';
     tp += '  · 重大事件名望(resources.fame ±·经 char_updates/anyPathChanges)：平叛克捷/外交建功/百姓立生祠/退隐著书/著文传世 名望涨；重大冤案/党争失势贬谪/私德家族丑闻 名望跌；投敌叛乱 名望崩。仅限重大事件——日常往来好恶另有系统结算·勿在此重复。' + String.fromCharCode(10);
     tp += '※ 功名(gongming·见 npc-hearts·累积政绩资历·六阶 未识/有闻/清誉/儒望/朝宗/师表)是升迁举荐主要依据：擢人补缺优先功名高者(任人唯贤)；功名浅者骤擢高位=幸进，会招言官非议、清议哗然(应在叙事/npc_actions 体现)。功名低者勿越级保举。三品以上大员擢用尤重功名与资历。\n';
     tp += '※ 出身(chushen·见 npc-hearts·功名的资格半边=入仕所凭)：路径(科举/门荫/纳赀捐纳/军功/吏进/布衣) · 科第(进士/举人/生员…) · 荣衔(翰林/庶吉士/科道) · 正途/异途 · 清流/中流/浊流 · 仕途天花板。规则：①仕途循资不得逾出身天花板——举人/监生/生员/捐纳之流难入阁部清要(政治区三品以上)，越次擢用招清议大哗、皇威损；②清流(翰林/科道)名望素著、阁部储望，异途(捐纳/恩幸)易为清议所讥；③党派归属顺出身——清流出身亲清流党、异途亲浊流恩幸。授功名走 gongming_grants(奏荫 menyin/捐例 nazi/录军功 junggong/吏进 lijin/特赐进士 enci/馆选加衔 honor)；捐纳卖官解国库燃眉但败坏铨政清议。\n';

@@ -1127,7 +1127,7 @@ function computeIntersection(p1, p2, edge, bounds) {
 function renderHighlights(ctx) {
   var state = GM.mapData.state;
 
-  if (state.hoveredCityId) {
+  if (state.hoveredCityId != null) {
     var polygon = GM.mapData.polygons[state.hoveredCityId];
     if (polygon) {
       ctx.beginPath();
@@ -1149,7 +1149,7 @@ function renderHighlights(ctx) {
     }
   }
 
-  if (state.selectedCityId && state.selectedCityId !== state.hoveredCityId) {
+  if (state.selectedCityId != null && state.selectedCityId !== state.hoveredCityId) {
     var polygon = GM.mapData.polygons[state.selectedCityId];
     if (polygon) {
       ctx.beginPath();
@@ -1354,7 +1354,9 @@ function getCityAtPosition(x, y) {
   for (var cityId in GM.mapData.polygons) {
     var polygon = GM.mapData.polygons[cityId];
     if (isPointInPolygon(mapX, mapY, polygon)) {
-      return parseInt(cityId);
+      // 城市键允许数字、字符串和 UUID。对象键在运行时本来就是字符串，
+      // 强转数字会把 UUID 变成 NaN，也会让合法的 "0" 在调用方被当作不存在。
+      return cityId;
     }
   }
 
@@ -1390,7 +1392,7 @@ function initMapInteraction() {
     if (GM.mapData.state.hoveredCityId !== cityId) {
       GM.mapData.state.hoveredCityId = cityId;
       _scheduleRender();
-      canvas.style.cursor = cityId ? 'pointer' : 'default';
+      canvas.style.cursor = cityId != null ? 'pointer' : 'default';
     }
   });
 
@@ -1401,7 +1403,7 @@ function initMapInteraction() {
 
     var cityId = getCityAtPosition(x, y);
 
-    if (cityId) {
+    if (cityId != null) {
       GM.mapData.state.selectedCityId = cityId;
       renderMap();
       showCityInfo(cityId);
@@ -1472,45 +1474,73 @@ function showCityInfo(cityId) {
   var faction = findFacByName(city.owner);
   // faction may be null if owner not found — safe, not dereferenced below
 
-  var html = '<div style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg);border:2px solid var(--gold);border-radius:0.5rem;padding:1.5rem;min-width:300px;z-index:10000;">';
-  html += '<h3 style="color:var(--gold);margin-bottom:1rem;">' + city.name + '</h3>';
-  html += '<div style="margin-bottom:0.5rem;"><strong>归属：</strong>' + city.owner + '</div>';
-    html += '<div style="margin-bottom:0.5rem;"><strong>人口：</strong>' + _mapSystemFiniteNumberOr(city.population, 0).toLocaleString() + '</div>';
-  html += '<div style="margin-bottom:0.5rem;"><strong>收入：</strong>' + (city.income||0).toLocaleString() + ' 金/月</div>';
+  var overlay = document.createElement('div');
+  overlay.id = 'city-info-overlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10001;'; // 须压过 map-viewer-overlay(10000)·旧9999令城市详情被压在地图下(2026-07-04 审查定罪)
+
+  var panel = document.createElement('div');
+  panel.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg);border:2px solid var(--gold);border-radius:0.5rem;padding:1.5rem;min-width:300px;z-index:10000;';
+
+  var title = document.createElement('h3');
+  title.style.cssText = 'color:var(--gold);margin-bottom:1rem;';
+  title.textContent = String(city.name == null ? '' : city.name);
+  panel.appendChild(title);
+
+  function appendField(label, value) {
+    var row = document.createElement('div');
+    row.style.cssText = 'margin-bottom:0.5rem;';
+    var strong = document.createElement('strong');
+    strong.textContent = label + '：';
+    row.appendChild(strong);
+    row.appendChild(document.createTextNode(String(value == null ? '' : value)));
+    panel.appendChild(row);
+  }
+
+  appendField('归属', city.owner);
+  appendField('人口', _mapSystemFiniteNumberOr(city.population, 0).toLocaleString());
+  appendField('收入', _mapSystemFiniteNumberOr(city.income, 0).toLocaleString() + ' 金/月');
+
   var _cgv = Number(city.garrison || 0);
   if (_cgv > 0) {
-    html += '<div style="margin-bottom:0.5rem;"><strong>驻军：</strong>' + _cgv.toLocaleString() + '</div>';
+    appendField('驻军', _cgv.toLocaleString());
   } else {
     // 无逐块驻军实体：兜底显所属势力机动军力（游牧显「机动兵力」·余显「势力军力」），免得游牧/无常驻势力显 0
     var _cms = faction && Number(faction.militaryStrength || faction.military || 0);
     if (isFinite(_cms) && _cms > 0) {
       var _cnomad = /部落|游牧|游猎/.test(String((faction && faction.type) || '') + String((faction && faction.traits) ? faction.traits.join('') : ''));
-      html += '<div style="margin-bottom:0.5rem;"><strong>' + (_cnomad ? '机动兵力' : '势力军力') + '：</strong>' + _cms.toLocaleString() + '</div>';
+      appendField(_cnomad ? '机动兵力' : '势力军力', _cms.toLocaleString());
     } else {
-      html += '<div style="margin-bottom:0.5rem;"><strong>驻军：</strong>0</div>';
+      appendField('驻军', 0);
     }
   }
 
-  if ((city.neighbors||[]).length > 0) {
-    html += '<div style="margin-top:1rem;"><strong>相邻城市：</strong></div>';
-    html += '<div style="font-size:0.9rem;color:var(--txt-s);">';
-    (city.neighbors||[]).forEach(function(neighborId) {
-      var neighbor = GM.mapData.cities[neighborId];
-      if (neighbor) {
-        html += neighbor.name + ' (' + neighbor.owner + ')、';
-      }
-    });
-    html = html.slice(0, -1);
-    html += '</div>';
+  var neighborLabels = [];
+  (city.neighbors || []).forEach(function(neighborId) {
+    var neighbor = GM.mapData.cities[neighborId];
+    if (neighbor) neighborLabels.push(String(neighbor.name == null ? '' : neighbor.name) + ' (' + String(neighbor.owner == null ? '' : neighbor.owner) + ')');
+  });
+  if (neighborLabels.length > 0) {
+    var neighborTitle = document.createElement('div');
+    neighborTitle.style.cssText = 'margin-top:1rem;';
+    var neighborStrong = document.createElement('strong');
+    neighborStrong.textContent = '相邻城市：';
+    neighborTitle.appendChild(neighborStrong);
+    panel.appendChild(neighborTitle);
+
+    var neighborList = document.createElement('div');
+    neighborList.style.cssText = 'font-size:0.9rem;color:var(--txt-s);';
+    neighborList.textContent = neighborLabels.join('、');
+    panel.appendChild(neighborList);
   }
 
-  html += '<button class="bt" onclick="closeCityInfo()" style="width:100%;margin-top:1rem;">关闭</button>';
-  html += '</div>';
-
-  var overlay = document.createElement('div');
-  overlay.id = 'city-info-overlay';
-  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10001;'; // 须压过 map-viewer-overlay(10000)·旧9999令城市详情被压在地图下(2026-07-04 审查定罪)
-  overlay.innerHTML = html;
+  var closeButton = document.createElement('button');
+  closeButton.type = 'button';
+  closeButton.className = 'bt';
+  closeButton.style.cssText = 'width:100%;margin-top:1rem;';
+  closeButton.textContent = '关闭';
+  closeButton.addEventListener('click', closeCityInfo);
+  panel.appendChild(closeButton);
+  overlay.appendChild(panel);
 
   document.body.appendChild(overlay);
 }

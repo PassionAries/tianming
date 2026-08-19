@@ -49,9 +49,9 @@ endTurn → _endTurnInternal → _endTurnCore
   │ 1. prep              [onError: abort]      │ ← 7 phase·init/collect/三系统更新/官缺 sweep
   │ 2. plan-prefetch     [onError: continue]   │ ← NPC 决策器 + 长期摘要 (2 promise kickoff)
   │ 3. ai                [onError: abort]      │ ← _endTurn_aiInfer + await prefetch
-  │ 4. post-ai-edict     [onError: continue]   │ ← applyEdictActions + tyrant.applyEffects
+  │ 4. post-ai-edict     [onError: abort]      │ ← applyEdictActions + tyrant.applyEffects（状态写入原子化）
   │ 5. systems           [onError: abort]      │ ← _endTurn_updateSystems (含 GM.turn++) + edictEfficacy enqueue
-  │ 6. render-and-finalize [onError: continue] │ ← render + 4.5/4.6 + after-hooks + keju (含 deferred 路径)
+  │ 6. render-and-finalize [onError: abort]    │ ← 状态收官失败回滚；仅显式包裹的纯 UI 渲染可降级
   └────────────────────────────────────────────┘
   ┌─ post-pipeline tail ───────────────────────┐
   │ aiMemory compress / monthly chronicle       │

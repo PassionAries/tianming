@@ -8,6 +8,7 @@ const vm = require('vm');
 const WEB = path.resolve(__dirname, '..');
 const coreSource = fs.readFileSync(path.join(WEB, 'tm-endturn-core.js'), 'utf8');
 const systemsSource = fs.readFileSync(path.join(WEB, 'tm-endturn-systems.js'), 'utf8');
+const pipelineStepsSource = fs.readFileSync(path.join(WEB, 'tm-endturn-pipeline-steps.js'), 'utf8');
 let assertions = 0;
 function ok(value, label) {
   if (!value) throw new Error('[smoke-endturn-transaction-failures] ' + label);
@@ -45,11 +46,13 @@ vm.runInContext(sourceBetween(coreSource, 'async function _tmRunCriticalEndTurnS
 vm.runInContext(sourceBetween(coreSource, 'async function _runPreSubmitPartyClassCalibration()', 'async function _endTurnInternal'), ctx);
 vm.runInContext(sourceBetween(coreSource, 'function _tmCaptureEndTurnObject', 'async function _tmFinalizeEndTurnTransaction'), ctx);
 vm.runInContext(systemsSource, ctx);
+vm.runInContext(pipelineStepsSource, ctx);
 
 function resetWorld(extra) {
   ctx.GM = Object.assign({ turn: 4, sid: 's1', _campaignId: 'c1', busy: false, marker: 10, armies: [{ soldiers: 100 }], treasury: 50 }, extra || {});
-  ctx.P = { marker: 'template', conf: {}, ai: {}, battleConfig: {} };
-  ctx.TM = { errors: { capture() {} } };
+  ctx.P = { marker: 'template', conf: {}, ai: {}, battleConfig: {}, time: { daysPerTurn: 30 }, keju: {} };
+  const endturn = ctx.TM && ctx.TM.Endturn;
+  ctx.TM = { errors: { capture() {} }, Endturn: endturn };
   ctx._tmLoadGen = 0;
   delete ctx.BattleEngine;
   delete ctx.GuokuEngine;
@@ -58,6 +61,14 @@ function resetWorld(extra) {
   delete ctx.HujiDeepFill;
   delete ctx.updateProvinceEconomy;
   delete ctx.IntegrationBridge;
+  delete ctx.TMArmory;
+  delete ctx._endTurn_render;
+  delete ctx._settleCourtMeter;
+  delete ctx.advanceCharTravelByDays;
+  delete ctx.advanceKejuByDays;
+  delete ctx.checkKejuTrigger;
+  delete ctx.EndTurnHooks;
+  delete ctx._endTurn_saveSnapshot;
   ctx.SubTickRunner = { run() {} };
 }
 
@@ -72,6 +83,32 @@ function comparableWorld(value) {
   delete copy._lastEndTurnRollback;
   delete copy._endTurnBusy;
   return JSON.stringify(copy);
+}
+
+function stepByName(name) {
+  return ctx.TM.Endturn.PipelineSteps.list.find(step => step && step.name === name);
+}
+
+function buildStepCtx(input) {
+  return {
+    input: Object.assign({}, input || {}),
+    results: { aiResult: {} },
+    deferredSteps: [],
+    meta: {}
+  };
+}
+
+async function expectStepFailureRollback(step, setup, message, label, input) {
+  resetWorld();
+  const beforeGM = comparableWorld(ctx.GM);
+  const beforeP = comparableWorld(ctx.P);
+  const txn = ctx._tmCaptureEndTurnTransaction();
+  setup();
+  const stepCtx = buildStepCtx(input);
+  ok(await expectFailure(step.fn(stepCtx), message), label + ' failure propagates out of the pipeline step');
+  ctx._tmRollbackEndTurnTransaction(txn, new Error(message));
+  ok(comparableWorld(ctx.GM) === beforeGM && comparableWorld(ctx.P) === beforeP,
+    label + ' partial state writes roll back atomically');
 }
 
 async function main() {
@@ -146,6 +183,74 @@ async function main() {
     ok(comparableWorld(ctx.GM) === beforeGM && comparableWorld(ctx.P) === beforeP,
       entry[0] + ' partial GM/P writes roll back to the pre-turn snapshot');
   }
+
+  const systemsStep = stepByName('systems');
+  const finalizeStep = stepByName('render-and-finalize');
+  ok(systemsStep && systemsStep.onError === 'abort', 'systems keeps an abort policy for resource-ledger failures');
+  ok(finalizeStep && finalizeStep.onError === 'abort', 'state finalization aborts instead of committing a partial world');
+
+  await expectStepFailureRollback(systemsStep, () => {
+    ctx.TMArmory = {
+      async runTurn() {
+        ctx.GM.armoryMaterials = 1;
+        throw new Error('armory-partial-failure');
+      }
+    };
+  }, 'armory-partial-failure', 'armory production', { _systemsRan: true });
+
+  await expectStepFailureRollback(finalizeStep, () => {
+    ctx.advanceCharTravelByDays = async function() {
+      ctx.GM.travelDays = 29;
+      throw new Error('travel-partial-failure');
+    };
+  }, 'travel-partial-failure', 'character travel');
+
+  await expectStepFailureRollback(finalizeStep, () => {
+    ctx.TM.FactionNpcOffice = {
+      async generate() {
+        ctx.GM.npcOffice = 'partial-appointment';
+        throw new Error('npc-office-partial-failure');
+      }
+    };
+  }, 'npc-office-partial-failure', 'NPC office finalization');
+
+  await expectStepFailureRollback(finalizeStep, () => {
+    ctx.TM.FactionNpcGuoku = {
+      async generate() {
+        ctx.GM.npcTreasury = -999;
+        throw new Error('npc-guoku-partial-failure');
+      }
+    };
+  }, 'npc-guoku-partial-failure', 'NPC treasury finalization');
+
+  resetWorld();
+  ctx._endTurn_render = function() { throw new Error('ui-render-only-failure'); };
+  const uiCtx = buildStepCtx();
+  await finalizeStep.fn(uiCtx);
+  ok(uiCtx.results.renderError && uiCtx.results.renderError.message === 'ui-render-only-failure',
+    'pure UI rendering failure remains explicitly degradable');
+
+  resetWorld({ _pendingShijiModal: { courtDone: false, aiReady: false, payload: null } });
+  ctx.P.keju = { currentExam: true };
+  const deferredBeforeGM = comparableWorld(ctx.GM);
+  const deferredBeforeP = comparableWorld(ctx.P);
+  txn = ctx._tmCaptureEndTurnTransaction();
+  let deferredSaveCalls = 0;
+  ctx._endTurn_saveSnapshot = async function() { deferredSaveCalls++; return true; };
+  ctx.advanceKejuByDays = async function() {
+    ctx.GM.kejuProgress = 99;
+    throw new Error('deferred-keju-partial-failure');
+  };
+  const deferredCtx = buildStepCtx();
+  deferredCtx.meta.transaction = txn;
+  await finalizeStep.fn(deferredCtx);
+  const deferredFinalize = ctx.GM._pendingShijiModal && ctx.GM._pendingShijiModal.deferredPhase5;
+  ok(typeof deferredFinalize === 'function', 'deferred court close registers its critical finalizer');
+  ok(await expectFailure(deferredFinalize(), 'deferred-keju-partial-failure'),
+    'deferred Keju failure reaches the court-close transaction boundary');
+  ok(deferredSaveCalls === 0, 'deferred final save is not attempted after a state finalizer fails');
+  ok(comparableWorld(ctx.GM) === deferredBeforeGM && comparableWorld(ctx.P) === deferredBeforeP,
+    'deferred finalization restores GM/P to the pre-turn snapshot');
 
   console.log('[smoke-endturn-transaction-failures] PASS assertions=' + assertions);
 }

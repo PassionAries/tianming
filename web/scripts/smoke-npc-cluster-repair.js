@@ -30,8 +30,8 @@ function extractFn(anchor) {
 
 // ① 应用同源
 ok(/var _applyNpcDeepResult = function\(pND\) \{/.test(src), '① _applyNpcDeepResult 已定义');
-ok(/_applyNpcDeepResult\(p15\);/.test(src), '① sc15 走共享应用');
-ok(/_applyNpcDeepResult\(p15n\);/.test(src), '① sc15n 走共享应用(原只存不用)');
+ok(/_applyNpcDeepResultAtomic\(_applyNpcDeepResult,\s*p15\)/.test(src), '① sc15 走共享原子应用');
+ok(/_applyNpcDeepResultAtomic\(_applyNpcDeepResult,\s*p15n\)/.test(src), '① sc15n 走共享原子应用(原只存不用)');
 ok(src.indexOf('p15.mood_shifts.forEach') < 0 && src.indexOf('p15.cascade_effects') < 0, '① sc15 旧内联应用块已删(无双算)');
 ok(src.indexOf('GM._factionUndercurrents.push(Object.assign({ turn: GM.turn||1, _fromSc15n: true }, fu))') < 0, '① sc15n 旧 append 版 undercurrents 已删(共享函数接管)');
 

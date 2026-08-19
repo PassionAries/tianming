@@ -864,6 +864,21 @@ var PREF_CONF_KEYS = [
   'insecureTlsRelay'
 ];
 
+function _recoverPendingTurnDataPublish() {
+  if (!(GM && GM._pendingTurnDataPublish && window.tianming && typeof window.tianming.recoverTurnData === 'function')) return;
+  var targetGM = GM;
+  var marker = deepClone(GM._pendingTurnDataPublish);
+  window.tianming.recoverTurnData(marker).then(function(result) {
+    if (GM !== targetGM || !GM._pendingTurnDataPublish || GM._pendingTurnDataPublish.transactionId !== marker.transactionId) return;
+    if (!(result && result.success === true)) throw new Error(result && result.error || '回合分卷恢复失败');
+    delete GM._pendingTurnDataPublish;
+  }).catch(function(error) {
+    if (GM !== targetGM) return;
+    try { if (window.TM && TM.errors && TM.errors.capture) TM.errors.capture(error, 'fullLoadGame] recover turn-data'); } catch (_) {}
+    try { if (typeof toast === 'function') toast('存档已载入；回合分卷仍待补发，将在下次读档重试。'); } catch (_) {}
+  });
+}
+
 function fullLoadGame(data, loadOptions){
   loadOptions = loadOptions || {};
   // 跨档保留 API 设置：localStorage 的 tm_api 是用户的"机器"配置·不应被存档覆盖
@@ -1189,6 +1204,8 @@ function fullLoadGame(data, loadOptions){
     if(typeof renderGameCivic==="function")renderGameCivic();
     if(typeof renderRenwu==="function")renderRenwu();
     if(typeof renderSidePanels==="function")renderSidePanels();
+
+    _recoverPendingTurnDataPublish();
 
     toast("\u2705 \u5DF2\u52A0\u8F7D: T"+GM.turn+" "+getTSText(GM.turn));
   }else{

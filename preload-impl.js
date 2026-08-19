@@ -265,6 +265,18 @@ contextBridge.exposeInMainWorld('tianming', {
     ipcRenderer.invoke('open-scenarios-dir'),
 
   // === 每回合数据 ===
+  stageTurnData: (payload) =>
+    ipcRenderer.invoke('stage-turn-data', payload),
+
+  publishTurnData: (payload) =>
+    ipcRenderer.invoke('publish-turn-data', payload),
+
+  recoverTurnData: (payload) =>
+    ipcRenderer.invoke('recover-turn-data', payload),
+
+  discardTurnData: (payload) =>
+    ipcRenderer.invoke('discard-turn-data', payload),
+
   writeTurnData: (saveName, turn, data) =>
     ipcRenderer.invoke('write-turn-data', { saveName, turn, data }),
 

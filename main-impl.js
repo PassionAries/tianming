@@ -18,6 +18,7 @@ const AdmZip = require('adm-zip');
 const yauzl = require('yauzl');
 const { pipeline } = require('stream');
 const { autoUpdater } = require('electron-updater');
+const { createTurnDataCommitter } = require('./main-turn-data-commit.js');
 
 // ============================================================
 //  基本配置
@@ -3167,66 +3168,28 @@ ipcMain.handle('open-scenarios-dir', () => {
 //  每回合数据 (turn-data) IPC
 // ============================================================
 
-// 写入一回合的数据  { saveName, turn, data }
-// data 结构：{ context, playerInput, aiResults, varChanges, scenario (仅首回合) }
-ipcMain.handle('write-turn-data', async (event, { saveName, turn, data }) => {
+const turnDataCommitter = createTurnDataCommitter({
+  fs, path, crypto, turnDataDir: TURN_DATA_DIR, turnDataRoot, turnSeg,
+  ensureWritableDir, writeJson, writeJsonAtomic, writeFileAtomic
+});
+
+async function runTurnDataCommit(action, payload) {
   try {
     ensureSaveDir();
-    const saveRoot = turnDataRoot(saveName, true);
-    const turnDir = path.join(saveRoot, turnSeg(turn));
-    const staging = turnDir + '.tmp-' + process.pid + '-' + crypto.randomUUID();
-    fs.mkdirSync(staging, { recursive: true });
-
-    try {
-      // 1. 主上下文文件（兼容旧格式：如果data没有子结构，直接写入）
-      writeJson(path.join(staging, 'context.json'), data.context || data);
-
-      // 2. 玩家操作记录
-      if (data.playerInput) writeJson(path.join(staging, 'player-input.json'), data.playerInput);
-
-      // 3. AI推演全部结果（各Sub-call的原始返回值）
-      if (data.aiResults) writeJson(path.join(staging, 'ai-results.json'), data.aiResults);
-
-      // 4. 变量资源变化文件
-      if (data.varChanges) writeJson(path.join(staging, 'var-changes.json'), data.varChanges);
-
-      // 整回合目录一次提交；失败时旧目录保持不变。
-      const backup = turnDir + '.bak-' + process.pid + '-' + crypto.randomUUID();
-      let movedOld = false;
-      try {
-        if (fs.existsSync(turnDir)) { fs.renameSync(turnDir, backup); movedOld = true; }
-        fs.renameSync(staging, turnDir);
-        if (movedOld) fs.rmSync(backup, { recursive: true, force: true });
-      } catch (commitErr) {
-        try { if (movedOld && !fs.existsSync(turnDir) && fs.existsSync(backup)) fs.renameSync(backup, turnDir); } catch (_) {}
-        throw commitErr;
-      }
-    } catch (stageErr) {
-      try { fs.rmSync(staging, { recursive: true, force: true }); } catch (_) {}
-      throw stageErr;
-    }
-
-    // 5. 剧本快照（仅首回合或指定时保存）
-    if (data.scenario) {
-      const scenarioFile = path.join(saveRoot, 'scenario.json');
-      if (!fs.existsSync(scenarioFile)) {
-        writeJsonAtomic(scenarioFile, data.scenario);
-      }
-    }
-
-    // 6. 严格史实模式的参考文件
-    if (data.refText) {
-      const refFile = path.join(saveRoot, 'reference.txt');
-      if (!fs.existsSync(refFile)) {
-        writeFileAtomic(refFile, data.refText, 'utf-8');
-      }
-    }
-
-    return { success: true, path: turnDir };
+    return await Promise.resolve(turnDataCommitter[action](payload || {}));
   } catch (e) {
-    return { success: false, error: e.message };
+    return { success: false, error: e && e.message || String(e) };
   }
-});
+}
+
+// 新回合先写 .staging；只有 canonical 存档事务成功后才 publish 到正式回合目录。
+ipcMain.handle('stage-turn-data', (event, payload) => runTurnDataCommit('stage', payload));
+ipcMain.handle('publish-turn-data', (event, payload) => runTurnDataCommit('publish', payload));
+ipcMain.handle('recover-turn-data', (event, payload) => runTurnDataCommit('recover', payload));
+ipcMain.handle('discard-turn-data', (event, payload) => runTurnDataCommit('discard', payload));
+
+// 兼容旧 renderer：单次调用内部仍走 stage -> publish，不再维护第二套落盘实现。
+ipcMain.handle('write-turn-data', (event, payload) => runTurnDataCommit('writeLegacy', payload));
 
 // 读取某存档某回合数据（返回该回合目录下所有文件）
 ipcMain.handle('read-turn-data', async (event, { saveName, turn }) => {

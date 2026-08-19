@@ -41,6 +41,7 @@
     "files": [
       "main.js",
       "main-impl.js",
+      "main-turn-data-commit.js",
       "preload.js",
       "preload-impl.js",
       "resources/hot-update-public-key.pem",

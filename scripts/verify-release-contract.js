@@ -68,6 +68,8 @@ function main() {
   const publicKeyRel = 'resources/hot-update-public-key.pem';
   const publicKeyPath = path.join(ROOT, publicKeyRel);
   ok(files.has(publicKeyRel) && fs.existsSync(publicKeyPath), 'installer 固定携带热更新发布者公钥');
+  ok(files.has('main-turn-data-commit.js') && fs.existsSync(path.join(ROOT, 'main-turn-data-commit.js')),
+    'installer 携带回合分卷两阶段提交模块');
   const publicKey = crypto.createPublicKey(fs.readFileSync(publicKeyPath));
   ok(publicKey.asymmetricKeyType === 'ed25519', '热更新固定公钥类型为 Ed25519');
   ok(['win', 'mac', 'linux'].every(platform => String(pkg.scripts['build:' + platform] || '').includes('scripts/build-electron.js --platform ' + platform)

@@ -186,9 +186,9 @@ check('J2·指标模块先于 tm-keju.js 加载', indicatorsScriptPos >= 0 && ke
 const indicatorCalls = pipelineJs.match(/_kjUpdateIndicators\s*\(/g) || [];
 check('J3·回合管道恰有 normal/deferred 两个更新入口', indicatorCalls.length === 2);
 check('J4·deferred 路径传入 deferred ctx 并有独立诊断',
-      pipelineJs.includes('_kjUpdateIndicators(_dctx || ctx)') && pipelineJs.includes('[deferred·phase5] J1 indicators'));
+      pipelineJs.includes('_kjUpdateIndicators(_dctx || ctx)') && pipelineJs.includes("_rethrowCriticalFinalizeFailure('keju-indicators-deferred'"));
 check('J5·normal 路径传入 ctx 并有独立诊断',
-      pipelineJs.includes('_kjUpdateIndicators(ctx)') && pipelineJs.includes('[pipeline.render-finalize] J1 indicators'));
+      pipelineJs.includes('_kjUpdateIndicators(ctx)') && pipelineJs.includes("_rethrowCriticalFinalizeFailure('keju-indicators'"));
 
 // ═══════════ summary ═══════════
 console.log('\n========================================');

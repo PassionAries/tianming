@@ -13,10 +13,23 @@
   window.TM = window.TM || {};
   TM.Endturn = TM.Endturn || {};
 
+  function _rethrowCriticalFinalizeFailure(label, error) {
+    var err = error instanceof Error ? error : new Error(String(error || label || 'end-turn finalizer failed'));
+    try { if (!err.endTurnSystem) err.endTurnSystem = label || 'state-finalize'; } catch (_) {}
+    try {
+      if (window.TM && TM.errors && typeof TM.errors.capture === 'function') {
+        TM.errors.capture(err, '[endTurn] critical finalizer ' + (label || 'unknown'));
+      } else {
+        console.error('[pipeline.state-finalize] ' + (label || 'unknown'), err);
+      }
+    } catch (_) {}
+    throw err;
+  }
+
   function _normalizeTurnChangesForRender() {
     try {
       if (typeof GM === 'undefined' || !GM) return;
-      try { if (typeof ensureTurnChangesState === 'function') ensureTurnChangesState(); } catch(_) {}
+      if (typeof ensureTurnChangesState === 'function') ensureTurnChangesState();
       var tc = GM.turnChanges;
       if (!tc || typeof tc !== 'object' || Array.isArray(tc)) tc = GM.turnChanges = {};
       var buckets = ['variables', 'characters', 'factions', 'parties', 'classes', 'military', 'map'];
@@ -64,9 +77,7 @@
           return item;
         });
       });
-    } catch(e) {
-      try { console.warn('[pipeline.render-finalize] turnChanges normalize failed', e); } catch(_) {}
-    }
+    } catch(e) { _rethrowCriticalFinalizeFailure('turnChanges-normalize', e); }
   }
 
   function _scheduleNpcBehaviorPostRender(ctx) {
@@ -129,50 +140,49 @@
   }
 
   async function _runPostRenderTurnOpeners(ctx) {
-    _scheduleNpcBehaviorPostRender(ctx);
     try {
       if (typeof window !== 'undefined' && window.TM && TM.FactionIndex && TM.FactionIndex.rebuild) {
-        TM.FactionIndex.rebuild();
+        await Promise.resolve(TM.FactionIndex.rebuild());
       }
-    } catch(_fxE) { try { console.warn('[pipeline.render-finalize] _facIndex 重建失败', _fxE); } catch(_){} }
+    } catch(_fxE) { _rethrowCriticalFinalizeFailure('faction-index', _fxE); }
     try {
       if (typeof window !== 'undefined' && window.TM && TM.FactionDerived && TM.FactionDerived.compute) {
-        TM.FactionDerived.compute();
+        await Promise.resolve(TM.FactionDerived.compute());
       }
-    } catch(_dhE) { try { console.warn('[pipeline.render-finalize] derivedHealth 计算失败', _dhE); } catch(_){} }
+    } catch(_dhE) { _rethrowCriticalFinalizeFailure('faction-derived-health', _dhE); }
     try {
       if (typeof window !== 'undefined' && window.TM) {
-        if (TM.FactionDerivedEconomy && TM.FactionDerivedEconomy.compute) TM.FactionDerivedEconomy.compute();
-        if (TM.FactionDerivedCohesion && TM.FactionDerivedCohesion.compute) TM.FactionDerivedCohesion.compute();
-        if (TM.FactionDerivedStrength && TM.FactionDerivedStrength.compute) TM.FactionDerivedStrength.compute();
+        if (TM.FactionDerivedEconomy && TM.FactionDerivedEconomy.compute) await Promise.resolve(TM.FactionDerivedEconomy.compute());
+        if (TM.FactionDerivedCohesion && TM.FactionDerivedCohesion.compute) await Promise.resolve(TM.FactionDerivedCohesion.compute());
+        if (TM.FactionDerivedStrength && TM.FactionDerivedStrength.compute) await Promise.resolve(TM.FactionDerivedStrength.compute());
       }
-    } catch(_dxE) { try { console.warn('[pipeline.render-finalize] derived B1-B3 失败', _dxE); } catch(_){} }
-    _scheduleNpcBehaviorPostRender(ctx);
+    } catch(_dxE) { _rethrowCriticalFinalizeFailure('faction-derived-ledgers', _dxE); }
     try {
       if (typeof window !== 'undefined' && window.TM && TM.FactionNpcMemorial && TM.FactionNpcMemorial.generate) {
-        TM.FactionNpcMemorial.generate();
+        await Promise.resolve(TM.FactionNpcMemorial.generate());
       }
-    } catch(_npcmE) { try { console.warn('[pipeline.render-finalize] NPC memorial 生成失败', _npcmE); } catch(_){} }
+    } catch(_npcmE) { _rethrowCriticalFinalizeFailure('npc-memorial', _npcmE); }
     try {
       if (typeof window !== 'undefined' && window.TM && TM.FactionNpcEdict && TM.FactionNpcEdict.generate) {
-        TM.FactionNpcEdict.generate();
+        await Promise.resolve(TM.FactionNpcEdict.generate());
       }
-    } catch(_npceE) { try { console.warn('[pipeline.render-finalize] NPC edict 生成失败', _npceE); } catch(_){} }
+    } catch(_npceE) { _rethrowCriticalFinalizeFailure('npc-edict', _npceE); }
     try {
       if (typeof window !== 'undefined' && window.TM && TM.FactionNpcChaoyi && TM.FactionNpcChaoyi.generate) {
-        TM.FactionNpcChaoyi.generate();
+        await Promise.resolve(TM.FactionNpcChaoyi.generate());
       }
-    } catch(_npccyE) { try { console.warn('[pipeline.render-finalize] NPC chaoyi 失败', _npccyE); } catch(_){} }
+    } catch(_npccyE) { _rethrowCriticalFinalizeFailure('npc-chaoyi', _npccyE); }
     try {
       if (typeof window !== 'undefined' && window.TM && TM.FactionNpcOffice && TM.FactionNpcOffice.generate) {
-        TM.FactionNpcOffice.generate();
+        await Promise.resolve(TM.FactionNpcOffice.generate());
       }
-    } catch(_npcoE) { try { console.warn('[pipeline.render-finalize] NPC office 失败', _npcoE); } catch(_){} }
+    } catch(_npcoE) { _rethrowCriticalFinalizeFailure('npc-office', _npcoE); }
     try {
       if (typeof window !== 'undefined' && window.TM && TM.FactionNpcGuoku && TM.FactionNpcGuoku.generate) {
-        TM.FactionNpcGuoku.generate();
+        await Promise.resolve(TM.FactionNpcGuoku.generate());
       }
-    } catch(_npcgE) { try { console.warn('[pipeline.render-finalize] NPC guoku 失败', _npcgE); } catch(_){} }
+    } catch(_npcgE) { _rethrowCriticalFinalizeFailure('npc-guoku', _npcgE); }
+    _scheduleNpcBehaviorPostRender(ctx);
     try {
       if (typeof window !== 'undefined' && window.TM && TM.FactionNpcDispatchQueue && TM.FactionNpcDispatchQueue.scheduleTurnRuns) {
         TM.FactionNpcDispatchQueue.scheduleTurnRuns({ source: 'render-finalize' });
@@ -539,12 +549,12 @@
         } catch(_efE) { try { console.warn('[pipeline.systems] 御批回听失败', _efE); } catch(_){} }
         // ★军工供应链(原 armory-production 顶层 step·2026-06 折回 systems 尾部·守 audit §4 六段规范:
         //   systems 含全部子系统 tick·军工亦是其一·不另起顶层 step)·地块矿冶产原料→军工建筑耗料产军备 + 战马走马政·
-        //   纯增量·只加 GM.guoku.armory/materials·自带 try/catch 失败不阻断过回合
+        //   纯增量·只加 GM.guoku.armory/materials；属于资源账本，失败必须中止并回滚整回合。
         try {
           if (typeof window !== 'undefined' && window.TMArmory && typeof window.TMArmory.runTurn === 'function' && typeof GM !== 'undefined' && GM) {
-            window.TMArmory.runTurn(GM, {});
+            await Promise.resolve(window.TMArmory.runTurn(GM, {}));
           }
-        } catch (e) { try { console.warn('[pipeline.systems·armory-production]', e); } catch(_){} }
+        } catch (e) { _rethrowCriticalFinalizeFailure('armory-production', e); }
         ctx.input._systemsRan = true;
         return ctx;
       },
@@ -580,27 +590,27 @@
         // _renderArgs 17 字段顺序按 _endTurn_render 期望
         try {
           if (typeof window !== 'undefined' && window.TM && TM.SocialPoliticalSignals && typeof TM.SocialPoliticalSignals.recordTurnResult === 'function') {
-            ctx.results.turnResultSocialSignals = TM.SocialPoliticalSignals.recordTurnResult(GM, ctx, {
+            ctx.results.turnResultSocialSignals = await Promise.resolve(TM.SocialPoliticalSignals.recordTurnResult(GM, ctx, {
               source: 'turn-result-ai',
               turn: GM && GM.turn
-            });
+            }));
             if (ctx.results.turnResultSocialSignals && ctx.results.turnResultSocialSignals.recorded > 0) {
               if (TM.PartyClassSignalBridge && typeof TM.PartyClassSignalBridge.applyPending === 'function') {
-                ctx.results.turnResultSignalApply = TM.PartyClassSignalBridge.applyPending(GM, {
+                ctx.results.turnResultSignalApply = await Promise.resolve(TM.PartyClassSignalBridge.applyPending(GM, {
                   source: 'turn-result-ai',
                   turn: GM && GM.turn
-                });
+                }));
               } else if (typeof TM.SocialPoliticalSignals.applyPending === 'function') {
-                ctx.results.turnResultSignalApply = TM.SocialPoliticalSignals.applyPending(GM, {
+                ctx.results.turnResultSignalApply = await Promise.resolve(TM.SocialPoliticalSignals.applyPending(GM, {
                   source: 'turn-result-ai',
                   turn: GM && GM.turn
-                });
+                }));
               }
             }
           }
         } catch(_turnResultSignalE) {
           ctx.results.turnResultSocialSignalError = _turnResultSignalE;
-          try { console.warn('[pipeline.render-finalize] turn-result social signal failed', _turnResultSignalE); } catch(_) {}
+          _rethrowCriticalFinalizeFailure('turn-result-social-signals', _turnResultSignalE);
         }
         var _renderArgs = [
           ar.shizhengji || '',
@@ -635,82 +645,82 @@
           if (typeof _updatePostTurnCourtBanner === 'function') _updatePostTurnCourtBanner('aiReady');
           if (typeof hideLoading === 'function') hideLoading();
           // 4.5/4.6 仍跑·不延后 (legacy 也是这样)
-          try { if (typeof _settleCourtMeter === 'function') _settleCourtMeter(); }
-          catch(e) { try { console.warn('[pipeline.render-finalize·deferred] courtMeter', e); } catch(_){} }
-          try { if (typeof advanceCharTravelByDays === 'function') advanceCharTravelByDays((typeof _getDaysPerTurn === 'function') ? _getDaysPerTurn() : ((P.time && P.time.daysPerTurn) || 30)); }
-          catch(e) { try { console.warn('[pipeline.render-finalize·deferred] char travel', e); } catch(_){} }
+          try { if (typeof _settleCourtMeter === 'function') await Promise.resolve(_settleCourtMeter()); }
+          catch(e) { _rethrowCriticalFinalizeFailure('court-meter-deferred', e); }
+          try { if (typeof advanceCharTravelByDays === 'function') await Promise.resolve(advanceCharTravelByDays((typeof _getDaysPerTurn === 'function') ? _getDaysPerTurn() : ((P.time && P.time.daysPerTurn) || 30))); }
+          catch(e) { _rethrowCriticalFinalizeFailure('character-travel-deferred', e); }
           // Phase 5·登记到 ctx.deferredSteps·用 'court-close' as when
           ctx.deferredSteps.push({
             name: 'phase5-after-hooks-keju',
             when: 'court-close',
             fn: async function(_dctx) {
               try { if (typeof EndTurnHooks !== 'undefined' && EndTurnHooks.execute) await EndTurnHooks.execute('after'); }
-              catch(e) { try { console.warn('[deferred·phase5] after hooks', e); } catch(_){} }
+              catch(e) { _rethrowCriticalFinalizeFailure('after-hooks-deferred', e); }
               if (P.keju && (P.keju.currentExam || P.keju.currentEnke) && typeof advanceKejuByDays === 'function') {
-                try { advanceKejuByDays((typeof _getDaysPerTurn === 'function') ? _getDaysPerTurn() : ((P.time && P.time.daysPerTurn) || 30)); }
-                catch(e) { try { console.warn('[deferred·phase5] keju advance', e); } catch(_){} }
+                try { await Promise.resolve(advanceKejuByDays((typeof _getDaysPerTurn === 'function') ? _getDaysPerTurn() : ((P.time && P.time.daysPerTurn) || 30))); }
+                catch(e) { _rethrowCriticalFinalizeFailure('keju-advance-deferred', e); }
               }
               if (P.keju && P.keju.enabled && !P.keju.currentExam && typeof checkKejuTrigger === 'function') {
                 try { await checkKejuTrigger(); }
-                catch(e) { try { console.warn('[deferred·phase5] keju trigger', e); } catch(_){} }
+                catch(e) { _rethrowCriticalFinalizeFailure('keju-trigger-deferred', e); }
               }
               try { if (typeof _kjUpdateIndicators === 'function') _kjUpdateIndicators(_dctx || ctx); }
-              catch(e) { try { console.warn('[deferred·phase5] J1 indicators', e); } catch(_){} }
+              catch(e) { _rethrowCriticalFinalizeFailure('keju-indicators-deferred', e); }
               // v7.1·F2/F3/F4c·D1 长尾 endTurn hooks·flag gate by P.conf.useNewKejuD1
               if (typeof _kjCheckDiscipleMemorialTriggers === 'function') {
                 try { _kjCheckDiscipleMemorialTriggers(); }
-                catch(e) { try { console.warn('[deferred·phase5] F2 disciple memorial', e); } catch(_){} }
+                catch(e) { _rethrowCriticalFinalizeFailure('keju-disciple-memorial-deferred', e); }
               }
               if (typeof _kjCheckCohortMeetTriggers === 'function') {
                 try { _kjCheckCohortMeetTriggers(); }
-                catch(e) { try { console.warn('[deferred·phase5] F3 cohort meet', e); } catch(_){} }
+                catch(e) { _rethrowCriticalFinalizeFailure('keju-cohort-meet-deferred', e); }
               }
               if (typeof _kjCheckYanguanQingyiTriggers === 'function') {
                 try { _kjCheckYanguanQingyiTriggers(); }
-                catch(e) { try { console.warn('[deferred·phase5] F4c yanguan qingyi', e); } catch(_){} }
+                catch(e) { _rethrowCriticalFinalizeFailure('keju-yanguan-qingyi-deferred', e); }
               }
               // Phase L·L7·ramping reform state tick + reformLean decay + memorial trigger (flag gate by P.conf.useNewKejuL7)
               if (typeof _kjpL7TickRampingReform === 'function') {
                 try { _kjpL7TickRampingReform(); }
-                catch(e) { try { console.warn('[deferred·phase5] L7 ramping tick', e); } catch(_){} }
+                catch(e) { _rethrowCriticalFinalizeFailure('keju-ramping-reform-deferred', e); }
               }
               if (typeof _kjpL7TickReformLeanDecay === 'function') {
                 try { _kjpL7TickReformLeanDecay((typeof GM !== 'undefined' && GM.turn) || 0); }
-                catch(e) { try { console.warn('[deferred·phase5] L7 reformLean decay', e); } catch(_){} }
+                catch(e) { _rethrowCriticalFinalizeFailure('keju-reform-lean-deferred', e); }
               }
               if (typeof _kjCheckReformMemorialTriggers === 'function') {
                 try { _kjCheckReformMemorialTriggers(); }
-                catch(e) { try { console.warn('[deferred·phase5] L7 reform memorial', e); } catch(_){} }
+                catch(e) { _rethrowCriticalFinalizeFailure('keju-reform-memorial-deferred', e); }
               }
               // Phase G·G2·step 0·event hook watchers (探 emperor 帝崩 + war_state 平乱·SET _lastReignChangeYear / _lastPlatformDisasterYear)
               if (typeof _kjEventCheckReignTransition === 'function') {
                 try { _kjEventCheckReignTransition(); }
-                catch(e) { try { console.warn('[deferred·phase5] G2 reign transition watch', e); } catch(_){} }
+                catch(e) { _rethrowCriticalFinalizeFailure('keju-reign-transition-deferred', e); }
               }
               if (typeof _kjEventCheckWarStateRecovery === 'function') {
                 try { _kjEventCheckWarStateRecovery(); }
-                catch(e) { try { console.warn('[deferred·phase5] G2 war state recovery watch', e); } catch(_){} }
+                catch(e) { _rethrowCriticalFinalizeFailure('keju-war-recovery-deferred', e); }
               }
               // Phase G·G1·特科 trigger check (flag gate by P.conf.useNewKejuD2 inside)
               // 注·watchers 先于 G1 check·让 G1 当 turn 即可读到 fresh _last*Year 字段
               if (typeof _kjCheckSpecialExamTriggers === 'function') {
                 try { _kjCheckSpecialExamTriggers(); }
-                catch(e) { try { console.warn('[deferred·phase5] G1 special exam trigger', e); } catch(_){} }
+                catch(e) { _rethrowCriticalFinalizeFailure('keju-special-exam-deferred', e); }
               }
               // Phase J·J4·科场弊案 trigger check (flag gate by P.conf.useNewKejuScandal inside)
               if (typeof _kjCheckScandalTriggers === 'function') {
                 try { _kjCheckScandalTriggers(); }
-                catch(e) { try { console.warn('[deferred·phase5] J4 scandal trigger', e); } catch(_){} }
+                catch(e) { _rethrowCriticalFinalizeFailure('keju-scandal-deferred', e); }
               }
               // Phase L·L8·evolution tick (在 L7 tick 之后·状态推进先于 evolve·flag gate by P.conf.useNewKejuL8)
               if (typeof _kjpL8EvolveTick === 'function') {
                 try { _kjpL8EvolveTick(); }
-                catch(e) { try { console.warn('[deferred·phase5] L8 evolve tick', e); } catch(_){} }
+                catch(e) { _rethrowCriticalFinalizeFailure('keju-evolution-deferred', e); }
               }
               // Phase L·L5·RBB·cleanup cooldown table (matured/rejected reform + dead NPC)
               if (typeof _kjpL5CleanupCooldown === 'function') {
                 try { _kjpL5CleanupCooldown(); }
-                catch(e) { try { console.warn('[deferred·phase5] L5 cooldown cleanup', e); } catch(_){} }
+                catch(e) { _rethrowCriticalFinalizeFailure('keju-cooldown-deferred', e); }
               }
             }
           });
@@ -798,65 +808,65 @@
         }
 
         // Phase 4.5·勤政 streak
-        try { if (typeof _settleCourtMeter === 'function') _settleCourtMeter(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] courtMeter failed', e); } catch(_){} }
+        try { if (typeof _settleCourtMeter === 'function') await Promise.resolve(_settleCourtMeter()); }
+        catch(e) { _rethrowCriticalFinalizeFailure('court-meter', e); }
 
         // Phase 4.6·角色路程推进
-        try { if (typeof advanceCharTravelByDays === 'function') advanceCharTravelByDays((typeof _getDaysPerTurn === 'function') ? _getDaysPerTurn() : ((P.time && P.time.daysPerTurn) || 30)); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] char travel failed', e); } catch(_){} }
+        try { if (typeof advanceCharTravelByDays === 'function') await Promise.resolve(advanceCharTravelByDays((typeof _getDaysPerTurn === 'function') ? _getDaysPerTurn() : ((P.time && P.time.daysPerTurn) || 30))); }
+        catch(e) { _rethrowCriticalFinalizeFailure('character-travel', e); }
 
         // Phase 5·after hooks + keju·wrap 策略对齐 legacy
         // legacy 的 after-hooks 和 keju trigger 都未 wrap·pipeline 也不 wrap·error 同 propagate
         if (typeof EndTurnHooks !== 'undefined' && EndTurnHooks.execute) await EndTurnHooks.execute('after');
         if (P.keju && (P.keju.currentExam || P.keju.currentEnke) && typeof advanceKejuByDays === 'function') {
-          try { advanceKejuByDays((typeof _getDaysPerTurn === 'function') ? _getDaysPerTurn() : ((P.time && P.time.daysPerTurn) || 30)); }
-          catch(e) { try { console.warn('[pipeline.render-finalize] keju advance failed', e); } catch(_){} }
+          try { await Promise.resolve(advanceKejuByDays((typeof _getDaysPerTurn === 'function') ? _getDaysPerTurn() : ((P.time && P.time.daysPerTurn) || 30))); }
+          catch(e) { _rethrowCriticalFinalizeFailure('keju-advance', e); }
         }
         if (P.keju && P.keju.enabled && !P.keju.currentExam && typeof checkKejuTrigger === 'function') {
           await checkKejuTrigger();
         }
         try { if (typeof _kjUpdateIndicators === 'function') _kjUpdateIndicators(ctx); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] J1 indicators', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-indicators', e); }
         // v7.1·F2/F3/F4c·D1 长尾 endTurn hooks·flag gate by P.conf.useNewKejuD1
         try { if (typeof _kjCheckDiscipleMemorialTriggers === 'function') _kjCheckDiscipleMemorialTriggers(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] F2 disciple memorial', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-disciple-memorial', e); }
         try { if (typeof _kjCheckCohortMeetTriggers === 'function') _kjCheckCohortMeetTriggers(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] F3 cohort meet', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-cohort-meet', e); }
         try { if (typeof _kjCheckYanguanQingyiTriggers === 'function') _kjCheckYanguanQingyiTriggers(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] F4c yanguan qingyi', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-yanguan-qingyi', e); }
         // Phase L·L7·ramping reform state tick + reformLean decay + memorial trigger
         try { if (typeof _kjpL7TickRampingReform === 'function') _kjpL7TickRampingReform(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] L7 ramping tick', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-ramping-reform', e); }
         try { if (typeof _kjpL7TickReformLeanDecay === 'function') _kjpL7TickReformLeanDecay((typeof GM !== 'undefined' && GM.turn) || 0); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] L7 reformLean decay', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-reform-lean', e); }
         try { if (typeof _kjCheckReformMemorialTriggers === 'function') _kjCheckReformMemorialTriggers(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] L7 reform memorial', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-reform-memorial', e); }
         // Phase G·G2·step 0·event hook watchers (先于 G1)·SET _last*Year 字段
         try { if (typeof _kjEventCheckReignTransition === 'function') _kjEventCheckReignTransition(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G2 reign transition', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-reign-transition', e); }
         try { if (typeof _kjEventCheckWarStateRecovery === 'function') _kjEventCheckWarStateRecovery(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G2 war recovery', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-war-recovery', e); }
         // G2·RBB·BB2/BB3·resume + drain hooks·BB9 prune·BB15 cross-scenario reset
         try { if (typeof _kjG2MaybeResetCrossScenarioFields === 'function') _kjG2MaybeResetCrossScenarioFields(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G2 cross-scenario reset', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-cross-scenario-reset', e); }
         try { if (typeof _kjG2ResumeEnkeXieendaIfPending === 'function') _kjG2ResumeEnkeXieendaIfPending(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G2 xieenda resume', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-xieenda-resume', e); }
         try { if (typeof _kjG2ConsumePendingEnkeFromEdict === 'function') _kjG2ConsumePendingEnkeFromEdict(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G2 pending edict drain', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-pending-edict', e); }
         try { if (typeof _kjG2PruneDeadEnkePartyMembers === 'function') _kjG2PruneDeadEnkePartyMembers(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G2 enkeParty prune', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-enke-party-prune', e); }
         try { if (typeof _kjG2PruneExpiredEnkeSuggestions === 'function') _kjG2PruneExpiredEnkeSuggestions(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G2 suggestion expire prune', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-suggestion-prune', e); }
         try { if (typeof _kjG2NukeStaleEnkeWenduiContext === 'function') _kjG2NukeStaleEnkeWenduiContext(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G2 wendui ctx nuke', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-wendui-cleanup', e); }
         // G3·RBB·BB1·nuke stale wuju wendui context (跟 G2 同 paradigm)
         try { if (typeof _kjG3NukeStaleWujuWenduiContext === 'function') _kjG3NukeStaleWujuWenduiContext(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G3 wendui ctx nuke', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('wuju-wendui-cleanup', e); }
         // G3·step 0-L·wire G3 hooks
         try { if (typeof _kjG3ResumeWuJiaoyueDaIfPending === 'function') _kjG3ResumeWuJiaoyueDaIfPending(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G3 wujiaoyueda resume', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('wuju-resume', e); }
         try { if (typeof _kjG3WujinshiHealthTick === 'function') _kjG3WujinshiHealthTick(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G3 wujinshi health tick', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('wuju-health', e); }
         try {
           if (typeof _kjG3MaybeAddBattleRecord === 'function' && Array.isArray(GM && GM.chars)) {
             // 武进士 chars 战功 tick·每 turn 每人按 prob
@@ -866,123 +876,66 @@
               }
             });
           }
-        } catch(e) { try { console.warn('[pipeline.render-finalize] G3 battle record', e); } catch(_){} }
+        } catch(e) { _rethrowCriticalFinalizeFailure('wuju-battle-record', e); }
         try { if (typeof _kjG3CheckWujuAbolitionTrigger === 'function') _kjG3CheckWujuAbolitionTrigger(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G3 wuju abolition trigger', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('wuju-abolition', e); }
         // G5·wire tongzi hooks
         try { if (typeof _kjG5ResumeFumoCeremonyIfPending === 'function') _kjG5ResumeFumoCeremonyIfPending(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G5 tongzi fumo resume', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('tongzi-fumo-resume', e); }
         try { if (typeof _kjG5TongziHealthTick === 'function') _kjG5TongziHealthTick(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G5 tongzi health tick', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('tongzi-health', e); }
         // G5 v2·annual tick (chronicle 长尾·每 5 年 1 行)
         try { if (typeof _kjG5TongziAnnualTick === 'function') _kjG5TongziAnnualTick(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G5 tongzi annual tick', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('tongzi-annual', e); }
         try { if (typeof _kjG5MaybeResetCrossScenarioFields === 'function') _kjG5MaybeResetCrossScenarioFields(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G5 tongzi cross-scenario reset', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('tongzi-cross-scenario-reset', e); }
         // G3·RAA·M4·武勋世家 endTurn retrigger·世家成员战死 cleanup
         try { if (typeof _kjG3DetectMartialClan === 'function') _kjG3DetectMartialClan(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G3 detect martial clan', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('wuju-martial-clan', e); }
         // Phase G·G1·特科 trigger check
         try { if (typeof _kjCheckSpecialExamTriggers === 'function') _kjCheckSpecialExamTriggers(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G1 special exam trigger', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-special-exam', e); }
         // Phase J·J4·科场弊案 keyi 拉起 (检测在 deferred·此处结算渲染后弹议政)
         try { if (typeof _kjMaybeRaiseScandalKeyi === 'function') _kjMaybeRaiseScandalKeyi(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] J4 scandal keyi', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-scandal', e); }
         // Phase H·H0+H1·school network resume + tier check
         try { if (typeof _kjpResumeIfPending === 'function') _kjpResumeIfPending(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] H resume', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('school-network-resume', e); }
         // Phase H·H3·Path β·学说 weight 隐式 tick (绕 keyi·小幅漂)
         try { if (typeof _kjpHTickSubjectWeightDrift === 'function') _kjpHTickSubjectWeightDrift(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] H weight drift', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('school-weight-drift', e); }
         // Phase H·H5·BB1-style nuke wendui ctx
         try { if (typeof _kjpHNukeStaleSchoolWenduiContext === 'function') _kjpHNukeStaleSchoolWenduiContext(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] H wendui nuke', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('school-wendui-cleanup', e); }
         // Phase H·H8·反馈循环 tick
         try { if (typeof _kjpHTickFeedbackLoop === 'function') _kjpHTickFeedbackLoop(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] H feedback loop', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('school-feedback-loop', e); }
         // Phase H·H9·watershed event check
         try { if (typeof _kjpHCheckWatershedEvents === 'function') _kjpHCheckWatershedEvents(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] H watershed', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('school-watershed', e); }
         // Phase H·R1·M2 fix·讲会 endTurn 自动 trigger (每 5 年 + flourishing + 5% prob)
         try { if (typeof _kjpHMaybeAutoTriggerLecture === 'function') _kjpHMaybeAutoTriggerLecture(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] H auto lecture', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('school-auto-lecture', e); }
         // G3·RAA·C4·元朝 spawn stuck cleanup·F5·移到 G1 spawn 之后 (spawn-then-clean·避当 turn 漏)
         try { if (typeof _kjG3CleanupYuanStuckWujuSpawn === 'function') _kjG3CleanupYuanStuckWujuSpawn(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] G3 yuan cleanup', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('wuju-yuan-cleanup', e); }
         // Phase L·L8·evolution tick (在 L7 tick 之后)
         try { if (typeof _kjpL8EvolveTick === 'function') _kjpL8EvolveTick(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] L8 evolve tick', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-evolution', e); }
         // Phase L·L5·RBB·cleanup cooldown table
         try { if (typeof _kjpL5CleanupCooldown === 'function') _kjpL5CleanupCooldown(); }
-        catch(e) { try { console.warn('[pipeline.render-finalize] L5 cooldown cleanup', e); } catch(_){} }
+        catch(e) { _rethrowCriticalFinalizeFailure('keju-cooldown', e); }
 
         // Phase 5.3·AI memory compress·内部自检 P.ai.key·无 key 自动 noop·搬法 IIFE
         // 注：完整逻辑跨 50 行·此处 inline 简化版本·若 P.ai.key 缺则 noop (legacy 也是这逻辑)
         // 详细 legacy 还在 core.js·flag 守 legacy 跳过
 
-        // 2026-05-10·Layer 2 势力反向索引·所有 system + render 完成后重建一次
-        // 确保下回合 UI/AI 读到的 _facIndex 是当前 turn 的最新 snapshot
-        try {
-          if (typeof window !== 'undefined' && window.TM && TM.FactionIndex && TM.FactionIndex.rebuild) {
-            TM.FactionIndex.rebuild();
-          }
-        } catch(_fxE) { try { console.warn('[pipeline.render-finalize] _facIndex 重建失败', _fxE); } catch(_){} }
-        // 2026-05-10·Layer 3 派生健康度·必须在 rebuild 之后
-        try {
-          if (typeof window !== 'undefined' && window.TM && TM.FactionDerived && TM.FactionDerived.compute) {
-            TM.FactionDerived.compute();
-          }
-        } catch(_dhE) { try { console.warn('[pipeline.render-finalize] derivedHealth 计算失败', _dhE); } catch(_){} }
-        // 2026-05-10·Phase B1-B3·派生经济+凝聚+综合
-        try {
-          if (typeof window !== 'undefined' && window.TM) {
-            if (TM.FactionDerivedEconomy && TM.FactionDerivedEconomy.compute) TM.FactionDerivedEconomy.compute();
-            if (TM.FactionDerivedCohesion && TM.FactionDerivedCohesion.compute) TM.FactionDerivedCohesion.compute();
-            if (TM.FactionDerivedStrength && TM.FactionDerivedStrength.compute) TM.FactionDerivedStrength.compute();
-          }
-        } catch(_dxE) { try { console.warn('[pipeline.render-finalize] derived B1-B3 失败', _dxE); } catch(_){} }
-        _scheduleNpcBehaviorPostRender(ctx);
-        // 2026-05-10·Phase C1·NPC memorial 生成+自决·每回合 1 轮
-        try {
-          if (typeof window !== 'undefined' && window.TM && TM.FactionNpcMemorial && TM.FactionNpcMemorial.generate) {
-            TM.FactionNpcMemorial.generate();
-          }
-        } catch(_npcmE) { try { console.warn('[pipeline.render-finalize] NPC memorial 生成失败', _npcmE); } catch(_){} }
-        // 2026-05-10·Phase C2·NPC edict 自动决策+应用·每回合 1 诏 per NPC fac
-        try {
-          if (typeof window !== 'undefined' && window.TM && TM.FactionNpcEdict && TM.FactionNpcEdict.generate) {
-            TM.FactionNpcEdict.generate();
-          }
-        } catch(_npceE) { try { console.warn('[pipeline.render-finalize] NPC edict 生成失败', _npceE); } catch(_){} }
-        // 2026-05-10·Phase C3·NPC chaoyi 派系互动 (单派/零派 noop)
-        try {
-          if (typeof window !== 'undefined' && window.TM && TM.FactionNpcChaoyi && TM.FactionNpcChaoyi.generate) {
-            TM.FactionNpcChaoyi.generate();
-          }
-        } catch(_npccyE) { try { console.warn('[pipeline.render-finalize] NPC chaoyi 失败', _npccyE); } catch(_){} }
-        // 2026-05-10·Phase C4·NPC office 人事任免
-        try {
-          if (typeof window !== 'undefined' && window.TM && TM.FactionNpcOffice && TM.FactionNpcOffice.generate) {
-            TM.FactionNpcOffice.generate();
-          }
-        } catch(_npcoE) { try { console.warn('[pipeline.render-finalize] NPC office 失败', _npcoE); } catch(_){} }
-        // 2026-05-10·Phase C5·NPC guoku 财政周期·收支应用到 fac.treasury
-        try {
-          if (typeof window !== 'undefined' && window.TM && TM.FactionNpcGuoku && TM.FactionNpcGuoku.generate) {
-            TM.FactionNpcGuoku.generate();
-          }
-        } catch(_npcgE) { try { console.warn('[pipeline.render-finalize] NPC guoku 失败', _npcgE); } catch(_){} }
-        // 2026-05-10·Phase G·NPC LLM 决策接管·若开关 on + eager mode·后台并发跑
-        // 模板已先跑·LLM 决策会"覆盖"产出新 trajectory·不破坏 fallback
-        try {
-          // Agent 模式的 liveworld 已在最终叙事/自检前按统一预算执行；公共 LLM dispatcher 不得重复排队。
-          if (!ctx.input._agentModeRan && typeof window !== 'undefined' && window.TM && TM.FactionNpcDispatchQueue && TM.FactionNpcDispatchQueue.scheduleTurnRuns) {
-            TM.FactionNpcDispatchQueue.scheduleTurnRuns({ source: 'render-finalize' });
-          }
-        } catch(_npcdE) { try { console.warn('[pipeline.render-finalize] NPC LLM dispatch 调度失败', _npcdE); } catch(_){} }
+        // 势力派生、NPC 奏疏/诏令/朝议/人事/财政均会写入世界状态；统一等待并失败即回滚。
+        await _runPostRenderTurnOpeners(ctx);
         return ctx;
       },
-      onError: 'continue',
+      // 只有上方明确包住的 DOM 渲染允许降级；任何状态结算异常都必须到达外层事务。
+      onError: 'abort',
       reads: ['ctx.results.aiResult', 'ctx.results.queueResult', 'ctx.results.tyrantResult', 'ctx.input.edicts', 'ctx.input.xinglu', 'ctx.input.oldVars', 'GM._pendingShijiModal'],
       writes: ['GM.shijiHistory', 'GM.eraName', 'GM._pendingToasts', 'GM._lastFixedExpense', 'GM._facIndex', 'GM.facs[*].derivedHealth', 'ctx.input._renderFinalizeRan']
     },

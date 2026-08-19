@@ -497,8 +497,37 @@
     var r = _resolvePath(obj, path);
     if (!r.parent || !r.exists) return { ok: false, path: path, reason: 'push target not declared in state schema' };
     if (!Array.isArray(r.parent[r.key])) return { ok: false, path: path, reason: 'push target must be an array' };
+    var schemaGate = _validateGenericPushElement(pathKey, value);
+    if (!schemaGate.ok) return { ok: false, path: path, reason: schemaGate.reason };
     r.parent[r.key].push(value);
-    if (pathKey === 'armies') _callArmyRefresh(obj);
+    return { ok: true, path: path, old: null, new: value };
+  }
+
+  function _validateGenericPushElement(pathKey, value) {
+    // 通用 push 不是创建人物、战争、奏疏、灾害等领域实体的旁路。那些集合有各自的
+    // 身份、去重和生命周期不变量，必须走结构化字段或领域操作。这里只保留无身份的
+    // 事件日志 append；armies 已在上方立即路由到军队语义 sink。
+    if (pathKey !== 'evtLog') {
+      return { ok: false, reason: 'generic push requires a declared collection schema or domain operation' };
+    }
+    if (!_isPlainObject(value)) return { ok: false, reason: 'evtLog element must be a plain object' };
+    var allowed = { turn: true, type: true, text: true, time: true };
+    var keys = Object.keys(value);
+    for (var i = 0; i < keys.length; i++) {
+      if (!allowed[keys[i]]) return { ok: false, reason: 'evtLog element contains unknown field: ' + keys[i] };
+    }
+    if (typeof value.text !== 'string' || !value.text.trim() || value.text.length > 4000) {
+      return { ok: false, reason: 'evtLog.text must be a non-empty string up to 4000 characters' };
+    }
+    if (value.turn != null && (typeof value.turn !== 'number' || !isFinite(value.turn) || value.turn < 0 || Math.floor(value.turn) !== value.turn)) {
+      return { ok: false, reason: 'evtLog.turn must be a non-negative integer' };
+    }
+    if (value.type != null && (typeof value.type !== 'string' || value.type.length > 80)) {
+      return { ok: false, reason: 'evtLog.type must be a string up to 80 characters' };
+    }
+    if (value.time != null && (typeof value.time !== 'string' || value.time.length > 120)) {
+      return { ok: false, reason: 'evtLog.time must be a string up to 120 characters' };
+    }
     return { ok: true };
   }
 

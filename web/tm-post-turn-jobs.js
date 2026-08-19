@@ -425,11 +425,12 @@ function _runPostTurnJobAttempt(job) {
   job.status = 'running';
   job.failureObserved = false;
   job.attempts = (job.attempts || 0) + 1;
+  job.totalAttempts = (job.totalAttempts || 0) + 1;
   job.promise = Promise.resolve().then(job.run).then(function(value) {
     job.status = 'done';
     job.value = value;
     job.lastError = null;
-    return { ok: true, value: value, attempt: job.attempts };
+    return { ok: true, value: value, attempt: job.attempts, totalAttempt: job.totalAttempts, retryCycle: job.retryCycle || 0 };
   }, function(error) {
     job.lastError = error;
     job.status = job.attempts < job.maxAttempts ? 'retryable' : 'failed';
@@ -443,14 +444,41 @@ function _runPostTurnJobAttempt(job) {
       });
     } catch(_) {}
     _dbg('[PostTurn]' + job.id + ' failed attempt ' + job.attempts + '/' + job.maxAttempts + ':', error);
-    return { ok: false, error: error, attempt: job.attempts, retryable: job.status === 'retryable' };
+    return { ok: false, error: error, attempt: job.attempts, totalAttempt: job.totalAttempts, retryCycle: job.retryCycle || 0, retryable: job.status === 'retryable' };
   });
   return job.promise;
+}
+
+function _rearmTerminalPostTurnJob(job) {
+  if (!job || job.status !== 'failed' || !job.failureObserved) return false;
+  if (!Array.isArray(job.terminalFailures)) job.terminalFailures = [];
+  job.terminalFailures.push({
+    cycle: job.retryCycle || 0,
+    attempts: job.attempts || 0,
+    totalAttempts: job.totalAttempts || job.attempts || 0,
+    error: String(job.lastError && (job.lastError.message || job.lastError) || 'unknown')
+  });
+  if (job.terminalFailures.length > 5) job.terminalFailures = job.terminalFailures.slice(-5);
+  job.retryCycle = (job.retryCycle || 0) + 1;
+  job.attempts = 0;
+  job.status = 'retryable';
+  job.promise = null;
+  job.failureObserved = false;
+  try {
+    if (typeof recordMemoryDiagnostic === 'function') recordMemoryDiagnostic('post_turn_job_rearmed', {
+      id: job.id,
+      retryCycle: job.retryCycle,
+      totalAttempts: job.totalAttempts || 0
+    });
+  } catch(_) {}
+  return true;
 }
 
 function _postTurnJobPromiseForWait(job) {
   if (!job) return Promise.resolve({ ok: false, error: new Error('post-turn job missing') });
   // 第一次等待负责把失败明确交给调用者；只有该失败已经被观察过，下一次保存/过回合才重建 Promise。
+  // 达到 maxAttempts 的终态失败也必须能由下一次显式操作开启一个新周期，不能永久复用旧失败 Promise 锁死会话。
+  if (job.status === 'failed' && job.failureObserved) _rearmTerminalPostTurnJob(job);
   if (job.status === 'retryable' && job.failureObserved) return _runPostTurnJobAttempt(job);
   if (!job.promise) return _runPostTurnJobAttempt(job);
   return job.promise;
@@ -492,7 +520,10 @@ function _enqueuePostTurnJob(id, fn, opts) {
     lease: lease,
     status: 'pending',
     attempts: 0,
+    totalAttempts: 0,
     maxAttempts: maxAttempts,
+    retryCycle: 0,
+    terminalFailures: [],
     failureObserved: false,
     lastError: null
   };

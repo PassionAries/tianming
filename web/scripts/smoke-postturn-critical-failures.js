@@ -65,6 +65,30 @@ async function main() {
     'next save/turn wait rebuilds the task Promise and clears source data only after success');
 
   resetWorld();
+  let terminalAttempts = 0;
+  ctx._enqueuePostTurnJob('sc25c', async function() {
+    terminalAttempts++;
+    if (terminalAttempts <= 3) throw new Error('terminal-cycle-failure-' + terminalAttempts);
+    return { recoveredAfterTerminalFailure: true };
+  }, { maxAttempts: 3 });
+  const terminalJob = ctx.GM._postTurnJobs.pending[0];
+  ok(await rejects(() => ctx._awaitPostTurnJobs()) && terminalJob.status === 'retryable',
+    'first failed attempt is exposed without hidden retry');
+  ok(await rejects(() => ctx._awaitPostTurnJobs()) && terminalJob.status === 'retryable',
+    'second explicit wait consumes only the second attempt');
+  ok(await rejects(() => ctx._awaitPostTurnJobs()) && terminalJob.status === 'failed' && terminalJob.failureObserved,
+    'third failure reaches a visible terminal state');
+  ok(ctx.GM._turnAiResults.sourcePayload.keep === true,
+    'terminal failure still preserves the immutable source payload');
+  await ctx._awaitPostTurnJobs();
+  ok(terminalAttempts === 4 && terminalJob.retryCycle === 1 && terminalJob.totalAttempts === 4,
+    'next explicit wait creates a fresh retry cycle instead of reusing the terminal Promise');
+  ok(terminalJob.terminalFailures.length === 1 && /terminal-cycle-failure-3/.test(terminalJob.terminalFailures[0].error),
+    'terminal failure diagnostics survive the fresh retry cycle');
+  ok(ctx.GM._postTurnJobs === null && !Object.prototype.hasOwnProperty.call(ctx.GM, '_turnAiResults'),
+    'successful fresh cycle unlocks the session and clears source data');
+
+  resetWorld();
   ctx._enqueuePostTurnJob('sc25c', async function() { return { tactical: true, strategic: true }; });
   await ctx._awaitPostTurnJobs();
   ok(ctx.GM._postTurnJobs === null && !Object.prototype.hasOwnProperty.call(ctx.GM, '_turnAiResults'), 'successful critical jobs clear queue and source data');

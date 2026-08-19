@@ -59,6 +59,7 @@ var TM_SaveDB = (function() {
   var _db = null;
   var _available = false;
   var _openPromise = null; // 防止重复打开
+  var _migrationTail = Promise.resolve(); // 两类旧源必须串行探测/占用目标 ID
 
   // ── 打开数据库 ──
   function open() {
@@ -104,7 +105,16 @@ var TM_SaveDB = (function() {
         }
       };
       req.onsuccess = function(e) {
-        _db = e.target.result;
+        var openedDb = e.target.result;
+        openedDb.onversionchange = function() {
+          // 多标签页或未来 v4 升级时主动释放旧连接，否则新版本会长期卡在 blocked。
+          if (_db !== openedDb) return;
+          try { openedDb.close(); } catch (_) {}
+          _db = null;
+          _available = false;
+          _openPromise = null;
+        };
+        _db = openedDb;
         _available = true;
         _openPromise = null;
         console.log('[SaveDB] IndexedDB就绪 (v' + DB_VERSION + ')');
@@ -560,7 +570,92 @@ var TM_SaveDB = (function() {
   //  旧存档迁移
   // ============================================================
 
-  function migrateFromLocalStorage() {
+  function _serializeMigration(fn) {
+    var run = _migrationTail.then(fn, fn);
+    _migrationTail = run.then(function() {}, function() {});
+    return run;
+  }
+
+  function _migrationPayloadSignature(record) {
+    if (!record) return null;
+    var payload = record.gameState;
+    if (typeof payload === 'string') return 's:' + payload;
+    if (payload == null) return 'null';
+    if (typeof Blob !== 'undefined' && payload instanceof Blob) return null;
+    try { return 'j:' + JSON.stringify(payload); } catch (_) { return null; }
+  }
+
+  function _migrationRecordsEquivalent(left, right) {
+    var leftSig = _migrationPayloadSignature(left);
+    var rightSig = _migrationPayloadSignature(right);
+    return leftSig != null && rightSig != null && leftSig === rightSig;
+  }
+
+  async function _prepareMigrationRecords(records, sourceTag) {
+    records = Array.isArray(records) ? records : [];
+    var prepared = [];
+    var reserved = Object.create(null);
+    var deduped = 0;
+    for (var i = 0; i < records.length; i++) {
+      var incoming = Object.assign({}, records[i] || {});
+      var baseId = String(incoming.id == null || incoming.id === '' ? (sourceTag + '-' + i) : incoming.id);
+      var candidate = baseId;
+      var suffix = 0;
+      while (true) {
+        var occupied = reserved[candidate] || await _get(SAVE_STORE, candidate);
+        if (!occupied) {
+          incoming.id = candidate;
+          prepared.push(incoming);
+          reserved[candidate] = incoming;
+          break;
+        }
+        if (_migrationRecordsEquivalent(occupied, incoming)) {
+          deduped++;
+          break;
+        }
+        suffix++;
+        candidate = baseId + '-migrated-' + sourceTag + (suffix > 1 ? '-' + suffix : '');
+      }
+    }
+    return { records: prepared, deduped: deduped, sourceCount: records.length };
+  }
+
+  async function _verifyMigrationRecords(records) {
+    for (var i = 0; i < records.length; i++) {
+      var stored = await _get(SAVE_STORE, records[i].id);
+      if (!stored) throw new Error('迁移写后校验失败：缺少 ' + records[i].id);
+      var expectedSig = _migrationPayloadSignature(records[i]);
+      var storedSig = _migrationPayloadSignature(stored);
+      if (expectedSig != null && storedSig != null && expectedSig !== storedSig) {
+        throw new Error('迁移写后校验失败：内容不一致 ' + records[i].id);
+      }
+    }
+  }
+
+  function _legacyLocalSaveRecord(item) {
+    var data = item.data || {};
+    var state = data.gameState != null ? data.gameState : data;
+    var jsonState = typeof state === 'string' ? state : JSON.stringify(state);
+    var stateObject = state && typeof state === 'object' ? state : null;
+    var timestamp = Number(data.timestamp);
+    return {
+      id: 'slot_' + item.index,
+      type: 'migrated',
+      name: data.name || ('存档' + item.index),
+      timestamp: isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now(),
+      turn: (stateObject && stateObject.GM && stateObject.GM.turn) || (stateObject && stateObject.turn) || (data.GM && data.GM.turn) || 0,
+      scenarioName: data.scenarioName || '',
+      eraName: data.eraName || '',
+      date: data.date || '',
+      dynastyPhase: data.dynastyPhase || '',
+      snapshotId: data.snapshotId || '',
+      commitState: data.commitState || '',
+      gameState: jsonState,
+      _compressed: false
+    };
+  }
+
+  async function _migrateFromLocalStorage() {
     if (!_available || !_db) return Promise.resolve(0);
     var candidates = [];
     for (var i = 0; i < 10; i++) {
@@ -570,24 +665,21 @@ var TM_SaveDB = (function() {
       var data = JSON.parse(raw); // 任一源损坏即整体停止，绝不删除其他旧档。
       candidates.push({ key: key, data: data, index: i });
     }
-    return Promise.all(candidates.map(function(item) {
-      var data = item.data;
-      return save('slot_' + item.index, data.gameState || data, {
-        name: data.name || ('存档' + item.index),
-        type: 'migrated',
-        turn: (data.gameState && data.gameState.turn) || (data.GM && data.GM.turn) || 0,
-        scenarioName: (data.scenarioName || '')
-      });
-    })).then(function(results) {
-      if (results.some(function(ok) { return ok !== true; })) throw new Error('旧 localStorage 存档迁移未完整提交');
-      candidates.forEach(function(item) { localStorage.removeItem(item.key); });
-      if (candidates.length > 0) console.log('[SaveDB] 迁移了' + candidates.length + '个旧存档');
-      return candidates.length;
-    });
+    var prepared = await _prepareMigrationRecords(candidates.map(_legacyLocalSaveRecord), 'local-storage');
+    var written = await _putManyAtomic(SAVE_STORE, prepared.records);
+    if (written !== prepared.records.length) throw new Error('旧 localStorage 存档迁移未完整提交');
+    await _verifyMigrationRecords(prepared.records);
+    candidates.forEach(function(item) { localStorage.removeItem(item.key); });
+    if (candidates.length > 0) console.log('[SaveDB] 迁移了' + candidates.length + '个旧存档（去重 ' + prepared.deduped + '）');
+    return candidates.length;
+  }
+
+  function migrateFromLocalStorage() {
+    return _serializeMigration(_migrateFromLocalStorage);
   }
 
   /** 从旧数据库名(tianming_saves)迁移到当前数据库(tianming_db) */
-  function migrateFromOldDB() {
+  function _migrateFromOldDB() {
     if (!_available || !_db) return Promise.resolve(0);
     var OLD_DB = 'tianming_saves';
     if (OLD_DB === DB_NAME) return Promise.resolve(0); // 同名，无需迁移
@@ -601,11 +693,18 @@ var TM_SaveDB = (function() {
         getAll.onsuccess = function() {
           var records = getAll.result || [];
           if (!records.length) { oldDb.close(); resolve(0); return; }
-          _putManyAtomic(SAVE_STORE, records).then(function(migrated) {
+          _prepareMigrationRecords(records, 'old-db').then(function(prepared) {
+            return _putManyAtomic(SAVE_STORE, prepared.records).then(function(migrated) {
+              if (migrated !== prepared.records.length) throw new Error('旧 IndexedDB 存档迁移未完整提交');
+              return _verifyMigrationRecords(prepared.records).then(function() {
+                return { sourceCount: records.length, deduped: prepared.deduped };
+              });
+            });
+          }).then(function(result) {
             oldDb.close();
-            console.log('[SaveDB] 从旧数据库迁移了' + migrated + '条记录');
+            console.log('[SaveDB] 从旧数据库迁移了' + result.sourceCount + '条记录（去重 ' + result.deduped + '）');
             var delReq = indexedDB.deleteDatabase(OLD_DB);
-            delReq.onsuccess = function() { resolve(migrated); };
+            delReq.onsuccess = function() { resolve(result.sourceCount); };
             delReq.onerror = function(e2) { reject(e2.target && e2.target.error || new Error('旧数据库删除失败')); };
             delReq.onblocked = function() { reject(new Error('旧数据库删除被其他页面阻塞')); };
           }).catch(function(err) { oldDb.close(); reject(err); });
@@ -615,6 +714,10 @@ var TM_SaveDB = (function() {
       req.onerror = function(e) { reject(e.target && e.target.error || new Error('旧数据库打开失败')); };
       req.onblocked = function() { reject(new Error('旧数据库打开被其他页面阻塞')); };
     });
+  }
+
+  function migrateFromOldDB() {
+    return _serializeMigration(_migrateFromOldDB);
   }
 
   // ============================================================
@@ -681,10 +784,9 @@ var TM_SaveDB = (function() {
 // 页面加载时立即打开数据库并迁移旧存档
 TM_SaveDB.open().then(function() {
   if (TM_SaveDB.isAvailable()) {
-    Promise.all([
-      TM_SaveDB.migrateFromLocalStorage(),
-      TM_SaveDB.migrateFromOldDB() // 从旧数据库名(tianming_saves)迁移
-    ]).catch(function(e) {
+    TM_SaveDB.migrateFromLocalStorage()
+      .then(function() { return TM_SaveDB.migrateFromOldDB(); }) // 从旧数据库名(tianming_saves)迁移
+      .catch(function(e) {
       console.error('[SaveDB] 迁移失败·旧源已保留:', e);
       try { if (window.TM && TM.errors && TM.errors.capture) TM.errors.capture(e, 'SaveDB migration'); } catch (_) {}
       try { if (typeof window.toast === 'function') window.toast('⚠️ 旧存档迁移失败，原数据已保留'); } catch (_) {}

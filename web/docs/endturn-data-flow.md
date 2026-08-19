@@ -223,7 +223,7 @@
 3. **ai**（顺序流水线）：prompt.build → subcalls.runMain (sc0/sc05/sc1) → apply.writeBack → followup.run（含三路并行 + 后台化分支）
 4. **post-ai-edict**（同步）：`applyEdictActions` (phase 2.5) + `TyrantActivitySystem.applyEffects` (2.6) + `aiEdictEfficacyAudit`（已后台化）
 5. **systems**（同步串联）：`_endTurn_updateSystems` 50+ engine.tick·**已经是 in-process pipeline**·作为单 step 不再拆
-6. **render-and-finalize**（同步 + 朝会分支）：`_endTurn_render` + after hooks + 科举/角色路程/勤政 streak·若 `_pendingShijiModal.courtDone===false` 则将 phase5 打包成 `deferredPhase5` 等待朝会回调
+6. **render-and-finalize**（同步 + 朝会分支）：`_endTurn_render` + after hooks + 科举/角色路程/勤政 streak·若 `_pendingShijiModal.courtDone===false` 则将 phase5 打包成 `deferredPhase5` 等待朝会回调。该 step 的状态收官采用 `onError: abort`；只有 `_endTurn_render` 及其纯展示 fallback 在局部捕获后允许降级。
 
 每 step 内部并行/顺序与当前一致；step 之间 boundary 严格走 ctx 显式字段。
 
@@ -271,4 +271,3 @@
 - 小步快跑·每 slice 独立可回滚·结束时新旧并行 diff=0 才推进
 - slice 之间动手前都备份（per user "改前都先备份"）
 - 永远不动跨回合 channel 的语义（决定 1 是把 GM._* 镜像到 ctx.crossTurn·并非删 GM._*；GM 兜底保留以防其它代码漏迁）
-

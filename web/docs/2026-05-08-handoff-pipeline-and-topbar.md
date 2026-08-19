@@ -51,7 +51,8 @@ endTurn → _endTurnInternal → _endTurnCore
   │ 3. ai                [onError: abort]      │ ← _endTurn_aiInfer + await prefetch
   │ 4. post-ai-edict     [onError: abort]      │ ← applyEdictActions + tyrant.applyEffects（状态写入原子化）
   │ 5. systems           [onError: abort]      │ ← _endTurn_updateSystems (含 GM.turn++) + edictEfficacy enqueue
-  │ 6. render-and-finalize [onError: abort]    │ ← 状态收官失败回滚；仅显式包裹的纯 UI 渲染可降级
+  │ 6. render-and-finalize [onError: abort]    │ ← 参数准备 + 状态收官，失败回滚
+  │ 7. prepare-commit-barrier [onError: abort] │ ← records/save/commit；commit 后纯 UI 可降级
   └────────────────────────────────────────────┘
   ┌─ post-pipeline tail ───────────────────────┐
   │ aiMemory compress / monthly chronicle       │

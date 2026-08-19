@@ -722,7 +722,8 @@ function createTerrainPattern(ctx, patternType) {
  * 说明：地图主要用于可视化和帮助AI理解地理关系
  * 实际游戏推演以行政区划（cities/territories）为准
  */
-function updateMapColors() {
+function updateMapColors(options) {
+  options = options || {};
   var runtimeMap = getLiveMapData();
   if (!runtimeMap) return;
   var runtimeGM = (typeof GM !== 'undefined' && GM) ? GM : null;
@@ -848,7 +849,7 @@ function updateMapColors() {
   _dbg('[Map] 地图颜色更新完成，更新了 ' + updateCount + ' 个地块');
 
   // 如果有地图显示组件，触发重绘
-  if (typeof refreshMapDisplay === 'function') {
+  if (options.refresh !== false && typeof refreshMapDisplay === 'function') {
     refreshMapDisplay();
   }
 }

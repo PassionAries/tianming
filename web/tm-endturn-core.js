@@ -404,12 +404,16 @@ function _tmRestoreEndTurnObject(target, snapshot) {
 
 function _tmCaptureEndTurnTransaction() {
   var gmRef = GM, pRef = P;
+  var transactionId = '';
+  try { transactionId = 'turn-' + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2))); }
+  catch (_) { transactionId = 'turn-' + Date.now() + '-' + Math.random().toString(16).slice(2); }
   return {
     gmRef: gmRef,
     pRef: pRef,
     loadGen: (typeof window !== 'undefined' && window._tmLoadGen) || 0,
     campaignId: gmRef && gmRef._campaignId || '',
     turn: gmRef && gmRef.turn,
+    transactionId: transactionId,
     gm: _tmCaptureEndTurnObject(gmRef, ['_postTurnJobs', '_postTurnDetachedJobs', '_indices']),
     p: _tmCaptureEndTurnObject(pRef, ['scenario', '_indices']),
     committed: false,
@@ -465,14 +469,43 @@ async function _tmFinalizeEndTurnTransaction(ctx, txn) {
   ctx = ctx || { meta: {} };
   ctx.meta = ctx.meta || {};
   ctx.meta.transaction = txn;
+  ctx.meta.transactionId = txn && txn.transactionId || ctx.meta.transactionId || '';
   if (ctx.meta.deferEndTurnSave) return true;
+  if (!ctx.meta.turnPresentation) {
+    if (typeof _endTurn_finalizeRecords !== 'function' || !Array.isArray(ctx.meta.turnRenderArgs)) {
+      throw new Error('回合记录最终化入口缺失');
+    }
+    ctx.meta.turnPresentation = _endTurn_finalizeRecords.apply(null, ctx.meta.turnRenderArgs);
+    // presentation 已取得原始 AI/玩家活动引用；现在清临时上下文，最终存档不携带易膨胀字段。
+    delete GM._turnContext;
+    delete GM._turnTyrantActivities;
+    if (!GM._postTurnJobs || !Array.isArray(GM._postTurnJobs.pending) || GM._postTurnJobs.pending.length === 0) delete GM._turnAiResults;
+  }
   if (!ctx.meta.endTurnSavePromise && typeof _endTurn_saveSnapshot === 'function') {
-    ctx.meta.endTurnSavePromise = _endTurn_saveSnapshot();
+    ctx.meta.endTurnSavePromise = _endTurn_saveSnapshot(ctx);
   }
   if (!ctx.meta.endTurnSavePromise) throw new Error('回合最终存档入口缺失');
   var saved = await ctx.meta.endTurnSavePromise;
   if (saved !== true) throw new Error('回合最终存档失败，已回滚本回合');
   if (!_tmCommitEndTurnTransaction(txn)) throw new Error('回合提交时世界身份已变化');
+  try {
+    if (typeof _endTurn_publishStagedTurnData === 'function') await _endTurn_publishStagedTurnData(ctx);
+  } catch (publishError) {
+    ctx.results = ctx.results || {};
+    ctx.results.turnDataPublishError = publishError;
+    try { if (window.TM && TM.errors && TM.errors.capture) TM.errors.capture(publishError, 'endTurn] turn-data publish'); } catch (_) {}
+    try { if (typeof toast === 'function') toast('回合已安全保存；分卷将在下次读档时自动补发。'); } catch (_) {}
+  }
+  try { if (typeof _endTurn_clearCommittedInputs === 'function') _endTurn_clearCommittedInputs(); }
+  catch (draftError) { try { if (window.TM && TM.errors && TM.errors.capture) TM.errors.capture(draftError, 'endTurn] clear committed drafts'); } catch (_) {} }
+  try {
+    if (typeof _endTurn_render === 'function') _endTurn_render(ctx.meta.turnPresentation);
+  } catch (renderError) {
+    ctx.results = ctx.results || {};
+    ctx.results.renderError = renderError;
+    try { if (window.TM && TM.errors && TM.errors.capture) TM.errors.capture(renderError, 'endTurn] post-commit render'); } catch (_) {}
+    try { if (typeof _endTurn_showRenderFallback === 'function') _endTurn_showRenderFallback(renderError); } catch (_) {}
+  }
   return true;
 }
 
@@ -747,13 +780,6 @@ async function _endTurnCore(options){
     // 年度编年史由 ChronicleSystem._tryGenerateYearChronicle 异步生成（含6.1伏笔/6.5摘要整合）
     // 不在此处重复生成——ChronicleSystem.addMonthDraft 的跨年检测会自动触发
     _dbg('[Chronicle] \u8DE8\u5E74\u68C0\u6D4B\uFF0C\u5E74\u5EA6\u7F16\u5E74\u53F2\u7531ChronicleSystem\u5F02\u6B65\u751F\u6210');
-  }
-
-  // 清理回合临时上下文
-  delete GM._turnContext;
-  delete GM._turnTyrantActivities;
-  if (!GM._postTurnJobs || !Array.isArray(GM._postTurnJobs.pending) || GM._postTurnJobs.pending.length === 0) {
-    delete GM._turnAiResults;
   }
 
   // 玩家角色死亡 → 终局（鼎革R1e·2026-07-07·两套终局屏合一）：此前走简版「天命已尽」屏——

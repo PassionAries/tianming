@@ -44,7 +44,7 @@ ctx.window = ctx;
 vm.createContext(ctx);
 vm.runInContext(sourceBetween(coreSource, 'async function _tmRunCriticalEndTurnSystem', 'async function _runPreSubmitPartyClassCalibration'), ctx);
 vm.runInContext(sourceBetween(coreSource, 'async function _runPreSubmitPartyClassCalibration()', 'async function _endTurnInternal'), ctx);
-vm.runInContext(sourceBetween(coreSource, 'function _tmCaptureEndTurnObject', 'async function _tmFinalizeEndTurnTransaction'), ctx);
+vm.runInContext(sourceBetween(coreSource, 'function _tmCaptureEndTurnObject', "if (typeof window !== 'undefined') {\n  window._tmMaybeStageTurnResult"), ctx);
 vm.runInContext(systemsSource, ctx);
 vm.runInContext(pipelineStepsSource, ctx);
 
@@ -63,6 +63,10 @@ function resetWorld(extra) {
   delete ctx.IntegrationBridge;
   delete ctx.TMArmory;
   delete ctx._endTurn_render;
+  delete ctx._endTurn_finalizeRecords;
+  delete ctx._endTurn_publishStagedTurnData;
+  delete ctx._endTurn_clearCommittedInputs;
+  delete ctx._endTurn_showRenderFallback;
   delete ctx._settleCourtMeter;
   delete ctx.advanceCharTravelByDays;
   delete ctx.advanceKejuByDays;
@@ -223,12 +227,71 @@ async function main() {
     };
   }, 'npc-guoku-partial-failure', 'NPC treasury finalization');
 
-  resetWorld();
+  resetWorld({ shijiHistory: [], qijuHistory: [] });
+  let recordBefore = comparableWorld(ctx.GM);
+  txn = ctx._tmCaptureEndTurnTransaction();
+  ctx._endTurn_finalizeRecords = function() {
+    ctx.GM.shijiHistory.push({ turn: 4 });
+    throw new Error('chronicle-after-shiji');
+  };
+  let recordCtx = buildStepCtx();
+  recordCtx.meta.turnRenderArgs = [];
+  ok(await expectFailure(ctx._tmFinalizeEndTurnTransaction(recordCtx, txn), 'chronicle-after-shiji'),
+    'record finalization failure propagates before save/commit');
+  ctx._tmRollbackEndTurnTransaction(txn, new Error('chronicle-after-shiji'));
+  ok(comparableWorld(ctx.GM) === recordBefore, 'partial Shiji record is rolled back');
+
+  resetWorld({ shijiHistory: [], qijuHistory: [] });
+  txn = ctx._tmCaptureEndTurnTransaction();
+  ctx._endTurn_finalizeRecords = function() {
+    ctx.GM.qijuHistory.push({ turn: 4 });
+    throw new Error('memorial-after-qiju');
+  };
+  recordCtx = buildStepCtx();
+  recordCtx.meta.turnRenderArgs = [];
+  ok(await expectFailure(ctx._tmFinalizeEndTurnTransaction(recordCtx, txn), 'memorial-after-qiju'),
+    'Qiju/memorial record failure propagates before save/commit');
+  ctx._tmRollbackEndTurnTransaction(txn, new Error('memorial-after-qiju'));
+  ok(ctx.GM.qijuHistory.length === 0, 'partial Qiju record is rolled back');
+
+  resetWorld({ shijiHistory: [] });
+  txn = ctx._tmCaptureEndTurnTransaction();
+  ctx._endTurn_finalizeRecords = function() { ctx.GM.marker = 20; return { shijiHtml: 'ok' }; };
+  ctx._endTurn_saveSnapshot = async function() { return true; };
   ctx._endTurn_render = function() { throw new Error('ui-render-only-failure'); };
   const uiCtx = buildStepCtx();
-  await finalizeStep.fn(uiCtx);
-  ok(uiCtx.results.renderError && uiCtx.results.renderError.message === 'ui-render-only-failure',
-    'pure UI rendering failure remains explicitly degradable');
+  uiCtx.meta.turnRenderArgs = [];
+  ok(await ctx._tmFinalizeEndTurnTransaction(uiCtx, txn) === true && txn.committed === true,
+    'pure UI failure after commit cannot roll the world back');
+  ok(uiCtx.results.renderError && uiCtx.results.renderError.message === 'ui-render-only-failure' && ctx.GM.marker === 20,
+    'post-commit UI failure remains explicitly degradable and diagnostic');
+
+  resetWorld();
+  txn = ctx._tmCaptureEndTurnTransaction();
+  let clearDraftCalls = 0;
+  ctx._endTurn_finalizeRecords = function() { return { shijiHtml: 'pending' }; };
+  ctx._endTurn_saveSnapshot = async function() { return false; };
+  ctx._endTurn_clearCommittedInputs = function() { clearDraftCalls++; };
+  const failedSaveCtx = buildStepCtx();
+  failedSaveCtx.meta.turnRenderArgs = [];
+  ok(await expectFailure(ctx._tmFinalizeEndTurnTransaction(failedSaveCtx, txn), '回合最终存档失败'),
+    'canonical save failure aborts before commit');
+  ok(clearDraftCalls === 0 && txn.committed === false, 'player input drafts remain untouched when final save fails');
+
+  resetWorld({ _pendingTurnDataPublish: { transactionId: 'turn-publish-retry' } });
+  txn = ctx._tmCaptureEndTurnTransaction();
+  clearDraftCalls = 0;
+  ctx._endTurn_finalizeRecords = function() { return { shijiHtml: 'committed' }; };
+  ctx._endTurn_saveSnapshot = async function() { return true; };
+  ctx._endTurn_publishStagedTurnData = async function() { throw new Error('publish-after-commit'); };
+  ctx._endTurn_clearCommittedInputs = function() { clearDraftCalls++; };
+  ctx._endTurn_render = function() {};
+  const publishCtx = buildStepCtx();
+  publishCtx.meta.turnRenderArgs = [];
+  ok(await ctx._tmFinalizeEndTurnTransaction(publishCtx, txn) === true && txn.committed === true,
+    'turn-data publish failure cannot roll back an already committed world');
+  ok(clearDraftCalls === 1 && ctx.GM._pendingTurnDataPublish.transactionId === 'turn-publish-retry' && publishCtx.results.turnDataPublishError,
+    'publish failure keeps its recovery marker while post-commit input cleanup proceeds');
 
   resetWorld({ _pendingShijiModal: { courtDone: false, aiReady: false, payload: null } });
   ctx.P.keju = { currentExam: true };

@@ -66,7 +66,7 @@ const sandbox = {
       { name: '孙承宗', faction: '明军', alive: true },
       { name: '侯养性', faction: '后金', alive: true }
     ],
-    facs: [],
+    facs: [{ name: '覆灭势力', strength: 0, militaryStrength: 0 }],
     vars: {},
     rels: {},
     evtLog: [],
@@ -133,9 +133,10 @@ vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-endturn-render.js'), 'utf8')
   filename: 'tm-endturn-render.js'
 });
 
+assert(typeof sandbox._endTurn_finalizeRecords === 'function', '_endTurn_finalizeRecords should be callable');
 assert(typeof sandbox._endTurn_render === 'function', '_endTurn_render should be callable');
 
-sandbox._endTurn_render(
+const presentation = sandbox._endTurn_finalizeRecords(
   '辽东战事略胜，诸军收兵。',
   '曹文诏、孙承宗督军转进，侯养性部溃退。',
   '',
@@ -155,6 +156,7 @@ sandbox._endTurn_render(
   '',
   null
 );
+sandbox._endTurn_render(presentation);
 
 const html = (sandbox.GM.shijiHistory[0] && sandbox.GM.shijiHistory[0].html) || sandbox._lastTurnResultHtml || '';
 const match = html.match(/<details[\s\S]*?<summary[\s\S]*?3\s*军卷入[\s\S]*?<\/table><\/details>/);
@@ -169,5 +171,7 @@ assert(/主将无恙/.test(details), 'commanderFate.outcome should localize surv
 assert(/溃退/.test(details) && /主将被俘/.test(details), 'stateAfter and captured outcome should localize enemy fate');
 assert(/120/.test(details) && /540/.test(details), 'loss should render as casualties fallback');
 assert(!/<td[^>]*>\s*\?\s*<\/td>/.test(details), 'battle details should not render bare question-mark cells');
+assert(sandbox.GM._factionHistory[0].turn === 39 && sandbox.GM._factionHistory[0].factions['覆灭势力'].strength === 0,
+  'faction history preserves zero strength and labels the completed turn');
 
 console.log('[smoke-endturn-battle-detail-fallback] PASS battle detail fallbacks render named army/fate rows');

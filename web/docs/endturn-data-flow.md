@@ -108,15 +108,15 @@
 - **同步/异步**：纯同步
 - **错误处理**：无（trivial 装配函数）
 
-### tm-endturn-render.js (2099 LOC)
-- **入口函数**：`_endTurn_render(shizhengji, zhengwen, ..., 17 个参数)`
-- **职责一句话**：渲染史记面板 + Delta 面板 + 角色高亮 + 触发自动存档
-- **被谁调**：core.js L230 直接调；deferredPhase5 不调（phase4 渲染已经过了）
+### tm-endturn-render.js
+- **入口函数**：`_endTurn_finalizeRecords(...)` / `_endTurn_saveSnapshot(ctx)` / `_endTurn_render(presentation)`
+- **职责一句话**：事务内最终化史记、起居注、指标和分卷暂存；原子保存 canonical 双槽；commit 后只渲染 UI
+- **被谁调**：`tm-endturn-core.js` 的共享 commit barrier；normal/deferred 两条路径复用同一入口
 - **GM 读字段**：`GM.chars` / `GM.vars` / `GM.guoku` / `GM.neitang` / `GM.population` / `GM._prevGuoku` / `GM._prevNeitang` / `GM._prevPopulation` / `GM._prevVars` / `GM._turnBattleResults` / `GM._turnTyrantActivities` / `GM._tyrantHistory` / `GM._yearlyDigest` / `GM._reconcilePatchLog` / `GM._fengwenRecord` / `GM._edictEfficacyReport` / `GM._fiscalDeficitStreak` / `GM._metricHistory` / `GM._turnAiResults`
 - **GM 写字段**：`GM.shijiHistory.push` / `GM.eraName` / `GM._pendingToasts` / `GM._tyrantDecadence` / `GM._lastFixedExpense` / `GM._reconcileLog`
 - **关键临时字段**：消费所有 `_prev*` snapshots 算 delta；消费 `_turnAiResults`/`_turnTyrantActivities`/`_turnBattleResults` 渲染
-- **同步/异步**：函数本身同步；存档分支内部 2 处 await
-- **错误处理**：19 处 try/catch
+- **同步/异步**：记录最终化同步；存档和桌面分卷 stage/publish 为显式 await
+- **错误处理**：记录或存档异常向事务边界传播；只有 commit 后纯展示异常允许降级
 
 ### tm-endturn-province.js (2236 LOC)
 - **入口函数**：`initProvinceEconomy()` / `updateProvinceEconomy()` / `appointGovernor()` + 省级面板 UI
@@ -215,7 +215,7 @@
 
 ## 4. 管道步骤切分建议
 
-按数据依赖最小割推荐切成 **6 个粗粒度 step**（不是当前 15+ sub-phase）：
+按数据依赖最小割切成 **7 个粗粒度 step**（不是当前 15+ sub-phase）：
 
 1. **prep**（同步）：`_endTurn_init` + `_endTurn_collectInput` + memorial decisions + 三系统更新 (1.7) + ghost sweep + npc auto-appoint
    - 输出：`{npcContext, input{edicts,xinglu,memRes,oldVars,edictActions,tyrantActivities}, snapshots:{prevGuoku,prevNeitang,prevPopulation}, edictTrackerNew}`
@@ -223,7 +223,8 @@
 3. **ai**（顺序流水线）：prompt.build → subcalls.runMain (sc0/sc05/sc1) → apply.writeBack → followup.run（含三路并行 + 后台化分支）
 4. **post-ai-edict**（同步）：`applyEdictActions` (phase 2.5) + `TyrantActivitySystem.applyEffects` (2.6) + `aiEdictEfficacyAudit`（已后台化）
 5. **systems**（同步串联）：`_endTurn_updateSystems` 50+ engine.tick·**已经是 in-process pipeline**·作为单 step 不再拆
-6. **render-and-finalize**（同步 + 朝会分支）：`_endTurn_render` + after hooks + 科举/角色路程/勤政 streak·若 `_pendingShijiModal.courtDone===false` 则将 phase5 打包成 `deferredPhase5` 等待朝会回调。该 step 的状态收官采用 `onError: abort`；只有 `_endTurn_render` 及其纯展示 fallback 在局部捕获后允许降级。
+6. **render-and-finalize**（同步 + 朝会分支）：只准备 finalization 参数，并执行 after hooks、科举、角色路程和勤政等剩余状态结算；若 `_pendingShijiModal.courtDone===false` 则等待朝会回调。全部状态异常 `onError: abort`。
+7. **prepare-commit-barrier**：声明最终存档要求；随后 core 依次执行 `_endTurn_finalizeRecords` → 分卷 stage → `saveManyAtomic(autosave, slot_0)` → commit → 分卷 publish → 清草稿 → `_endTurn_render`。只有最后的纯 UI 阶段允许降级。
 
 每 step 内部并行/顺序与当前一致；step 之间 boundary 严格走 ctx 显式字段。
 

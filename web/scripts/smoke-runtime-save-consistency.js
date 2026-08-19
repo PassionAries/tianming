@@ -63,34 +63,35 @@ ok(/_preState = _buildSaveState\(\{ format: 'idb', gm: _preSaveGM, p: _preSaveP 
 ok(/global\._buildSaveState\(\{ format: 'idb', detach: true, gm: GM, p: P \|\| \{\} \}\)/.test(resume), '残局发布以 detached 模式复用统一 builder');
 ok(!/gameState\s*=\s*deepClone\(GM\)|GM\s*:\s*deepClone\(GM\)/.test(lifecycle + '\n' + core + '\n' + manager), '生产存档写口无裸 deepClone(GM)');
 ok(!/SaveManager\.autoSave\(\)/.test(render), '端回合不再重复调用 SaveManager.autoSave 覆盖 slot_0');
-ok(/TM_SaveDB\.save\('autosave',[\s\S]*?if\s*\(ok\s*!==\s*true\)\s*throw[\s\S]*?Promise\.all\(\[_autoWrite, _slotWrite\]\)[\s\S]*?_clearPreEndturnMarkerAfterSave\(_endturnSavePreId\)/.test(render), 'autosave resolve(false) 保留 pre_endturn 恢复标记');
-ok(/TM_SaveDB\.save\('slot_0',[\s\S]*?if\s*\(ok\s*!==\s*true\)\s*throw[\s\S]*?Promise\.all\(\[_autoWrite, _slotWrite\]\)[\s\S]*?_updateSaveIndex/.test(render), 'slot_0 resolve(false) 不伪造案卷索引');
+ok(/TM_SaveDB\.saveManyAtomic\(\[[\s\S]*?id: 'autosave'[\s\S]*?id: 'slot_0'[\s\S]*?_writeOk !== true[\s\S]*?_clearPreEndturnMarkerAfterSave/.test(render),
+  'canonical batch failure preserves the pre_endturn recovery marker');
+ok(/_writeOk !== true[\s\S]*?throw new Error\('canonical 回合存档未原子落库'\)[\s\S]*?_updateSaveIndex/.test(render),
+  'slot index is published only after the canonical batch commits');
 {
-  const autosaveAt = render.indexOf("TM_SaveDB.save('autosave'");
-  const slotAt = render.indexOf("TM_SaveDB.save('slot_0'");
-  const writesDoneAt = render.indexOf('var _writeResults = await Promise.all', slotAt);
-  const markerAt = render.indexOf("localStorage.setItem('tm_autosave_mark'", autosaveAt);
-  ok(markerAt > writesDoneAt && writesDoneAt > slotAt && /turn:\s*_autoMeta\.turn/.test(render.slice(markerAt, markerAt + 300)), 'tm_autosave_mark 仅在两个槽位成功后写入并锚定快照 turn');
+  const batchAt = render.indexOf('TM_SaveDB.saveManyAtomic([');
+  const writesDoneAt = render.indexOf("if (_writeOk !== true", batchAt);
+  const markerAt = render.indexOf("localStorage.setItem('tm_autosave_mark'", batchAt);
+  ok(markerAt > writesDoneAt && writesDoneAt > batchAt && /turn:\s*_autoMeta\.turn/.test(render.slice(markerAt, markerAt + 300)), 'tm_autosave_mark 仅在原子双槽提交后写入并锚定快照 turn');
 }
 ok(/_autoSaveResult\s*=\s*await window\.tianming\.autoSave\(saveData\);[\s\S]*?if\s*\(!_tmDesktopAutoSaveResultOk\(_autoSaveResult\)\)\s*throw[\s\S]*?_autoSaveLastDoneMs=Date\.now\(\)/.test(lifecycle), '60s Electron autoSave 仅在业务成功后推进成功时钟');
 ok(/_autoSaveLastSavedTurn=\(saveData\._saveMeta[\s\S]*?saveData\._saveMeta\.turn/.test(lifecycle), 'Electron 闲置跳存基线锚定已写快照 turn');
 ok(!/window\.tianming\.autoSave\(/.test(render), '端回合删除重复 Electron autoSave·崩溃恢复档只留 60s 写口');
 ok(/var _endturnSaveGM = GM;[\s\S]*?var _endturnSaveP = P;[\s\S]*?_endturnSaveLoadGen[\s\S]*?_endturnSavePreId/.test(render), '端回合 detached save 捕获 GM/P/loadGen/pre snapshotId');
 ok(/await _awaitPostTurnJobsForSave[\s\S]*?if \(!_endturnSaveStillCurrent\(\)\) return false;[\s\S]*?_buildSaveState\(\{format:'idb',gm:_endturnSaveGM,p:_endturnSaveP\}\)/.test(render), '后台等待后先验租约·builder 在 detached snapshot 上准备');
-ok(/TM_SaveDB\.save\('autosave', _autoState, _autoMeta, _autoWriteOptions\)/.test(render)
-  && /TM_SaveDB\.save\('slot_0', _autoState, _autoMeta, _autoWriteOptions\)/.test(render), 'autosave/slot_0 写事务共用代际租约');
+ok(/TM_SaveDB\.saveManyAtomic\([\s\S]*?_autoWriteOptions\)/.test(render)
+  && /function saveManyAtomic\(entries, options\)/.test(storage), 'autosave/slot_0 共用代际租约与单一批量事务');
 {
   const renderFn = sliceFn(render, 'function _endTurn_render(');
   const barrierStepAt = pipeline.indexOf("name: 'prepare-commit-barrier'");
   const normalIndicatorAt = pipeline.indexOf('_kjUpdateIndicators(ctx)');
   const deferredOpenersAt = pipeline.indexOf('await _runPostRenderTurnOpeners(ctx)');
-  const deferredSaveAt = pipeline.indexOf('_endTurn_saveSnapshot()', deferredOpenersAt);
+  const deferredSaveAt = pipeline.indexOf('await _tmFinalizeEndTurnTransaction(ctx, ctx.meta.transaction)', deferredOpenersAt);
   ok(!/_endTurn_saveSnapshot\s*\(/.test(renderFn), '_endTurn_render 只渲染·不再在 Phase5 前启动存档');
   ok(barrierStepAt > normalIndicatorAt && normalIndicatorAt >= 0 && /finalSaveRequired\s*=\s*true/.test(pipeline.slice(barrierStepAt)), 'normal 路径在 Phase5/J1 后只声明提交屏障');
-  ok(deferredSaveAt > deferredOpenersAt && /await ctx\.meta\.endTurnSavePromise\s*!==\s*true/.test(pipeline.slice(deferredOpenersAt, deferredSaveAt + 500)), 'deferred 路径在 Phase5/openers 后等待存档成功');
+  ok(deferredSaveAt > deferredOpenersAt && /ctx\.meta\.deferEndTurnSave\s*=\s*false/.test(pipeline.slice(deferredOpenersAt, deferredSaveAt + 300)), 'deferred 路径在 Phase5/openers 后复用共享提交屏障');
   ok(/ctx\.meta\.deferEndTurnSave\s*=\s*true/.test(pipeline) && /if \(ctx\.meta\.deferEndTurnSave\) return true;/.test(core), 'deferred 路径显式阻止 core 提前落库');
   ok(/!ctx\.meta\.endTurnSavePromise && typeof _endTurn_saveSnapshot/.test(core)
-    && /!ctx\.meta\.endTurnSavePromise && typeof _endTurn_saveSnapshot/.test(pipeline), 'normal/deferred 两条路径各自复用同一幂等存档 promise');
+    && (core.match(/_endTurn_saveSnapshot\(ctx\)/g) || []).length === 1, 'normal/deferred 两条路径复用同一幂等存档 promise');
   ok(/var saved = await ctx\.meta\.endTurnSavePromise;[\s\S]*?saved !== true[\s\S]*?_tmCommitEndTurnTransaction/.test(core), 'normal 提交屏障严格等待最终存档后才 commit');
 }
 ok(/function save\(id, gameState, meta, options\)[\s\S]*?_writeStillAllowed\(\)[\s\S]*?SaveCompression\.compress[\s\S]*?if \(!_writeStillAllowed\(\)\) return false;[\s\S]*?return _put/.test(storage), 'SaveDB 在压缩前及真正 put 前复验 writeGuard');
@@ -100,7 +101,19 @@ ok(/auto-save-session-rotate/.test(mainImpl) && /autoSaveSessionMatches\(request
   && /writeFile[\s\S]*?autoSaveSessionMatches\(requestToken\)[\s\S]*?rename/.test(mainImpl), 'Electron canonical auto-save 在 write/rename 间按 session token 复验');
 ok(/rotateAutoSaveSession/.test(preloadImpl) && /_tmRotateDesktopAutoSaveSession\('full-load'/.test(lifecycle)
   && /_tmRotateDesktopAutoSaveSession\('new-game'/.test(startPatch), 'preload + 读档 + 新局共同切换 auto-save session');
-ok(/writeTurnData\([\s\S]*?\.then\(function\(result\)[\s\S]*?result\.success === true[\s\S]*?throw new Error\('回合分卷写入失败'/.test(render), 'writeTurnData resolve({success:false}) 显式报错');
+ok(/stageTurnData\([\s\S]*?result\.success === true[\s\S]*?回合分卷暂存失败/.test(render)
+  && /_tmCommitEndTurnTransaction[\s\S]*?await _endTurn_publishStagedTurnData/.test(core), '回合分卷先暂存并仅在世界 commit 后发布');
+ok(/function _recoverPendingTurnDataPublish\(\)[\s\S]*?recoverTurnData\(marker\)[\s\S]*?transactionId !== marker\.transactionId[\s\S]*?delete GM\._pendingTurnDataPublish/.test(lifecycle),
+  '读档按世界身份和 transactionId 租约幂等补发未发布分卷');
+{
+  const finalizerFn = sliceFn(render, 'function _endTurn_finalizeRecords(');
+  const uiRenderFn = sliceFn(render, 'function _endTurn_render(');
+  ok(/_syncFiscalScalars\(GM\)[\s\S]*?_wdPrepareAudienceRenderState\(\)[\s\S]*?updateMapColors\(\{ refresh: false \}\)/.test(finalizerFn),
+    '财政、问对和地图派生状态在事务内最终化');
+  ok(/renderWenduiChars\(false, \{ skipStatePreparation: true \}\)/.test(uiRenderFn)
+    && /renderGameState\(\{ skipStateSync: true \}\)/.test(uiRenderFn)
+    && !/updateMapColors\(/.test(uiRenderFn), 'commit 后 UI 渲染跳过所有已知状态准备入口');
+}
 
 console.log('=== 2. pre_endturn two-phase + strict validator ===');
 ok(/commitState:\s*'pending'/.test(core) && /_livePreMark\.commitState = 'committed'/.test(core), 'marker pending -> committed 两阶段');
@@ -174,13 +187,47 @@ async function runDynamicLeaseSmokes() {
       _awaitPostTurnJobsForSave: async () => { order.push('jobs'); }, _prepareGMForSave: () => { order.push('prepare'); },
       _buildSaveState: opts => { order.push('snapshot:' + opts.gm.phase5Value); return { GM: { phase5Value: opts.gm.phase5Value }, P: opts.p }; },
       findScenarioById: () => ({ name: '测试剧本' }), getTSText: () => '某日',
-      TM_SaveDB: { save: async (id, state) => { writes.push([id, state.GM.phase5Value]); return true; } }
+      TM_SaveDB: {
+        saveManyAtomic: async entries => {
+          entries.forEach(entry => writes.push([entry.id, entry.gameState.GM.phase5Value]));
+          return true;
+        }
+      }
     };
     ctx.window.window = ctx.window;
     vm.createContext(ctx); vm.runInContext(render, ctx);
     order.push('phase5');
-    const saved = await ctx._endTurn_saveSnapshot();
+    const saved = await ctx._endTurn_saveSnapshot({ meta: {} });
     ok(saved === true && order.indexOf('phase5') < order.indexOf('snapshot:after') && writes.length === 2 && writes.every(w => w[1] === 'after'), '真实 save helper 只快照 Phase5 后状态并同时写 autosave/slot_0');
+  }
+  {
+    let staged = 0, discarded = 0;
+    const ctx = {
+      GM: { turn: 50, sid: 's1', saveName: 'desktop-save', _campaignId: 'campaign-a', eraName: '某年号' }, P: {},
+      window: {
+        _tmLoadGen: 2,
+        _tmActivePreEndturnSnapshotId: 'pre-50',
+        TM: { errors: { capture() {}, captureSilent() {} } },
+        tianming: {
+          isDesktop: true,
+          async stageTurnData() { staged++; return { success: true }; },
+          async discardTurnData() { discarded++; return { success: true }; }
+        }
+      },
+      TM: { errors: { capture() {}, captureSilent() {} } }, console, Promise, Date, JSON, Math, Error, setTimeout,
+      deepClone: value => JSON.parse(JSON.stringify(value)),
+      localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+      _awaitPostTurnJobsForSave: async () => {}, _prepareGMForSave() {},
+      _buildSaveState: opts => ({ GM: JSON.parse(JSON.stringify(opts.gm)), P: opts.p }),
+      findScenarioById: () => ({ name: '测试剧本' }), getTSText: () => '某日',
+      TM_SaveDB: { async saveManyAtomic() { throw new Error('slot_0 injected failure'); } }
+    };
+    ctx.window.window = ctx.window;
+    vm.createContext(ctx); vm.runInContext(render, ctx);
+    const saveCtx = { meta: { transactionId: 'turn-11111111-2222-4333-8444-555555555555', turnPresentation: { turnData: { context: { turn: 49 } } } } };
+    const saved = await ctx._endTurn_saveSnapshot(saveCtx);
+    ok(saved === false && staged === 1 && discarded === 1 && !ctx.GM._pendingTurnDataPublish,
+      'canonical batch failure discards desktop staging and leaves no formal publish marker');
   }
   {
     let src = storage;

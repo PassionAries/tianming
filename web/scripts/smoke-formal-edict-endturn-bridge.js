@@ -15,6 +15,7 @@ const phase8 = bridge + '\n' + drafts;
 const office = read('tm-office-panel.js');
 const prep = read('tm-endturn-prep.js');
 const render = read('tm-endturn-render.js');
+const core = read('tm-endturn-core.js');
 
 assert(/function syncFormalEdictDraftsToLegacyInputs\(\)/.test(phase8), 'phase8 bridge sync function is missing');
 assert(/function getFormalEdictDraftSnapshot\(\)/.test(phase8), 'phase8 edict snapshot function is missing');
@@ -45,6 +46,11 @@ assert(collectIndex >= 0 && collectSyncIndex > collectIndex && collectSyncIndex 
 
 const clearInputIndex = render.indexOf('["edict-pol","edict-mil","edict-dip","edict-eco","edict-oth","xinglu","xinglu-pub","xinglu-prv"]');
 const clearPhase8Index = render.indexOf('clearEdictDrafts', clearInputIndex);
-assert(clearInputIndex >= 0 && clearPhase8Index > clearInputIndex, 'end-turn render must clear phase8 edict drafts after clearing legacy inputs');
+assert(clearInputIndex >= 0 && clearPhase8Index > clearInputIndex, 'post-commit cleanup clears phase8 drafts after legacy inputs');
+assert(/function _endTurn_stripCommittedDraftsFromSnapshot[\s\S]*?delete snapGM\._savedEdictDrafts[\s\S]*?edictDrafts = \{\}/.test(render),
+  'canonical final save omits already-submitted legacy and formal edict drafts without mutating live inputs');
+const commitIndex = core.indexOf('if (!_tmCommitEndTurnTransaction(txn))');
+const clearCommittedIndex = core.indexOf('_endTurn_clearCommittedInputs()', commitIndex);
+assert(commitIndex >= 0 && clearCommittedIndex > commitIndex, 'live player drafts are cleared only after transaction commit');
 
 console.log('[smoke-formal-edict-endturn-bridge] pass');

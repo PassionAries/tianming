@@ -868,10 +868,23 @@ var PREF_CONF_KEYS = [
 function _recoverPendingTurnDataPublish() {
   if (!(GM && GM._pendingTurnDataPublish && window.tianming && typeof window.tianming.recoverTurnData === 'function')) return;
   var targetGM = GM;
+  var targetP = P;
+  var targetLoadGen = (typeof window !== 'undefined' && window._tmLoadGen) || 0;
   var marker = deepClone(GM._pendingTurnDataPublish);
-  window.tianming.recoverTurnData(marker).then(function(result) {
-    if (GM !== targetGM || !GM._pendingTurnDataPublish || GM._pendingTurnDataPublish.transactionId !== marker.transactionId) return;
+  function recoveryLeaseCurrent() {
+    return GM === targetGM && P === targetP &&
+      (((typeof window !== 'undefined' && window._tmLoadGen) || 0) === targetLoadGen) &&
+      String((GM && GM._campaignId) || '') === String(marker.campaignId || '') &&
+      !!GM._pendingTurnDataPublish && GM._pendingTurnDataPublish.transactionId === marker.transactionId;
+  }
+  window.tianming.recoverTurnData(marker).then(async function(result) {
+    if (!recoveryLeaseCurrent()) return;
     if (!(result && result.success === true)) throw new Error(result && result.error || '回合分卷恢复失败');
+    if (!(typeof TM_SaveDB !== 'undefined' && typeof TM_SaveDB.clearPendingTurnDataPublishAtomic === 'function')) {
+      throw new Error('回合分卷恢复标记 checkpoint 接口缺失');
+    }
+    var cleared = await TM_SaveDB.clearPendingTurnDataPublishAtomic(['autosave', 'slot_0'], marker.transactionId, { writeGuard: recoveryLeaseCurrent });
+    if (cleared !== true || !recoveryLeaseCurrent()) throw new Error('回合分卷已恢复，但 canonical 标记清理失败');
     delete GM._pendingTurnDataPublish;
   }).catch(function(error) {
     if (GM !== targetGM) return;

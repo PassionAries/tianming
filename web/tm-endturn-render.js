@@ -93,9 +93,27 @@ async function _endTurn_publishStagedTurnData(ctx) {
   var marker = ctx && ctx.meta && ctx.meta.stagedTurnData;
   if (!marker) return true;
   if (!(window.tianming && typeof window.tianming.publishTurnData === 'function')) throw new Error('桌面回合分卷发布接口缺失');
+  var targetGM = GM;
+  var targetP = P;
+  var targetLoadGen = (typeof window !== 'undefined' && window._tmLoadGen) || 0;
+  function publishLeaseCurrent() {
+    return GM === targetGM && P === targetP &&
+      (((typeof window !== 'undefined' && window._tmLoadGen) || 0) === targetLoadGen) &&
+      String((GM && GM._campaignId) || '') === String(marker.campaignId || '');
+  }
   var result = await window.tianming.publishTurnData(marker);
   if (!(result && result.success === true)) throw new Error('回合分卷发布失败' + (result && result.error ? '：' + result.error : ''));
-  if (GM && GM._pendingTurnDataPublish && GM._pendingTurnDataPublish.transactionId === marker.transactionId) delete GM._pendingTurnDataPublish; // arch-ok: publish owns its committed marker cleanup
+  if (!publishLeaseCurrent()) throw new Error('回合分卷发布完成时世界身份已变化');
+  if (targetGM._pendingTurnDataPublish && targetGM._pendingTurnDataPublish.transactionId === marker.transactionId) delete targetGM._pendingTurnDataPublish; // arch-ok: publish owns its committed marker cleanup
+  if (!(typeof TM_SaveDB !== 'undefined' && typeof TM_SaveDB.clearPendingTurnDataPublishAtomic === 'function')) {
+    targetGM._pendingTurnDataPublish = deepClone(marker); // arch-ok: keep recoverable receipt when durable checkpoint is unavailable
+    throw new Error('回合分卷发布标记 checkpoint 接口缺失');
+  }
+  var cleared = await TM_SaveDB.clearPendingTurnDataPublishAtomic(['autosave', 'slot_0'], marker.transactionId, { writeGuard: publishLeaseCurrent });
+  if (cleared !== true) {
+    if (publishLeaseCurrent()) targetGM._pendingTurnDataPublish = deepClone(marker); // arch-ok: failed checkpoint remains idempotently recoverable
+    throw new Error('回合分卷已发布，但 canonical 标记清理失败');
+  }
   ctx.meta.stagedTurnData = null;
   return true;
 }

@@ -52,8 +52,9 @@ var TM_SaveDB = (function() {
   'use strict';
 
   var DB_NAME = 'tianming_db'; // 统一数据库名
-  var DB_VERSION = 2; // v2: saves + projects 双store
+  var DB_VERSION = 3; // v3: 存档 payload 与列表 metadata 分离
   var SAVE_STORE = 'saves';
+  var SAVE_META_STORE = 'saveMetadata';
   var PROJECT_STORE = 'projects';
   var _db = null;
   var _available = false;
@@ -74,12 +75,32 @@ var TM_SaveDB = (function() {
       var req = indexedDB.open(DB_NAME, DB_VERSION);
       req.onupgradeneeded = function(e) {
         var db = e.target.result;
+        var saveStore;
         if (!db.objectStoreNames.contains(SAVE_STORE)) {
-          var s = db.createObjectStore(SAVE_STORE, { keyPath: 'id' });
-          s.createIndex('timestamp', 'timestamp', { unique: false });
+          saveStore = db.createObjectStore(SAVE_STORE, { keyPath: 'id' });
+          saveStore.createIndex('timestamp', 'timestamp', { unique: false });
+        } else {
+          saveStore = e.target.transaction.objectStore(SAVE_STORE);
+        }
+        var metadataStore;
+        if (!db.objectStoreNames.contains(SAVE_META_STORE)) {
+          metadataStore = db.createObjectStore(SAVE_META_STORE, { keyPath: 'id' });
+          metadataStore.createIndex('timestamp', 'timestamp', { unique: false });
+        } else {
+          metadataStore = e.target.transaction.objectStore(SAVE_META_STORE);
         }
         if (!db.objectStoreNames.contains(PROJECT_STORE)) {
           db.createObjectStore(PROJECT_STORE, { keyPath: 'id' });
+        }
+        // v2→v3 只在升级事务中遍历一次旧 payload，之后列表永远只读轻量 metadata。
+        if (e.oldVersion > 0 && e.oldVersion < 3 && saveStore && metadataStore) {
+          var cursorReq = saveStore.openCursor();
+          cursorReq.onsuccess = function() {
+            var cursor = cursorReq.result;
+            if (!cursor) return;
+            metadataStore.put(_toSaveMetadata(cursor.value));
+            cursor.continue();
+          };
         }
       };
       req.onsuccess = function(e) {
@@ -112,9 +133,26 @@ var TM_SaveDB = (function() {
     catch (_) { return false; }
   }
 
+  function _toSaveMetadata(record) {
+    record = record || {};
+    return {
+      id: record.id,
+      name: record.name,
+      type: record.type,
+      timestamp: record.timestamp,
+      turn: record.turn,
+      scenarioName: record.scenarioName,
+      eraName: record.eraName,
+      date: record.date || '',
+      dynastyPhase: record.dynastyPhase || '',
+      snapshotId: record.snapshotId || '',
+      commitState: record.commitState || ''
+    };
+  }
+
   function _dropOldestAutoSave(writeGuard) {
     if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
-    return _listAll(SAVE_STORE).then(function(records) {
+    return _listSaveMetadata().then(function(records) {
       // 列表读取本身是异步的；失效请求不得为了一个已取消的写入删除仍可恢复的旧 autosave。
       if (!_writeGuardAllows(writeGuard)) return false;
       var autos = (records || []).filter(function(r){ return r.type === 'auto'; })
@@ -122,7 +160,61 @@ var TM_SaveDB = (function() {
       if (autos.length === 0) return false; // 没 auto 可清
       var victim = autos[0];
       console.warn('[SaveDB] quota 满·清最老自动存档:', victim.id, 'ts=' + new Date(victim.timestamp||0).toLocaleString());
-      return _del(SAVE_STORE, victim.id).then(function(){ return true; });
+      return _deleteSaveRecord(victim.id, writeGuard).then(function(){ return true; });
+    });
+  }
+
+  function _putSaveRecord(record, _retryCount, writeGuard) {
+    if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
+    var metadata = _toSaveMetadata(record);
+    if (!_available || !_db) {
+      var payloadKey = 'tm_idb_' + SAVE_STORE + '_' + record.id;
+      var metadataKey = 'tm_idb_' + SAVE_META_STORE + '_' + record.id;
+      var previousPayload = localStorage.getItem(payloadKey);
+      var previousMetadata = localStorage.getItem(metadataKey);
+      try {
+        localStorage.setItem(payloadKey, JSON.stringify(record));
+        localStorage.setItem(metadataKey, JSON.stringify(metadata));
+        return Promise.resolve(true);
+      } catch (e) {
+        try {
+          if (previousPayload == null) localStorage.removeItem(payloadKey);
+          else localStorage.setItem(payloadKey, previousPayload);
+          if (previousMetadata == null) localStorage.removeItem(metadataKey);
+          else localStorage.setItem(metadataKey, previousMetadata);
+        } catch (_) {}
+        return Promise.reject(e);
+      }
+    }
+    return new Promise(function(resolve, reject) {
+      try {
+        var tx = _db.transaction([SAVE_STORE, SAVE_META_STORE], 'readwrite');
+        var settled = false;
+        tx.objectStore(SAVE_STORE).put(record);
+        tx.objectStore(SAVE_META_STORE).put(metadata);
+        tx.oncomplete = function() { if (!settled) { settled = true; resolve(true); } };
+        function handleWriteFailure(e) {
+          if (settled) return;
+          settled = true;
+          var err = e.target && e.target.error;
+          var isQuota = err && err.name === 'QuotaExceededError';
+          if (isQuota && !_retryCount) {
+            if (!_writeGuardAllows(writeGuard)) { resolve(false); return; }
+            _dropOldestAutoSave(writeGuard).then(function(dropped) {
+              if (!_writeGuardAllows(writeGuard)) { resolve(false); return; }
+              if (dropped) _putSaveRecord(record, 1, writeGuard).then(resolve, reject);
+              else {
+                if (typeof window.toast === 'function') window.toast('❌ 存档空间满·请手动删除旧存档后重试');
+                resolve(false);
+              }
+            }).catch(reject);
+          } else {
+            reject(err || new Error('IndexedDB 存档写入失败'));
+          }
+        }
+        tx.onerror = handleWriteFailure;
+        tx.onabort = handleWriteFailure;
+      } catch (e) { reject(e); }
     });
   }
 
@@ -191,6 +283,12 @@ var TM_SaveDB = (function() {
           var previous = localStorage.getItem(key);
           localStorage.setItem(key, JSON.stringify(record));
           written.push({ key: key, previous: previous });
+          if (storeName === SAVE_STORE) {
+            var metadataKey = 'tm_idb_' + SAVE_META_STORE + '_' + record.id;
+            var previousMetadata = localStorage.getItem(metadataKey);
+            localStorage.setItem(metadataKey, JSON.stringify(_toSaveMetadata(record)));
+            written.push({ key: metadataKey, previous: previousMetadata });
+          }
         });
         return Promise.resolve(records.length);
       } catch (e) {
@@ -205,9 +303,14 @@ var TM_SaveDB = (function() {
     }
     return new Promise(function(resolve, reject) {
       try {
-        var tx = _db.transaction(storeName, 'readwrite');
+        var txStores = storeName === SAVE_STORE ? [SAVE_STORE, SAVE_META_STORE] : storeName;
+        var tx = _db.transaction(txStores, 'readwrite');
         var store = tx.objectStore(storeName);
-        records.forEach(function(record) { store.put(record); });
+        var metadataStore = storeName === SAVE_STORE ? tx.objectStore(SAVE_META_STORE) : null;
+        records.forEach(function(record) {
+          store.put(record);
+          if (metadataStore) metadataStore.put(_toSaveMetadata(record));
+        });
         tx.oncomplete = function() { resolve(records.length); };
         tx.onerror = function(e) { reject(e.target && e.target.error || new Error('IndexedDB 批量写入失败')); };
         tx.onabort = function(e) { reject(e.target && e.target.error || new Error('IndexedDB 批量写入已中止')); };
@@ -251,6 +354,37 @@ var TM_SaveDB = (function() {
     });
   }
 
+  function _deleteSaveRecord(id, writeGuard) {
+    if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
+    if (!_available || !_db) {
+      var payloadKey = 'tm_idb_' + SAVE_STORE + '_' + id;
+      var metadataKey = 'tm_idb_' + SAVE_META_STORE + '_' + id;
+      var previousPayload = localStorage.getItem(payloadKey);
+      var previousMetadata = localStorage.getItem(metadataKey);
+      try {
+        localStorage.removeItem(payloadKey);
+        localStorage.removeItem(metadataKey);
+        return Promise.resolve(true);
+      } catch (e) {
+        try {
+          if (previousPayload != null) localStorage.setItem(payloadKey, previousPayload);
+          if (previousMetadata != null) localStorage.setItem(metadataKey, previousMetadata);
+        } catch (_) {}
+        return Promise.reject(e);
+      }
+    }
+    return new Promise(function(resolve, reject) {
+      try {
+        var tx = _db.transaction([SAVE_STORE, SAVE_META_STORE], 'readwrite');
+        tx.objectStore(SAVE_STORE).delete(id);
+        tx.objectStore(SAVE_META_STORE).delete(id);
+        tx.oncomplete = function() { resolve(true); };
+        tx.onerror = function(e) { reject(e.target && e.target.error || new Error('IndexedDB 存档删除失败')); };
+        tx.onabort = function(e) { reject(e.target && e.target.error || tx.error || new Error('IndexedDB 存档删除事务已中止')); };
+      } catch (e) { reject(e); }
+    });
+  }
+
   // ── 通用列出 ──
   function _listAll(storeName) {
     if (!_available || !_db) {
@@ -275,6 +409,29 @@ var TM_SaveDB = (function() {
         req.onerror = function(e) { reject(e.target && e.target.error || new Error('IndexedDB 列表读取失败')); };
         tx.onabort = function(e) { reject(e.target && e.target.error || tx.error || new Error('IndexedDB 列表事务已中止')); };
       } catch(e) { reject(e); }
+    });
+  }
+
+  function _listSaveMetadata() {
+    if (_available && _db) return _listAll(SAVE_META_STORE);
+    return _listAll(SAVE_META_STORE).then(function(metadataRecords) {
+      // 旧 localStorage fallback 没有独立 metadata；只为缺失项做一次惰性回填。
+      var byId = Object.create(null);
+      (metadataRecords || []).forEach(function(record) { if (record && record.id != null) byId[String(record.id)] = true; });
+      var payloadPrefix = 'tm_idb_' + SAVE_STORE + '_';
+      for (var i = 0; i < localStorage.length; i++) {
+        var key = localStorage.key(i);
+        if (!key || key.indexOf(payloadPrefix) !== 0) continue;
+        var id = key.slice(payloadPrefix.length);
+        if (byId[id]) continue;
+        var raw = localStorage.getItem(key);
+        if (!raw) continue;
+        var metadata = _toSaveMetadata(JSON.parse(raw));
+        localStorage.setItem('tm_idb_' + SAVE_META_STORE + '_' + id, JSON.stringify(metadata));
+        metadataRecords.push(metadata);
+        byId[id] = true;
+      }
+      return metadataRecords;
     });
   }
 
@@ -336,7 +493,7 @@ var TM_SaveDB = (function() {
         }
         // 压缩/开库可能跨越读档或下一回合；真正开启写事务前再验一次租约。
         if (!_writeStillAllowed()) return false;
-        return _put(SAVE_STORE, record, 0, _writeStillAllowed);
+        return _putSaveRecord(record, 0, _writeStillAllowed);
       });
     });
   }
@@ -369,7 +526,7 @@ var TM_SaveDB = (function() {
   /** 列出所有游戏存档（不含gameState大数据，仅元信息） */
   function list() {
     return _ensureOpen().then(function() {
-      return _listAll(SAVE_STORE);
+      return _listSaveMetadata();
     }).then(function(records) {
       return records.map(function(r) {
         return { id:r.id, name:r.name, type:r.type, timestamp:r.timestamp, turn:r.turn, scenarioName:r.scenarioName, eraName:r.eraName, date:r.date||'', dynastyPhase:r.dynastyPhase||'', snapshotId:r.snapshotId||'', commitState:r.commitState||'' };
@@ -378,7 +535,7 @@ var TM_SaveDB = (function() {
   }
 
   /** 删除游戏存档 */
-  function deleteSave(id) { return _ensureOpen().then(function() { return _del(SAVE_STORE, id); }); }
+  function deleteSave(id) { return _ensureOpen().then(function() { return _deleteSaveRecord(id); }); }
 
   // ============================================================
   //  公开API：剧本项目

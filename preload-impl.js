@@ -10,6 +10,27 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+const ONLINE_RENDERER_BODY_LIMIT_DEFAULT = 1024 * 1024;
+const ONLINE_RENDERER_BODY_LIMIT_LARGE = 4 * 1024 * 1024;
+const ONLINE_RENDERER_LARGE_BODY_ROUTES = new Set([
+  'arena/submit', 'chronicles/publish', 'revision/propose', 'workshop/upload'
+]);
+
+function _onlineRouteName(pathname) {
+  return String(pathname || '').replace(/^\/+/, '').split(/[?#]/)[0];
+}
+
+function _assertOnlineBodySize(pathname, body) {
+  if (body == null) return body;
+  const route = _onlineRouteName(pathname);
+  const limit = ONLINE_RENDERER_LARGE_BODY_ROUTES.has(route)
+    ? ONLINE_RENDERER_BODY_LIMIT_LARGE
+    : ONLINE_RENDERER_BODY_LIMIT_DEFAULT;
+  const bytes = Buffer.byteLength(JSON.stringify(body), 'utf8');
+  if (bytes > limit) throw new Error('在线请求内容超过 ' + Math.floor(limit / (1024 * 1024)) + 'MB 上限');
+  return body;
+}
+
 function _newSessionToken() {
   try {
     if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') return globalThis.crypto.randomUUID();
@@ -136,8 +157,13 @@ contextBridge.exposeInMainWorld('tianming', {
     ipcRenderer.invoke('online-service-status'),
 
   // 在线账号与社区请求由主进程固定域名、固定路由代发；Bearer Token 永不进入 renderer。
-  onlineRequest: (method, pathname, body) =>
-    ipcRenderer.invoke('online-request', { method, pathname, body }),
+  onlineRequest: (method, pathname, body) => {
+    try {
+      return ipcRenderer.invoke('online-request', { method, pathname, body: _assertOnlineBodySize(pathname, body) });
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  },
 
   accountSession: () =>
     ipcRenderer.invoke('account-session'),

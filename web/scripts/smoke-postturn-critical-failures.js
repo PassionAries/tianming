@@ -51,6 +51,20 @@ async function main() {
   ok(childResult && childResult.ok === false && childRan === false, 'dependency failure prevents child task execution');
 
   resetWorld();
+  let attempts = 0;
+  ctx._enqueuePostTurnJob('sc25c', async function() {
+    attempts++;
+    if (attempts === 1) throw new Error('temporary sc25c failure');
+    return { recovered: true };
+  });
+  const firstFailure = await rejects(() => ctx._awaitPostTurnJobs());
+  ok(firstFailure && attempts === 1 && ctx.GM._postTurnJobs.pending[0].status === 'retryable',
+    'first critical failure remains visible and records a retryable task instead of a dead Promise');
+  await ctx._awaitPostTurnJobs();
+  ok(attempts === 2 && ctx.GM._postTurnJobs === null && !Object.prototype.hasOwnProperty.call(ctx.GM, '_turnAiResults'),
+    'next save/turn wait rebuilds the task Promise and clears source data only after success');
+
+  resetWorld();
   ctx._enqueuePostTurnJob('sc25c', async function() { return { tactical: true, strategic: true }; });
   await ctx._awaitPostTurnJobs();
   ok(ctx.GM._postTurnJobs === null && !Object.prototype.hasOwnProperty.call(ctx.GM, '_turnAiResults'), 'successful critical jobs clear queue and source data');

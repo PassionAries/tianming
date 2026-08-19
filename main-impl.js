@@ -1537,14 +1537,27 @@ function readAccountSession() {
   };
 }
 
+function toPublicAccountUser(user) {
+  if (!user || typeof user !== 'object' || Array.isArray(user)) return null;
+  const out = {};
+  ['id', 'username', 'nickname', 'avatarUrl', 'email', 'emailVerified'].forEach(key => {
+    if (Object.prototype.hasOwnProperty.call(user, key)) out[key] = user[key];
+  });
+  return out;
+}
+
 function toPublicAccountSession(session = readAccountSession()) {
-  const user = session && session.user && typeof session.user === 'object' ? session.user : null;
   return {
     loggedIn: !!(session && session.token),
-    user,
+    user: toPublicAccountUser(session && session.user),
     loggedInAt: session && session.loggedInAt || ''
   };
 }
+
+const ONLINE_SECRET_FIELD_NAMES = new Set([
+  'token', 'accesstoken', 'refreshtoken', 'idtoken', 'authorization', 'sessionsecret',
+  'jwt', 'password', 'passwordhash', 'verificationsecret', 'recoverycodes'
+]);
 
 function sanitizeOnlineResponse(value, seen = new WeakSet()) {
   if (value == null || typeof value !== 'object') return value;
@@ -1553,9 +1566,17 @@ function sanitizeOnlineResponse(value, seen = new WeakSet()) {
   if (Array.isArray(value)) return value.map(item => sanitizeOnlineResponse(item, seen));
   const out = {};
   Object.keys(value).forEach(key => {
-    if (/^(?:token|accessToken|refreshToken|idToken|authorization|sessionSecret)$/i.test(key)) return;
+    const normalized = String(key).replace(/[^a-z0-9]/gi, '').toLowerCase();
+    if (ONLINE_SECRET_FIELD_NAMES.has(normalized)) return;
     out[key] = sanitizeOnlineResponse(value[key], seen);
   });
+  return out;
+}
+
+function sanitizeAccountOnlineResponse(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const out = sanitizeOnlineResponse(source);
+  if (Object.prototype.hasOwnProperty.call(source, 'user')) out.user = toPublicAccountUser(source.user);
   return out;
 }
 
@@ -1620,6 +1641,27 @@ const ONLINE_RENDERER_ROUTES = Object.freeze({
   ])
 });
 
+const ONLINE_RENDERER_BODY_LIMIT_DEFAULT = 1024 * 1024;
+const ONLINE_RENDERER_BODY_LIMIT_LARGE = 4 * 1024 * 1024;
+const ONLINE_RENDERER_LARGE_BODY_ROUTES = new Set([
+  'arena/submit', 'chronicles/publish', 'revision/propose', 'workshop/upload'
+]);
+
+function getOnlineRendererBodyLimit(route) {
+  return ONLINE_RENDERER_LARGE_BODY_ROUTES.has(String(route || ''))
+    ? ONLINE_RENDERER_BODY_LIMIT_LARGE
+    : ONLINE_RENDERER_BODY_LIMIT_DEFAULT;
+}
+
+function assertOnlineRendererBodySize(route, body) {
+  if (body == null) return 0;
+  const encoded = JSON.stringify(body);
+  const bytes = Buffer.byteLength(encoded, 'utf8');
+  const limit = getOnlineRendererBodyLimit(route);
+  if (bytes > limit) throw new Error('在线请求内容超过 ' + Math.floor(limit / (1024 * 1024)) + 'MB 上限');
+  return bytes;
+}
+
 function normalizeOnlineRendererRoute(method, rawPathname) {
   const verb = String(method || '').toUpperCase();
   if (!ONLINE_RENDERER_ROUTES[verb]) throw new Error('在线请求方法不受支持');
@@ -1642,10 +1684,7 @@ function normalizeOnlineRendererRoute(method, rawPathname) {
 
 async function handleOnlineRendererRequest(method, pathname, body) {
   const req = normalizeOnlineRendererRoute(method, pathname);
-  if (body != null) {
-    const encoded = JSON.stringify(body);
-    if (Buffer.byteLength(encoded, 'utf8') > 260 * 1024 * 1024) throw new Error('在线请求内容超过 260MB 上限');
-  }
+  assertOnlineRendererBodySize(req.route, body);
   const noAuth = new Set([
     'health', 'account/email-code', 'account/email-login', 'account/login',
     'account/register', 'account/request-reset', 'account/reset'
@@ -1670,7 +1709,10 @@ async function handleOnlineRendererRequest(method, pathname, body) {
     if (current.token) writeAccountSession({ token: current.token, user: response.user });
   }
 
-  const publicResponse = Object.assign({ success: false }, sanitizeOnlineResponse(response || {}));
+  const publicResponse = Object.assign(
+    { success: false },
+    /^account\//.test(req.route) ? sanitizeAccountOnlineResponse(response || {}) : sanitizeOnlineResponse(response || {})
+  );
   if (/^account\//.test(req.route)) {
     publicResponse.session = toPublicAccountSession();
     publicResponse.loggedIn = publicResponse.session.loggedIn;
@@ -3490,7 +3532,7 @@ ipcMain.handle('account-register', async (event, options = {}) => {
     if (res && res.success && res.token) {
       writeAccountSession({ token: res.token, apiUrl: getAccountApiUrl(options), user: res.user || null });
     }
-    return Object.assign({ success: false }, sanitizeOnlineResponse(res || {}), { session: toPublicAccountSession() });
+    return Object.assign({ success: false }, sanitizeAccountOnlineResponse(res || {}), { session: toPublicAccountSession() });
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -3506,7 +3548,7 @@ ipcMain.handle('account-login', async (event, options = {}) => {
     if (res && res.success && res.token) {
       writeAccountSession({ token: res.token, apiUrl: getAccountApiUrl(options), user: res.user || null });
     }
-    return Object.assign({ success: false }, sanitizeOnlineResponse(res || {}), { session: toPublicAccountSession() });
+    return Object.assign({ success: false }, sanitizeAccountOnlineResponse(res || {}), { session: toPublicAccountSession() });
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -3518,7 +3560,7 @@ ipcMain.handle('account-me', async (event, options = {}) => {
     if (!session.token) return { success: true, loggedIn: false, session: toPublicAccountSession(session) };
     const res = await getOnlineApi('account/me', { apiUrl: options.apiUrl || session.apiUrl, token: session.token });
     if (res && res.success && res.user) writeAccountSession({ token: session.token, apiUrl: options.apiUrl || session.apiUrl, user: res.user });
-    return Object.assign({ loggedIn: !!(res && res.user) }, sanitizeOnlineResponse(res || {}), { session: toPublicAccountSession() });
+    return Object.assign({ loggedIn: !!(res && res.user) }, sanitizeAccountOnlineResponse(res || {}), { session: toPublicAccountSession() });
   } catch (e) {
     return { success: false, error: e.message, session: toPublicAccountSession() };
   }
@@ -3852,8 +3894,12 @@ if (TEST_MODE) {
     isTrustedRendererUrl,
     assertTrustedIpcSender,
     toPublicAccountSession,
+    toPublicAccountUser,
     sanitizeOnlineResponse,
+    sanitizeAccountOnlineResponse,
     normalizeOnlineRendererRoute,
+    getOnlineRendererBodyLimit,
+    assertOnlineRendererBodySize,
     preflightWorkshopZip,
     extractZipToTemp,
     WORKSHOP_ZIP_LIMITS,

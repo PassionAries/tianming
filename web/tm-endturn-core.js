@@ -12,6 +12,83 @@
 // 见 web/docs/architecture-map.md §1 行 5
 // ============================================================
 
+async function _tmRunCriticalEndTurnSystem(label, fn) {
+  try {
+    return await Promise.resolve(fn());
+  } catch (error) {
+    try {
+      if (typeof window !== 'undefined' && window.TM && TM.errors && typeof TM.errors.capture === 'function') {
+        TM.errors.capture(error, label);
+      } else if (typeof console !== 'undefined' && console.warn) {
+        console.warn('[' + label + ']', error);
+      }
+    } catch (_) {}
+    throw error;
+  }
+}
+
+async function _tmRunEndTurnDeterministicTail() {
+  await _tmRunCriticalEndTurnSystem('endTurn] building works tick', function() {
+    if (typeof window !== 'undefined' && window.TM && TM.BuildingWorks && typeof TM.BuildingWorks.tick === 'function') {
+      return TM.BuildingWorks.tick(GM, P);
+    }
+  });
+
+  await _tmRunCriticalEndTurnSystem('endTurn] talent cohorts tick', function() {
+    if (typeof window === 'undefined' || !window.TM || !TM.TalentCohorts || typeof TM.TalentCohorts.tick !== 'function') return;
+    if (typeof TM.TalentCohorts.enabled === 'function' && !TM.TalentCohorts.enabled(P)) return;
+    var talentCtx = (TM.TalentBottlenecks && typeof TM.TalentBottlenecks.buildCtx === 'function')
+      ? TM.TalentBottlenecks.buildCtx(GM, P)
+      : null;
+    TM.TalentCohorts.tick(GM, P, talentCtx);
+    if (TM.TalentBacklash && typeof TM.TalentBacklash.tick === 'function') {
+      return TM.TalentBacklash.tick(GM, P, talentCtx);
+    }
+  });
+
+  await _tmRunCriticalEndTurnSystem('endTurn] region status tick', function() {
+    if (typeof window !== 'undefined' && window.TM && TM.RegionStatus && typeof TM.RegionStatus.tick === 'function') {
+      return TM.RegionStatus.tick(GM, P);
+    }
+  });
+
+  await _tmRunCriticalEndTurnSystem('endTurn] field pipelines tick', function() {
+    if (typeof window !== 'undefined' && window.TM && TM.FieldPipes && typeof TM.FieldPipes.tick === 'function') {
+      return TM.FieldPipes.tick(GM, P);
+    }
+  });
+
+  await _tmRunCriticalEndTurnSystem('endTurn] social foundation tick', function() {
+    if (typeof window !== 'undefined' && window.TM && TM.SocialFoundation && typeof TM.SocialFoundation.tick === 'function') {
+      return TM.SocialFoundation.tick(GM, P);
+    }
+  });
+
+  await _tmRunCriticalEndTurnSystem('endTurn] renli tick', function() {
+    if (typeof window !== 'undefined' && window.TM && TM.Renli && typeof TM.Renli.endturnTick === 'function') {
+      return TM.Renli.endturnTick(GM, P);
+    }
+  });
+
+  await _tmRunCriticalEndTurnSystem('endTurn] office fallback tick', function() {
+    if (typeof window !== 'undefined' && window.TM && TM.OfficeFallback && typeof TM.OfficeFallback.tick === 'function') {
+      return TM.OfficeFallback.tick(GM, P);
+    }
+  });
+
+  await _tmRunCriticalEndTurnSystem('endTurn] final aggregate', function() {
+    if (typeof IntegrationBridge !== 'undefined' && IntegrationBridge && typeof IntegrationBridge.aggregateRegionsToVariables === 'function') {
+      return IntegrationBridge.aggregateRegionsToVariables();
+    }
+  });
+
+  await _tmRunCriticalEndTurnSystem('endTurn] reconcileArmyCommanders', function() {
+    if (typeof TM !== 'undefined' && TM.AIChange && TM.AIChange.Army && typeof TM.AIChange.Army.reconcileArmyCommanders === 'function') {
+      return TM.AIChange.Army.reconcileArmyCommanders();
+    }
+  });
+}
+
 async function _runPreSubmitPartyClassCalibration() {
   try {
     var _pcSchedulerRan = false;
@@ -717,43 +794,8 @@ async function _endTurnCore(options){
 
   // 建筑工役 tick（2026-06-12·确定性步·每回合恰一次）：在建递减→完工把效果写进 economyBase/fortLevel/民心叶子，
   // 维护费扣地方库银。须在 final aggregate 之前——完工改的叶子当回合即被聚合。
-  try { if (window.TM && TM.BuildingWorks && typeof TM.BuildingWorks.tick === 'function') TM.BuildingWorks.tick(GM, P); } catch(_bwTickE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_bwTickE, 'endTurn] building works tick') : console.warn('[endTurn] building works tick', _bwTickE); }
-
-  // S3a·人才范式渗透引擎 tick：须在 BuildingWorks.tick 之后（本回合完工的新式学校已注册人才源），多瓶颈漏斗推进一回合。
-  // 瓶颈 ctx 由 tm-talent-bottlenecks 据全国真实 economyBase/政区/驻军实算（没产业=没岗位=毕业即失业）。flag talentCohortEnabled 默认关 → no-op。
-  try {
-    if (window.TM && TM.TalentCohorts && typeof TM.TalentCohorts.tick === 'function' && TM.TalentCohorts.enabled(P)) {
-      var _talentCtx = (TM.TalentBottlenecks && typeof TM.TalentBottlenecks.buildCtx === 'function') ? TM.TalentBottlenecks.buildCtx(GM, P) : null;
-      TM.TalentCohorts.tick(GM, P, _talentCtx);
-      // S5·全局阻力：渗透反弹 → 御案时政政治事件(请罢新学/失业学潮) + 临界旧式瓦解 + 写 _lastBacklash 供动态 room
-      if (TM.TalentBacklash && typeof TM.TalentBacklash.tick === 'function') TM.TalentBacklash.tick(GM, P, _talentCtx);
-    }
-  } catch(_tcTickE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_tcTickE, 'endTurn] talent cohorts tick') : console.warn('[endTurn] talent cohorts tick', _tcTickE); }
-
-  // 地块状态 tick（2026-06-12·确定性步）：过期清除 + 状态民心摊叶 + 繁荣度缓变。
-  // 须在 BuildingWorks.tick 之后（完工状态当回合生效）、final aggregate 之前。
-  try { if (window.TM && TM.RegionStatus && typeof TM.RegionStatus.tick === 'function') TM.RegionStatus.tick(GM, P); } catch(_rsTickE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_rsTickE, 'endTurn] region status tick') : console.warn('[endTurn] region status tick', _rsTickE); }
-
-  // 字段活化 tick（2026-06-12·S6·确定性步）：重税之地民心叶账缓跌（地板 25）+ _fieldLedger 近账。
-  // 同样须在 final aggregate 之前——叶子变更当回合即被聚合。
-  try { if (window.TM && TM.FieldPipes && typeof TM.FieldPipes.tick === 'function') TM.FieldPipes.tick(GM, P); } catch(_fpTickE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_fpTickE, 'endTurn] field pipelines tick') : console.warn('[endTurn] field pipelines tick', _fpTickE); }
-
-  // 社会层地基 tick（2026-06-12·确定性步）：阶层结构基线缓变回归 + 议程引擎消长 + 党派双账合流。
-  // 须在 RegionStatus/FieldPipes 之后（要读灾域/税负实况）、final aggregate 之前。
-  try { if (window.TM && TM.SocialFoundation && typeof TM.SocialFoundation.tick === 'function') TM.SocialFoundation.tick(GM, P); } catch(_sfTickE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_sfTickE, 'endTurn] social foundation tick') : console.warn('[endTurn] social foundation tick', _sfTickE); }
-
-  // 人力/徭役农政 tick（R2·2026-06-16·确定性步）：劳动力分流→双边际(在耕/地力)→粮产，写叶子 alloc + GM.renli 派生。
-  // 须在 SocialFoundation 之后、final aggregate 之前。R2 只写 alloc/派生·不动 ding/mouths·暂无消费方读 alloc（良性休眠）。
-  try { if (window.TM && TM.Renli && typeof TM.Renli.endturnTick === 'function') TM.Renli.endturnTick(GM, P); } catch(_rlTickE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_rlTickE, 'endTurn] renli tick') : console.warn('[endTurn] renli tick', _rlTickE); }
-  // 官制占位·久悬补缺 tick(2026-06-18·确定性步)：冷门空占位挂太久→引擎铨选虚拟官员补上(flag useOfficeFallback·前12回合给AI office_spawn机会)。
-  try { if (window.TM && TM.OfficeFallback && typeof TM.OfficeFallback.tick === 'function') TM.OfficeFallback.tick(GM, P); } catch(_ofTickE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_ofTickE, 'endTurn] office fallback tick') : console.warn('[endTurn] office fallback tick', _ofTickE); }
-
-  // 回合结束前最后一次聚合：确保 七变量(national) 严格等于 各区划叶子之和
-  // （因 AI 推演/各 engine.tick 都可能修改 division.population.mouths，需重新累计）
-  try { if (typeof IntegrationBridge !== 'undefined' && typeof IntegrationBridge.aggregateRegionsToVariables === 'function') IntegrationBridge.aggregateRegionsToVariables(); } catch(_aggFinalE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_aggFinalE, 'endTurn] final aggregate') : console.warn('[endTurn] final aggregate', _aggFinalE); }
-
-  // 回合末·按统帅死活校正各军主帅引用：摘掉挂着死人(赐死/AI死/战死各路)的帅、留空缺待补任。须在赐死(applyEdictActions)+AI死(applyCharacterDeaths)都跑完之后
-  try { if (typeof TM !== 'undefined' && TM.AIChange && TM.AIChange.Army && typeof TM.AIChange.Army.reconcileArmyCommanders === 'function') TM.AIChange.Army.reconcileArmyCommanders(); } catch(_recACE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_recACE, 'endTurn] reconcileArmyCommanders') : console.warn('[endTurn] reconcileArmyCommanders', _recACE); }
+  // 以上确定性结算都属于账本写入；任何一步失败必须到达外层事务边界，不能提交半个回合。
+  await _tmRunEndTurnDeterministicTail();
 
   // 亡国终局（2026-07-02）：消费民变改朝/权臣篡位/起义颠覆的终局信号（此前只写不读）→「天命已绝」终局屏。
   // 软终局：置于全部结算 tick 之后不打断管线，关屏后可继续观史/存档。新鲜度护栏在 _consumeDynastyEndSignal 内。

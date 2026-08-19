@@ -34,15 +34,31 @@ function tmSidebarFullTextAttr(value, always) {
   return v ? ' title="' + escHtml(v) + '"' : '';
 }
 
+function tmSidebarFinite(value, fallback) {
+  var n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function tmSidebarPercent(value, fallback) {
+  return Math.max(0, Math.min(100, tmSidebarFinite(value, fallback)));
+}
+
+function tmSidebarColor(value, fallback) {
+  var color = String(value == null ? '' : value).trim();
+  return /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,%\s]+\)|hsla?\([0-9.,%\s]+\))$/i.test(color)
+    ? color
+    : fallback;
+}
+
 function renderGameTech(){
   var el=_$("g-tech");if(!el||!GM.techTree)return;
   el.innerHTML=GM.techTree.map(function(t,i){
     var canUnlock=true;
-    var costDesc=(t.costs||[]).map(function(c){var v=GM.vars[c.variable];var ok=v&&v.value>=c.amount;if(!ok)canUnlock=false;return "<span style=\"color:"+(ok?"var(--green)":"var(--red)")+";\">"+c.variable+":"+c.amount+(v?" ("+v.value+")":"")+"</span>";}).join(" ");
+    var costDesc=(t.costs||[]).map(function(c){var v=GM.vars[c.variable];var amount=tmSidebarFinite(c.amount,0);var ok=v&&v.value>=amount;if(!ok)canUnlock=false;return "<span style=\"color:"+(ok?"var(--green)":"var(--red)")+";\">"+escHtml(c.variable)+":"+amount+(v?" ("+tmSidebarFinite(v.value,0)+")":"")+"</span>";}).join(" ");
     if(t.prereqs)t.prereqs.forEach(function(pre){var pt=findTechByName(pre);if(!pt||!pt.unlocked)canUnlock=false;});
     var prereqDesc='';
     if(t.prereqs&&t.prereqs.length>0&&!t.unlocked){prereqDesc='<div style="font-size:0.71rem;color:var(--txt-d);">\u524D\u7F6E: '+t.prereqs.map(function(p){var pt=findTechByName(p);return '<span style="color:'+(pt&&pt.unlocked?'var(--green)':'var(--red)')+';">'+escHtml(p)+'</span>';}).join(', ')+'</div>';}
-    return "<div class=\"cd\" style=\"border-left:3px solid "+(t.unlocked?"var(--green)":"var(--bdr)")+";\"><div style=\"display:flex;justify-content:space-between;\"><strong>"+t.name+(t.era?' <span style=\"font-size:0.71rem;color:var(--txt-d);\">['+t.era+']</span>':'')+"</strong>"+(t.unlocked?"<span class=\"tg\" style=\"background:rgba(39,174,96,0.2);color:var(--green);\">\u2705</span>":canUnlock?"<button class=\"bt bp bsm\" onclick=\"unlockTech("+i+")\">\u89E3\u9501</button>":"")+"</div><div style=\"font-size:0.78rem;color:var(--txt-s);\">"+(t.desc||t.description||'')+"</div>"+prereqDesc+(!t.unlocked&&costDesc?"<div style=\"font-size:0.72rem;margin-top:0.2rem;\">\u6D88\u8017: "+costDesc+"</div>":"")+"</div>";
+    return "<div class=\"cd\" style=\"border-left:3px solid "+(t.unlocked?"var(--green)":"var(--bdr)")+";\"><div style=\"display:flex;justify-content:space-between;\"><strong>"+escHtml(t.name)+(t.era?' <span style=\"font-size:0.71rem;color:var(--txt-d);\">['+escHtml(t.era)+']</span>':'')+"</strong>"+(t.unlocked?"<span class=\"tg\" style=\"background:rgba(39,174,96,0.2);color:var(--green);\">\u2705</span>":canUnlock?"<button class=\"bt bp bsm\" onclick=\"unlockTech("+i+")\">\u89E3\u9501</button>":"")+"</div><div style=\"font-size:0.78rem;color:var(--txt-s);\">"+escHtml(t.desc||t.description||'')+"</div>"+prereqDesc+(!t.unlocked&&costDesc?"<div style=\"font-size:0.72rem;margin-top:0.2rem;\">\u6D88\u8017: "+costDesc+"</div>":"")+"</div>";
   }).join("")||"<div style=\"color:var(--txt-d);\">\u65E0</div>";
 }
 function unlockTech(i){
@@ -66,12 +82,12 @@ function renderGameCivic(){
         if(!pt||!pt.adopted)canAdopt=false;
       });
     }
-    var costDesc=(c.costs||[]).map(function(ct){var v=GM.vars[ct.variable];var ok=v&&v.value>=ct.amount;if(!ok)canAdopt=false;return "<span style=\"color:"+(ok?"var(--green)":"var(--red)")+";\">"+ct.variable+":"+ct.amount+"</span>";}).join(" ");
+    var costDesc=(c.costs||[]).map(function(ct){var v=GM.vars[ct.variable];var amount=tmSidebarFinite(ct.amount,0);var ok=v&&v.value>=amount;if(!ok)canAdopt=false;return "<span style=\"color:"+(ok?"var(--green)":"var(--red)")+";\">"+escHtml(ct.variable)+":"+amount+"</span>";}).join(" ");
     var prereqDesc='';
     if(c.prereqs&&c.prereqs.length>0&&!c.adopted){
       prereqDesc='<div style="font-size:0.71rem;color:var(--txt-d);">\u524D\u7F6E: '+c.prereqs.map(function(p){var pt=GM.civicTree.find(function(x){return x.name===p;});return '<span style="color:'+(pt&&pt.adopted?'var(--green)':'var(--red)')+';">'+escHtml(p)+'</span>';}).join(', ')+'</div>';
     }
-    return "<div class=\"cd\" style=\"border-left:3px solid "+(c.adopted?"var(--green)":"var(--bdr)")+";\"><div style=\"display:flex;justify-content:space-between;\"><strong>"+c.name+"</strong>"+(c.adopted?"<span class=\"tg\" style=\"background:rgba(39,174,96,0.2);color:var(--green);\">\u2705</span>":canAdopt?"<button class=\"bt bp bsm\" onclick=\"adoptCivic("+i+")\">\u63A8\u884C</button>":"")+"</div><div style=\"font-size:0.78rem;color:var(--txt-s);\">"+(c.desc||c.description||'')+"</div>"+prereqDesc+(!c.adopted&&costDesc?"<div style=\"font-size:0.72rem;margin-top:0.2rem;\">\u6D88\u8017: "+costDesc+"</div>":"")+"</div>";
+    return "<div class=\"cd\" style=\"border-left:3px solid "+(c.adopted?"var(--green)":"var(--bdr)")+";\"><div style=\"display:flex;justify-content:space-between;\"><strong>"+escHtml(c.name)+"</strong>"+(c.adopted?"<span class=\"tg\" style=\"background:rgba(39,174,96,0.2);color:var(--green);\">\u2705</span>":canAdopt?"<button class=\"bt bp bsm\" onclick=\"adoptCivic("+i+")\">\u63A8\u884C</button>":"")+"</div><div style=\"font-size:0.78rem;color:var(--txt-s);\">"+escHtml(c.desc||c.description||'')+"</div>"+prereqDesc+(!c.adopted&&costDesc?"<div style=\"font-size:0.72rem;margin-top:0.2rem;\">\u6D88\u8017: "+costDesc+"</div>":"")+"</div>";
   }).join("")||"<div style=\"color:var(--txt-d);\">\u65E0</div>";
 }
 function adoptCivic(i){
@@ -379,8 +395,8 @@ function renderSidePanels(){
     var fp=document.createElement("div");fp.style.marginBottom="0.8rem";
     fp.innerHTML="<div class=\"pt\">\u2694 \u52BF\u529B\u683C\u5C40 <span style=\"font-size:0.7rem;color:var(--txt-d);font-weight:400;\">"+GM.facs.length+"\u4E2A</span></div>"+GM.facs.map(function(f){
       var attClr=f.attitude==='\u53CB\u597D'||f.attitude==='\u8054\u76DF'?'var(--green)':f.attitude==='\u654C\u5BF9'||f.attitude==='\u4EA4\u6218'||f.attitude==='\u654C\u89C6'?'var(--red)':f.attitude==='\u9644\u5C5E'||f.attitude==='\u5B97\u4E3B'||f.attitude==='\u671D\u8D21'?'var(--blue)':'var(--txt-d)';
-      var str=f.strength||50;
-      var milStr=f.militaryStrength?' \u5175'+f.militaryStrength:'';
+      var str=tmSidebarPercent(f.strength,50);
+      var milStr=f.militaryStrength?' \u5175'+tmSidebarFinite(f.militaryStrength,0):'';
       // 类型标签
       var typeTag=f.type?'<span style="font-size:0.62rem;color:var(--ink-300);margin-left:2px;">'+escHtml(f.type)+'</span>':'';
       // 封臣/宗主标签
@@ -388,7 +404,7 @@ function renderSidePanels(){
       if(f.liege)_vassalTag=' <span style="font-size:0.62rem;color:var(--blue);border:1px solid var(--blue);border-radius:3px;padding:0 3px;">\u81E3\u2192'+escHtml(String(f.liege))+'</span>';
       else if(f.vassals&&f.vassals.length>0)_vassalTag=' <span style="font-size:0.62rem;color:var(--gold);border:1px solid var(--gold);border-radius:3px;padding:0 3px;">\u5B97\u4E3B('+f.vassals.length+')</span>';
       // 颜色条
-      var facColor = f.color || attClr;
+      var facColor = tmSidebarColor(f.color, attClr);
       // 首领信息
       var leaderLine = '';
       if (f.leader) {
@@ -405,7 +421,7 @@ function renderSidePanels(){
       if (extras.length > 0) extraLine = '<div style="font-size:0.64rem;color:var(--ink-300);margin-top:1px;">' + extras.join(' \u00B7 ') + '</div>';
       return '<div style="margin-bottom:0.45rem;border-left:2px solid '+facColor+';padding-left:0.4rem;">'
         +'<div style="display:flex;justify-content:space-between;font-size:0.78rem;">'
-        +'<span>'+(f.name||'')+typeTag+_vassalTag+(f.attitude?' <span style="font-size:0.66rem;color:'+attClr+';">'+f.attitude+'</span>':'')+'</span>'
+        +'<span>'+escHtml(f.name||'')+typeTag+_vassalTag+(f.attitude?' <span style="font-size:0.66rem;color:'+attClr+';">'+escHtml(f.attitude)+'</span>':'')+'</span>'
         +'<span style="color:'+attClr+';">'+str+milStr+'</span></div>'
         +'<div class="rb"><div class="rf" style="width:'+str+'%;background:'+facColor+';"></div></div>'
         +leaderLine+extraLine+'</div>';
@@ -415,7 +431,7 @@ function renderSidePanels(){
       var _frHtml='<div style="margin-top:0.3rem;font-size:0.7rem;color:var(--txt-d);border-top:1px solid var(--bg-4);padding-top:0.3rem;">';
       GM.factionRelations.forEach(function(r){
         var rClr=(r.value||0)>30?'var(--green)':(r.value||0)<-30?'var(--red)':'var(--txt-d)';
-        _frHtml+='<div>'+r.from+'\u2192'+r.to+' <span style="color:'+rClr+';">'+r.type+'('+r.value+')</span></div>';
+        _frHtml+='<div>'+escHtml(r.from)+'\u2192'+escHtml(r.to)+' <span style="color:'+rClr+';">'+escHtml(r.type)+'('+tmSidebarFinite(r.value,0)+')</span></div>';
       });
       _frHtml+='</div>';
       fp.innerHTML+=_frHtml;
@@ -430,20 +446,21 @@ function renderSidePanels(){
       var mp=document.createElement("div");mp.style.marginBottom="0.8rem";mp.style.cursor="pointer";
       mp.onclick=function(){openMilitaryDetailPanel();};
       mp.title='\u70B9\u51FB\u67E5\u770B\u5404\u519B\u5B8C\u6574\u8BE6\u60C5';
-      var totalSol=activeA.reduce(function(s,a){return s+(a.soldiers||0);},0);
+      var totalSol=activeA.reduce(function(s,a){return s+Math.max(0,tmSidebarFinite(a.soldiers,0));},0);
       mp.innerHTML="<div class=\"pt\">\u2694\uFE0F \u519B\u4E8B\u529B\u91CF <span style=\"font-size:0.7rem;color:var(--txt-d);\">\u603B\u5175\u529B"+totalSol+"\u00B7"+activeA.length+"\u652F</span></div>"+activeA.map(function(a){
-        var sol=a.soldiers||0;
+        var sol=Math.max(0,tmSidebarFinite(a.soldiers,0));
         var pct=totalSol>0?Math.round(sol/totalSol*100):0;
-        var morClr=(a.morale||0)>70?'var(--green)':(a.morale||0)>40?'var(--gold)':'var(--red)';
-        var info=a.name+(a.armyType?' <span style=\"font-size:0.66rem;color:var(--txt-d);\">'+a.armyType+'</span>':'');
-        var detail=sol+'\u5175 \u58EB\u6C14'+(a.morale||50)+' \u8BAD\u7EC3'+(a.training||50);
+        var morale=tmSidebarPercent(a.morale,50);
+        var morClr=morale>70?'var(--green)':morale>40?'var(--gold)':'var(--red)';
+        var info=escHtml(a.name)+(a.armyType?' <span style=\"font-size:0.66rem;color:var(--txt-d);\">'+escHtml(a.armyType)+'</span>':'');
+        var detail=sol+'\u5175 \u58EB\u6C14'+morale+' \u8BAD\u7EC3'+tmSidebarPercent(a.training,50);
         var _cn=a.commander||'';
         var _cc=(_cn&&typeof findCharByName==='function')?findCharByName(_cn):null;
         var _cDead=!!_cn&&(_cc?(_cc.alive===false||_cc.dead===true):true);
         if(!_cn)detail+=' <span style="color:var(--red,#c0563a);">\u5E05:\u7A7A\u7F3A</span>';
-        else if(_cDead)detail+=' <span style="color:var(--red,#c0563a);">\u5E05:'+_cn+'(\u6B81)</span>';
-        else detail+=' \u5E05:'+_cn;
-        if(a.garrison)detail+=' \u9A7B:'+String(a.garrison);
+        else if(_cDead)detail+=' <span style="color:var(--red,#c0563a);">\u5E05:'+escHtml(_cn)+'(\u6B81)</span>';
+        else detail+=' \u5E05:'+escHtml(_cn);
+        if(a.garrison)detail+=' \u9A7B:'+escHtml(String(a.garrison));
         return "<div style=\"margin-bottom:0.4rem;\"><div style=\"display:flex;justify-content:space-between;font-size:0.78rem;\"><span>"+info+"</span><span style=\"color:"+morClr+";\">"+sol+"</span></div><div class=\"rb\"><div class=\"rf\" style=\"width:"+pct+"%;background:"+morClr+";\"></div></div><div style=\"font-size:0.7rem;color:var(--txt-d);\">"+ detail+"</div></div>";
       }).join("");
       gl.appendChild(mp);
@@ -459,8 +476,9 @@ function renderSidePanels(){
       // \u26052026-07-06 \u76EE\u6807\u8F74\u4FEE\u590D\uFF1A\u63A5\u4E0A\u5F15\u64CE\u5DF2\u7B97\u597D\u7684\u8FDB\u5EA6(checkGoals \u6BCF\u56DE\u5408\u5199 g.progress)\u2014\u2014\u65E7\u7248\u53EA\u663E\u540D\u00B7\u76EE\u6807\u770B\u7740\u6C38\u4E0D\u52A8
       var pct = g.completed ? 100 : (typeof g.progress === 'number' ? g.progress : (typeof _calcGoalProgress === 'function' ? (function(){ try { return _calcGoalProgress(g); } catch(_e) { return 0; } })() : 0));
       var done = !!g.completed;
-      var tip = String(g.description || g.desc || '').replace(/"/g, '&quot;');
-      return "<div style=\"padding:0.2rem 0;font-size:0.75rem;display:flex;gap:0.3rem;align-items:center;\" title=\""+tip+"\"><span style=\"color:"+(done?'var(--gold)':(typeColors[g.type]||'var(--txt-s)'))+";\">"+(done?'\u2713':(typeIcons[g.type]||'\u25CB'))+"</span><span style=\"flex:1;\">"+(g.name||'')+"</span><span style=\"color:"+(done?'var(--gold)':'var(--txt-s)')+";font-size:0.68rem;\">"+(done?'\u6210':pct+'%')+"</span></div>";
+      pct = tmSidebarPercent(pct, 0);
+      var tip = escHtml(g.description || g.desc || '');
+      return "<div style=\"padding:0.2rem 0;font-size:0.75rem;display:flex;gap:0.3rem;align-items:center;\" title=\""+tip+"\"><span style=\"color:"+(done?'var(--gold)':(typeColors[g.type]||'var(--txt-s)'))+";\">"+(done?'\u2713':(typeIcons[g.type]||'\u25CB'))+"</span><span style=\"flex:1;\">"+escHtml(g.name||'')+"</span><span style=\"color:"+(done?'var(--gold)':'var(--txt-s)')+";font-size:0.68rem;\">"+(done?'\u6210':pct+'%')+"</span></div>";
     }).join("");
     gl.appendChild(gp);
   }
@@ -493,7 +511,7 @@ function renderSidePanels(){
         var ts=c.titles.map(function(t){
           var hTag=t.hereditary?'\u4E16\u88AD':'\u6D41\u5B98';
           var supTag=(t._suppressed&&t._suppressed.length>0)?' \u26D4':'';
-          return t.name+'<span style="font-size:0.62rem;color:var(--txt-d);">('+hTag+supTag+')</span>';
+          return escHtml(t.name)+'<span style="font-size:0.62rem;color:var(--txt-d);">('+hTag+supTag+')</span>';
         }).join(' ');
         _tHtml+="<div style=\"font-size:0.75rem;padding:2px 0;\"><span style=\"color:var(--gold-l);\">"+escHtml(c.name)+"</span> "+ts+"</div>";
       });
@@ -548,10 +566,10 @@ function renderSidePanels(){
       var ap=document.createElement("div");ap.style.marginBottom="0.8rem";
       var _aHtml="<div class=\"pt\">\uD83C\uDFEF \u884C\u653F\u533A\u5212 <span style=\"font-size:0.7rem;color:var(--txt-d);\">\u5171"+_totalDivs+"\u5355\u4F4D \u5B98"+_govCount+"</span></div>";
       _topDivs.forEach(function(d){
-        var pStr=d.prosperity?' \u7E41'+d.prosperity:'';
+        var pStr=d.prosperity?' \u7E41'+tmSidebarFinite(d.prosperity,0):'';
         var gStr=d.governor?' \u5B98:'+escHtml(d.governor):'';
         var chCount=d.children?d.children.length:0;
-        _aHtml+="<div style=\"font-size:0.72rem;padding:2px 0;\">"+escHtml(d.name)+"<span style=\"color:var(--txt-d);font-size:0.66rem;\"> "+(d.terrain||'')+(d.level?'('+d.level+')':'')+(chCount>0?' \u4E0B\u8F96'+chCount:'')+pStr+gStr+"</span></div>";
+        _aHtml+="<div style=\"font-size:0.72rem;padding:2px 0;\">"+escHtml(d.name)+"<span style=\"color:var(--txt-d);font-size:0.66rem;\"> "+escHtml(d.terrain||'')+(d.level?'('+escHtml(d.level)+')':'')+(chCount>0?' \u4E0B\u8F96'+chCount:'')+pStr+gStr+"</span></div>";
       });
       ap.innerHTML=_aHtml;
       gl.appendChild(ap);
@@ -562,7 +580,7 @@ function renderSidePanels(){
   if(GM.classes&&GM.classes.length>0){
     var cp=document.createElement("div");cp.style.marginBottom="0.8rem";cp.style.cursor="pointer";
     cp.onclick=function(){openClassDetailPanel();};
-    cp.innerHTML="<div class=\"pt\">\uD83D\uDC51 \u9636\u5C42</div>"+GM.classes.map(function(c){var _ci=c.influence||c.classInfluence||0;return "<div style=\"margin-bottom:0.3rem;\"><div style=\"display:flex;justify-content:space-between;font-size:0.78rem;\"><span>"+escHtml(c.name)+(c.satisfaction?' <span style=\"font-size:0.7rem;color:var(--txt-d);\">'+Math.round(c.satisfaction)+'</span>':'')+"</span><span style=\"color:var(--gold);\">"+_ci+"</span></div><div class=\"rb\"><div class=\"rf\" style=\"width:"+_ci+"%;background:var(--blue);\"></div></div></div>";}).join("");
+    cp.innerHTML="<div class=\"pt\">\uD83D\uDC51 \u9636\u5C42</div>"+GM.classes.map(function(c){var _ci=tmSidebarPercent(c.influence!=null?c.influence:c.classInfluence,0);var _sat=c.satisfaction!=null?tmSidebarPercent(c.satisfaction,50):null;return "<div style=\"margin-bottom:0.3rem;\"><div style=\"display:flex;justify-content:space-between;font-size:0.78rem;\"><span>"+escHtml(c.name)+(_sat!=null?' <span style=\"font-size:0.7rem;color:var(--txt-d);\">'+Math.round(_sat)+'</span>':'')+"</span><span style=\"color:var(--gold);\">"+_ci+"</span></div><div class=\"rb\"><div class=\"rf\" style=\"width:"+_ci+"%;background:var(--blue);\"></div></div></div>";}).join("");
     gl.appendChild(cp);
   }
 
@@ -570,7 +588,7 @@ function renderSidePanels(){
   if(GM.parties&&GM.parties.length>0){
     var pp=document.createElement("div");pp.style.marginBottom="0.8rem";pp.style.cursor="pointer";
     pp.onclick=function(){openPartyDetailPanel();};
-    pp.innerHTML="<div class=\"pt\">\uD83C\uDFDB \u515A\u6D3E</div>"+GM.parties.map(function(p){var _inf=p.influence||p.strength||0;var _stClr=p.status==='\u6D3B\u8DC3'?'var(--green)':p.status==='\u5F0F\u5FAE'?'var(--gold)':p.status==='\u88AB\u538B\u5236'?'var(--red)':'var(--txt-d)';return "<div style=\"margin-bottom:0.3rem;\"><div style=\"display:flex;justify-content:space-between;font-size:0.78rem;\"><span>"+escHtml(p.name)+(p.status?' <span style=\"font-size:0.7rem;color:'+_stClr+';\">'+escHtml(p.status)+'</span>':'')+"</span><span>"+_inf+"</span></div><div class=\"rb\"><div class=\"rf\" style=\"width:"+_inf+"%;background:var(--purple);\"></div></div></div>";}).join("");
+    pp.innerHTML="<div class=\"pt\">\uD83C\uDFDB \u515A\u6D3E</div>"+GM.parties.map(function(p){var _inf=tmSidebarPercent(p.influence!=null?p.influence:p.strength,0);var _stClr=p.status==='\u6D3B\u8DC3'?'var(--green)':p.status==='\u5F0F\u5FAE'?'var(--gold)':p.status==='\u88AB\u538B\u5236'?'var(--red)':'var(--txt-d)';return "<div style=\"margin-bottom:0.3rem;\"><div style=\"display:flex;justify-content:space-between;font-size:0.78rem;\"><span>"+escHtml(p.name)+(p.status?' <span style=\"font-size:0.7rem;color:'+_stClr+';\">'+escHtml(p.status)+'</span>':'')+"</span><span>"+_inf+"</span></div><div class=\"rb\"><div class=\"rf\" style=\"width:"+_inf+"%;background:var(--purple);\"></div></div></div>";}).join("");
     gl.appendChild(pp);
   }
 
@@ -584,8 +602,8 @@ function renderSidePanels(){
       var _acqStyle = it.acquired ? '' : 'opacity:0.5;';
       var _acqTag = it.acquired ? '' : '<span style="font-size:0.62rem;color:var(--ink-300);margin-left:3px;">\u672A\u83B7</span>';
       _iHtml+="<div style=\"padding:0.2rem 0;font-size:0.75rem;border-bottom:1px solid var(--bg-4);"+_acqStyle+"\">";
-      _iHtml+="<div style=\"display:flex;justify-content:space-between;\"><span>"+(typeIcons[it.type]||'\u2022')+' '+(it.name||'')+_acqTag+"</span>";
-      if(it.rarity&&it.rarity!=='\u666E\u901A')_iHtml+="<span style=\"font-size:0.66rem;color:"+(rarClr[it.rarity]||'var(--txt-d)')+";\">"+it.rarity+"</span>";
+      _iHtml+="<div style=\"display:flex;justify-content:space-between;\"><span>"+(typeIcons[it.type]||'\u2022')+' '+escHtml(it.name||'')+_acqTag+"</span>";
+      if(it.rarity&&it.rarity!=='\u666E\u901A')_iHtml+="<span style=\"font-size:0.66rem;color:"+(rarClr[it.rarity]||'var(--txt-d)')+";\">"+escHtml(it.rarity)+"</span>";
       _iHtml+="</div>";
       if(it.effect)_iHtml+="<div style=\"font-size:0.7rem;color:var(--gold-d);\">"+escHtml(String(it.effect))+"</div>";
       if(it.owner)_iHtml+="<div style=\"font-size:0.66rem;color:var(--ink-300);\">\u6301\u6709\uFF1A"+escHtml(it.owner)+"</div>";
@@ -614,18 +632,18 @@ function renderSidePanels(){
         var childCount=sp.children?sp.children.length:0;
         var loyClr=(sp.loyalty||50)>70?'var(--green)':(sp.loyalty||50)<30?'var(--red)':'var(--txt-s)';
         _hHtml+="<div style=\"font-size:0.72rem;padding:2px 0;display:flex;justify-content:space-between;\">";
-        _hHtml+="<span>"+rkIcon+" "+escHtml(sp.name)+" <span style=\"color:var(--gold-d);font-size:0.66rem;\">"+escHtml(rkName)+"</span></span>";
-        var favStr = sp.favor !== undefined ? ' \u5BA0' + sp.favor : '';
-        _hHtml+="<span style=\"font-size:0.66rem;\"><span style=\"color:"+loyClr+"\">\u5FE0"+(sp.loyalty||50)+"</span>"+favStr+(childCount>0?" \u5B50"+childCount:"")+"</span>";
+        _hHtml+="<span>"+escHtml(rkIcon)+" "+escHtml(sp.name)+" <span style=\"color:var(--gold-d);font-size:0.66rem;\">"+escHtml(rkName)+"</span></span>";
+        var favStr = sp.favor !== undefined ? ' \u5BA0' + tmSidebarFinite(sp.favor,0) : '';
+        _hHtml+="<span style=\"font-size:0.66rem;\"><span style=\"color:"+loyClr+"\">\u5FE0"+tmSidebarPercent(sp.loyalty,50)+"</span>"+favStr+(childCount>0?" \u5B50"+childCount:"")+"</span>";
         _hHtml+="</div>";
       });
       // 继承人
       if(GM.harem.heirs&&GM.harem.heirs.length>0){
-        _hHtml+="<div style=\"font-size:0.7rem;color:var(--gold);margin-top:3px;border-top:1px solid var(--bg-4);padding-top:3px;\">\u7EE7\u627F\u4EBA: "+GM.harem.heirs.join('\u3001')+"</div>";
+        _hHtml+="<div style=\"font-size:0.7rem;color:var(--gold);margin-top:3px;border-top:1px solid var(--bg-4);padding-top:3px;\">\u7EE7\u627F\u4EBA: "+GM.harem.heirs.map(escHtml).join('\u3001')+"</div>";
       }
       // 孕期
       if(GM.harem.pregnancies&&GM.harem.pregnancies.length>0){
-        _hHtml+="<div style=\"font-size:0.7rem;color:var(--purple,#9b59b6);\">\u6709\u5B55: "+GM.harem.pregnancies.map(function(p){return p.mother;}).join('\u3001')+"</div>";
+        _hHtml+="<div style=\"font-size:0.7rem;color:var(--purple,#9b59b6);\">\u6709\u5B55: "+GM.harem.pregnancies.map(function(p){return escHtml(p.mother);}).join('\u3001')+"</div>";
       }
       hp.innerHTML=_hHtml;
       gl.appendChild(hp);
@@ -647,7 +665,7 @@ function renderSidePanels(){
     var _catEntries=Object.keys(_catCount);
     if(_catEntries.length>0){
       _bHtml+="<div style=\"display:flex;flex-wrap:wrap;gap:4px;font-size:0.7rem;\">";
-      _catEntries.forEach(function(c){_bHtml+="<span style=\"background:var(--bg-3);padding:1px 5px;border-radius:3px;\">"+(_catNames[c]||c)+":"+_catCount[c]+"</span>";});
+      _catEntries.forEach(function(c){_bHtml+="<span style=\"background:var(--bg-3);padding:1px 5px;border-radius:3px;\">"+escHtml(_catNames[c]||c)+":"+_catCount[c]+"</span>";});
       _bHtml+="</div>";
     }
     if(_inQueue>0)_bHtml+="<div style=\"font-size:0.7rem;color:var(--gold);margin-top:3px;\">\u5EFA\u9020\u4E2D: "+_inQueue+"\u9879</div>";
@@ -667,7 +685,7 @@ function renderSidePanels(){
         _eHtml+="<div style=\"font-size:0.72rem;padding:2px 0;\"><span style=\"color:"+impClr+";\">"+(e.importance==='\u5173\u952E'?'\u2605':e.importance==='\u91CD\u8981'?'\u25C6':'\u25CB')+"</span> "+escHtml(e.name||'')+(e.type?' <span style=\"font-size:0.66rem;color:var(--txt-d);\">'+escHtml(e.type)+'</span>':'')+"</div>";
       });
       if(_trigEvts.length>0){
-        _eHtml+="<div style=\"font-size:0.7rem;color:var(--green);margin-top:3px;border-top:1px solid var(--bg-4);padding-top:2px;\">\u5DF2\u53D1\u751F: "+_trigEvts.map(function(e){return e.name;}).join('\u3001')+"</div>";
+        _eHtml+="<div style=\"font-size:0.7rem;color:var(--green);margin-top:3px;border-top:1px solid var(--bg-4);padding-top:2px;\">\u5DF2\u53D1\u751F: "+_trigEvts.map(function(e){return escHtml(e.name);}).join('\u3001')+"</div>";
       }
       ep2.innerHTML=_eHtml;
       gl.appendChild(ep2);
@@ -680,7 +698,7 @@ function renderSidePanels(){
     function cnt(tree){tree.forEach(function(d){td++;to+=(d.positions||[]).filter(function(p){return p.holder;}).length;if(d.subs)cnt(d.subs);});}
     cnt(GM.officeTree);
     var oc=document.createElement("div");oc.style.marginBottom="0.8rem";
-    oc.innerHTML="<div class=\"pt\">\uD83D\uDCB0 \u5B98\u5236\u6D88\u8017</div><div style=\"font-size:0.71rem;color:var(--txt-d);\">\u90E8\u95E8:"+td+" \u5B98\u5458:"+to+"</div>"+P.officeConfig.costVariables.map(function(cv){var cost=(cv.perDept||0)*td+(cv.perOfficial||0)*to;var v=GM.vars[cv.variable];var ok=v&&v.value>=cost;return "<div style=\"display:flex;justify-content:space-between;font-size:0.75rem;\"><span>"+cv.variable+"</span><span style=\"color:"+(ok?"var(--txt-s)":"var(--red)")+";\">-"+cost+"/\u56DE</span></div>";}).join("");
+    oc.innerHTML="<div class=\"pt\">\uD83D\uDCB0 \u5B98\u5236\u6D88\u8017</div><div style=\"font-size:0.71rem;color:var(--txt-d);\">\u90E8\u95E8:"+td+" \u5B98\u5458:"+to+"</div>"+P.officeConfig.costVariables.map(function(cv){var cost=tmSidebarFinite(cv.perDept,0)*td+tmSidebarFinite(cv.perOfficial,0)*to;var v=GM.vars[cv.variable];var ok=v&&v.value>=cost;return "<div style=\"display:flex;justify-content:space-between;font-size:0.75rem;\"><span>"+escHtml(cv.variable)+"</span><span style=\"color:"+(ok?"var(--txt-s)":"var(--red)")+";\">-"+cost+"/\u56DE</span></div>";}).join("");
     gl.appendChild(oc);
   }
 
@@ -695,7 +713,7 @@ function renderSidePanels(){
     var _typeLabels = { main_hall:'外朝', imperial_residence:'帝居', consort_residence:'后妃居所', dowager:'太后宫', crown_prince:'太子宫', ceremonial:'礼制', garden:'园林', office:'内廷', offering:'祭祀' };
     var _statItems = [];
     Object.keys(_typeStats).forEach(function(t) {
-      _statItems.push((_typeLabels[t] || t) + _typeStats[t]);
+      _statItems.push(escHtml(_typeLabels[t] || t) + _typeStats[t]);
     });
     // 本回合居住的妃嫔数
     var _occupiedCount = 0;

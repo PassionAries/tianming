@@ -420,22 +420,17 @@
       //   会战阶段:AI 推演已解算·涉玩家势力军的战斗被咽喉拦截入延后队列·此处亲征/委之·严格保位(先于诏令应用)·
       //   flag GM._yujiaQinzheng 默认 OFF → pending 恒空 → runPending no-op → 零行为变更·自带 try/catch 不外抛
       fn: async function(ctx) {
-        try {
-          if (typeof window !== 'undefined' && window.TMBattleTurn && typeof window.TMBattleTurn.runPending === 'function') {
-            await window.TMBattleTurn.runPending(typeof GM !== 'undefined' ? GM : null);
-          }
-        } catch (e) { try { console.warn('[pipeline.post-ai-edict·yujia-qinzheng]', e); } catch(_){} }
+        if (typeof window !== 'undefined' && window.TMBattleTurn && typeof window.TMBattleTurn.runPending === 'function') {
+          await window.TMBattleTurn.runPending(typeof GM !== 'undefined' ? GM : null);
+        }
         if (!ctx.input._agentEdictActionsApplied && typeof applyEdictActions === 'function') {
-          try {
-            var ea = ctx.input.edictActions;
-            if (ea && ((ea.appointments && ea.appointments.length) || (ea.dismissals && ea.dismissals.length) || (ea.deaths && ea.deaths.length) || (ea.armyBuilds && ea.armyBuilds.length) || (ea.rewards && ea.rewards.length) || (ea.payArrears && ea.payArrears.length))) {
-              applyEdictActions(ea);
-            }
-          } catch(e) { try { console.warn('[pipeline.post-ai-edict] applyEdictActions failed', e); } catch(_){} }
+          var ea = ctx.input.edictActions;
+          if (ea && ((ea.appointments && ea.appointments.length) || (ea.dismissals && ea.dismissals.length) || (ea.deaths && ea.deaths.length) || (ea.armyBuilds && ea.armyBuilds.length) || (ea.rewards && ea.rewards.length) || (ea.payArrears && ea.payArrears.length))) {
+            applyEdictActions(ea);
+          }
         }
         // G2·step 0a·Path C·扫 ctx.input.edicts 文本·识别 enke keyword → 路由到 _kjG2OnEnkeApproved (或 pending queue)
-        try {
-          if (!ctx.input._agentEdictKeywordActionsApplied) {
+        if (!ctx.input._agentEdictKeywordActionsApplied) {
           if (typeof _kjG2ScanCtxInputEdictsForEnke === 'function' && ctx.input && ctx.input.edicts) {
             var enkeActions = _kjG2ScanCtxInputEdictsForEnke(ctx.input.edicts);
             if (enkeActions && enkeActions.length && typeof _kjG2OnEnkeApprovedViaEdict === 'function') {
@@ -444,11 +439,9 @@
               }
             }
           }
-          }
-        } catch(e) { try { console.warn('[pipeline.post-ai-edict] G2 enke scan', e); } catch(_){} }
+        }
         // G3·RAA·C1·扫 ctx.input.edicts 识别 wuju keyword (跟 G2 同 paradigm)
-        try {
-          if (!ctx.input._agentEdictKeywordActionsApplied) {
+        if (!ctx.input._agentEdictKeywordActionsApplied) {
           if (typeof _kjG3ScanCtxInputEdictsForWuju === 'function' && ctx.input && ctx.input.edicts) {
             var wujuActions = _kjG3ScanCtxInputEdictsForWuju(ctx.input.edicts);
             if (wujuActions && wujuActions.length && typeof _kjG3OnWujuApprovedViaEdict === 'function') {
@@ -457,11 +450,9 @@
               }
             }
           }
-          }
-        } catch(e) { try { console.warn('[pipeline.post-ai-edict] G3 wuju scan', e); } catch(_){} }
+        }
         // G5·扫 tongzi keyword
-        try {
-          if (!ctx.input._agentEdictKeywordActionsApplied) {
+        if (!ctx.input._agentEdictKeywordActionsApplied) {
           if (typeof _kjG5ScanCtxInputEdictsForTongzi === 'function' && ctx.input && ctx.input.edicts) {
             var tongziActions = _kjG5ScanCtxInputEdictsForTongzi(ctx.input.edicts);
             if (tongziActions && tongziActions.length && typeof _kjG5OnTongziApprovedViaEdict === 'function') {
@@ -470,13 +461,11 @@
               }
             }
           }
-          }
-        } catch(e) { try { console.warn('[pipeline.post-ai-edict] G5 tongzi scan', e); } catch(_){} }
+        }
         // F6·扫时政记 (AI 推演输出)·覆盖"诏书未明写但 AI 在叙事中体现开恩科"的情况
         // 复用 3 个 ScanCtxInputEdictsForX·passing string (parser 已加 negative gate 防"罢/未/搁置"误识别)
-        try {
-          var _ar = ctx.results && ctx.results.aiResult;
-          if (_ar && !ctx.input._agentModeRan) {
+        var _ar = ctx.results && ctx.results.aiResult;
+        if (_ar && !ctx.input._agentModeRan) {
             var _shizhengTxt = [_ar.shizhengji || '', _ar.zhengwen || '', _ar.shilu || ''].join('\n');
             if (_shizhengTxt.trim()) {
               if (typeof _kjG2ScanCtxInputEdictsForEnke === 'function' && typeof _kjG2OnEnkeApprovedViaEdict === 'function') {
@@ -501,20 +490,17 @@
                 }
               }
             }
-          }
-        } catch(e) { try { console.warn('[pipeline.post-ai-edict] G2/G3/G5 shizhengji scan', e); } catch(_){} }
+        }
         if (!ctx.input._agentTyrantActivitiesApplied && typeof TyrantActivitySystem !== 'undefined' && TyrantActivitySystem && TyrantActivitySystem.applyEffects) {
-          try {
-            var ta = ctx.input.tyrantActivities || (typeof GM !== 'undefined' ? GM._turnTyrantActivities : null) || [];
-            if (ta.length > 0) {
-              ctx.results.tyrantResult = TyrantActivitySystem.applyEffects(ta);
-            }
-          } catch(e) { try { console.warn('[pipeline.post-ai-edict] tyrant applyEffects failed', e); } catch(_){} }
+          var ta = ctx.input.tyrantActivities || (typeof GM !== 'undefined' ? GM._turnTyrantActivities : null) || [];
+          if (ta.length > 0) {
+            ctx.results.tyrantResult = TyrantActivitySystem.applyEffects(ta);
+          }
         }
         ctx.input._postAiEdictRan = true;
         return ctx;
       },
-      onError: 'continue',
+      onError: 'abort',
       reads: ['ctx.input.edictActions', 'ctx.input.tyrantActivities', 'GM.officeTree', 'GM.armies', 'ctx.results.aiResult'],
       writes: ['GM.officeTree', 'GM._tyrantHistory', 'GM._tyrantDecadence', 'ctx.results.tyrantResult', 'ctx.input._postAiEdictRan', 'GM.armies (御驾亲征战果回填)']
     },

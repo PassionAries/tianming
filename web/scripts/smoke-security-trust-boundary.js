@@ -139,16 +139,34 @@ async function main() {
   try { await T.assertSafeRemoteUrl('https://10.0.0.1/path'); } catch (error) { ipError = error; }
   check(ipError && /IP/.test(ipError.message), 'production remote requests reject IP literals before fetch');
 
-  const publicSession = T.toPublicAccountSession({ token: 'secret', user: { id: 7 }, loggedInAt: 'now' });
-  check(publicSession.loggedIn === true && publicSession.user.id === 7 && !Object.prototype.hasOwnProperty.call(publicSession, 'token'),
-    'renderer account session exposes identity without bearer token');
-  const sanitized = T.sanitizeOnlineResponse({ success: true, token: 'secret', nested: { refreshToken: 'refresh', value: 1 } });
-  check(sanitized.success && sanitized.nested.value === 1 && !('token' in sanitized) && !('refreshToken' in sanitized.nested),
+  const publicSession = T.toPublicAccountSession({
+    token: 'secret',
+    user: { id: 7, username: '史官', nickname: '史官', email: 'user@example.invalid', passwordHash: 'hash', internalFlags: ['admin'], access_token: 'nested-secret' },
+    loggedInAt: 'now'
+  });
+  check(publicSession.loggedIn === true && publicSession.user.id === 7 && publicSession.user.email === 'user@example.invalid'
+    && !Object.prototype.hasOwnProperty.call(publicSession, 'token') && !('passwordHash' in publicSession.user)
+    && !('internalFlags' in publicSession.user) && !('access_token' in publicSession.user),
+    'renderer account session exposes only allowlisted identity fields without bearer or future internal fields');
+  const sanitized = T.sanitizeOnlineResponse({ success: true, token: 'secret', nested: { refreshToken: 'refresh', access_token: 'snake', passwordHash: 'hash', value: 1 } });
+  check(sanitized.success && sanitized.nested.value === 1 && !('token' in sanitized) && !('refreshToken' in sanitized.nested)
+    && !('access_token' in sanitized.nested) && !('passwordHash' in sanitized.nested),
     'account responses recursively remove session secrets');
+  const publicAccountResponse = T.sanitizeAccountOnlineResponse({ success: true, user: { id: 8, username: '公开', internalFlags: ['secret'], recoveryCodes: ['x'] } });
+  check(publicAccountResponse.user.id === 8 && publicAccountResponse.user.username === '公开'
+    && !('internalFlags' in publicAccountResponse.user) && !('recoveryCodes' in publicAccountResponse.user),
+    'login/register/me response user uses the same explicit public DTO');
   check(T.normalizeOnlineRendererRoute('GET', 'workshop/pack?id=x').route === 'workshop/pack'
     && throws(() => T.normalizeOnlineRendererRoute('GET', 'https://attacker.invalid/steal'), /非法|授权/)
     && throws(() => T.normalizeOnlineRendererRoute('POST', '../account/login'), /非法|授权/),
     'renderer online proxy accepts only fixed methods and routes');
+  check(T.getOnlineRendererBodyLimit('feed/post') === 1024 * 1024
+    && T.getOnlineRendererBodyLimit('workshop/upload') === 4 * 1024 * 1024,
+    'online proxy applies route-specific JSON body limits');
+  check(throws(() => T.assertOnlineRendererBodySize('feed/post', { text: 'x'.repeat(2 * 1024 * 1024) }), /1MB/)
+    && !throws(() => T.assertOnlineRendererBodySize('workshop/upload', { text: 'x'.repeat(2 * 1024 * 1024) }))
+    && throws(() => T.assertOnlineRendererBodySize('workshop/upload', { text: 'x'.repeat(5 * 1024 * 1024) }), /4MB/),
+    'main process repeats body-size validation even if preload is bypassed');
 
   const oversizedHeaders = { get: name => name === 'content-length' ? '20' : null };
   let bodyError = null;

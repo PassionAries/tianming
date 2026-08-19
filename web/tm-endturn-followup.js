@@ -24,6 +24,62 @@
 
   var ns = global.TM.Endturn.AI.followup;
 
+  function _cloneNpcApplyState(value) {
+    if (value == null || typeof value !== 'object') return value;
+    if (typeof deepClone === 'function') return deepClone(value);
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function _restoreNpcApplyState(target, snapshot) {
+    if (Array.isArray(target) && Array.isArray(snapshot)) {
+      while (target.length > snapshot.length) target.pop();
+      for (var i = 0; i < snapshot.length; i++) {
+        var srcItem = snapshot[i], dstItem = target[i];
+        if (srcItem && dstItem && typeof srcItem === 'object' && typeof dstItem === 'object'
+            && Array.isArray(srcItem) === Array.isArray(dstItem)) {
+          _restoreNpcApplyState(dstItem, srcItem);
+        } else {
+          target[i] = _cloneNpcApplyState(srcItem);
+        }
+      }
+      return target;
+    }
+    Object.keys(target || {}).forEach(function(key) {
+      if (!Object.prototype.hasOwnProperty.call(snapshot || {}, key)) delete target[key];
+    });
+    Object.keys(snapshot || {}).forEach(function(key) {
+      var src = snapshot[key], dst = target[key];
+      if (src && dst && typeof src === 'object' && typeof dst === 'object'
+          && Array.isArray(src) === Array.isArray(dst)) {
+        _restoreNpcApplyState(dst, src);
+      } else {
+        target[key] = _cloneNpcApplyState(src);
+      }
+    });
+    return target;
+  }
+
+  function _applyNpcDeepResultAtomic(applyFn, result) {
+    if (typeof applyFn !== 'function') return { ok: false, error: new Error('NPC deep-result applier missing') };
+    var gmRef = global.GM;
+    var pRef = global.P;
+    var gmSnapshot = _cloneNpcApplyState(gmRef);
+    var pSnapshot = _cloneNpcApplyState(pRef);
+    try {
+      applyFn(result);
+      return { ok: true };
+    } catch (error) {
+      _restoreNpcApplyState(gmRef, gmSnapshot);
+      _restoreNpcApplyState(pRef, pSnapshot);
+      try {
+        if (global.TM && TM.errors && typeof TM.errors.capture === 'function') TM.errors.capture(error, 'npc-deep-result.atomic');
+      } catch (_) {}
+      return { ok: false, error: error };
+    }
+  }
+
+  ns._applyNpcDeepResultAtomic = _applyNpcDeepResultAtomic;
+
   // ══ 立项拆分 alias（2026-07-06·第十九拆·alias 范式）══════════════════
   //  27 个顶层纯 helper + 6 个 ns 公开导出已迁 tm-endturn-followup-helpers.js
   //  （载于本文件之前·装载期填 bucket TM.__etFollowupParts·勿动序·契约见 lint-split-contracts）。
@@ -158,6 +214,10 @@
         _specialtySummary.sc17,
         _specialtySummary.sc18
       ].filter(Boolean).join('');
+    }
+    function _recordNpcDeepApplyFailure(id, outcome) {
+      var error = outcome && outcome.error;
+      try { if (typeof recordSubcallError === 'function') recordSubcallError(id, 'apply', error || new Error('NPC deep result apply failed')); } catch (_) {}
     }
       // §5 sc15-sc27 后续子调用 + 收尾（NPC 深度·势力·财政·军事·审计·丰化·叙事）
       // ★ 并行优化（2026-04-30）：sc1 完成后扇出三路并行
@@ -426,9 +486,15 @@
               // ★2026-07-02 应用同源:走与 sc15 相同的 _applyNpcDeepResult——此前 sc15n 只存结果不应用·
               //   开着 sc15n 时 mood/忠诚/压力/关系网/暗流事件簿/阴谋台账全部静默停摆(半成品替代)。
               //   faction_undercurrents 亦由共享函数接管(历史归档+势力strength+事件簿·比原 append 版语义全)。
-              // 应用错误不外抛(2026-07-04 审查定罪)：外层 _runSubcall 重试会整段重跑·已落的 delta 再落一次=双记账。
-              // 应用中断=部分落地不回滚(可容)·但绝不因应用错误触发 AI 重调重应用。
-              try { _applyNpcDeepResult(p15n); } catch (_apE15n) { console.warn('[sc15n] 应用中断(不重试防双记):', _apE15n); }
+              // 已解析结果先固化，再以同步事务应用。失败只回滚本次应用且不向 _runSubcall 抛出，
+              // 因而不会重新调用 AI，也不会留下半套人物/关系/地区变更。
+              var _summary15nBefore = _specialtySummary.sc15;
+              var _apply15n = _applyNpcDeepResultAtomic(_applyNpcDeepResult, p15n);
+              if (!_apply15n.ok) {
+                _specialtySummary.sc15 = _summary15nBefore;
+                _recordNpcDeepApplyFailure('sc15n', _apply15n);
+                return;
+              }
               if (Array.isArray(p15n.npc_cognition)) {
                 if (!GM._npcCognition || typeof GM._npcCognition !== 'object') GM._npcCognition = {};
                 p15n.npc_cognition.forEach(function(nc) {
@@ -573,10 +639,14 @@
           var p15 = _p15Parse ? _p15Parse.parsed : null;
           if (p15) {
             // ★2026-07-02 应用逻辑抽出 _applyNpcDeepResult(见 Branch A 顶部)与 sc15n 共享·内容与原内联一致
-            // 应用错误不外抛(同 sc15n·重试整段重跑=已落 delta 双记账·2026-07-04 审查定罪)
-            try { _applyNpcDeepResult(p15); } catch (_apE15) { console.warn('[sc15] 应用中断(不重试防双记):', _apE15); }
-
             GM._turnAiResults.subcall15 = p15;
+            var _summary15Before = _specialtySummary.sc15;
+            var _apply15 = _applyNpcDeepResultAtomic(_applyNpcDeepResult, p15);
+            if (!_apply15.ok) {
+              _specialtySummary.sc15 = _summary15Before;
+              _recordNpcDeepApplyFailure('sc15', _apply15);
+              return;
+            }
             // Phase 4·sc15n API surface mirror (Slice 3 scaffold)·下游可读 subcall15n 而非分散 subcall15/subcall07
             // 3-tier 内容拆分·core (mood/relationship)·common (hidden_moves/undercurrents)·extended (schemes/rumors)
             try {

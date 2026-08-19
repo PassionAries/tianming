@@ -191,8 +191,9 @@ async function runDynamicLeaseSmokes() {
       objectStoreNames: { contains: () => true },
       transaction() {
         const tx = {};
-        tx.objectStore = () => ({
+        tx.objectStore = (storeName) => ({
           put() {
+            if (storeName !== 'saves') return;
             writeAttempts++;
             if (writeAttempts === 1) setTimeout(() => tx.onerror({ target: { error: { name: 'QuotaExceededError' } } }), 0);
             else { committed++; setTimeout(() => tx.oncomplete(), 0); }

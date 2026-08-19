@@ -30,11 +30,11 @@ ok(outNorm.indexOf('35.0%') >= 0 && outNorm.indexOf('55.0%') >= 0 && outNorm.ind
 // ══ B. 城市信息 / 粮价 / 逃户 守卫(源契约) ══
 const mapS = read('tm-map-system.js');
 ok(/_mapSystemFiniteNumberOr\(city\.population,\s*0\)\.toLocaleString\(\)/.test(mapS), '★城市人口经有限数值守卫(防 undefined/NaN.toLocaleString 污染)');
-ok(/\(city\.income\|\|0\)\.toLocaleString\(\)/.test(mapS), '城市收入 ||0 守卫');
+ok(/_mapSystemFiniteNumberOr\(city\.income,\s*0\)\.toLocaleString\(\)/.test(mapS), '城市收入经有限数值守卫（保留合法 0）');
 // 2026-07-06 驻军守卫被并行会话重构为 Number(city.garrison||0) 中转变量形(游牧机动兵力兜底改造)·断言随语义锚两形通吃
 ok(/Number\(city\.garrison \|\| 0\)/.test(mapS) || /\(city\.garrison\|\|0\)\.toLocaleString\(\)/.test(mapS), '城市驻军 ||0 守卫(直用或 Number 中转形)');
-ok(/if \(\(city\.neighbors\|\|\[\]\)\.length > 0\)/.test(mapS), '★相邻城市 ||[] 守卫(防 .length 崩)');
-ok(/\(city\.neighbors\|\|\[\]\)\.forEach/.test(mapS), '相邻城市遍历 ||[] 守卫');
+ok(/if \(neighborLabels\.length > 0\)/.test(mapS), '★相邻城市仅在安全标签非空时渲染');
+ok(/\(city\.neighbors\s*\|\|\s*\[\]\)\.forEach/.test(mapS), '相邻城市遍历 ||[] 守卫');
 
 const econ = (read('tm-economy-engine-currency.js') + '\n' + read('tm-economy-engine.js'));
 ok((econ.match(/Math\.max\(0\.5, m\.yearFortune/g) || []).length === 2, '★粮价行加 Math.max(0.5,yearFortune) 守卫(与通胀行一致·共2处)');

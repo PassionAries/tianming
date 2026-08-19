@@ -34,12 +34,18 @@
 (function(){
   'use strict';
   if (typeof window === 'undefined') return;
+  function _edEsc(value) {
+    if (typeof escHtml === 'function') return escHtml(String(value == null ? '' : value));
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
 
   // 角色详细编辑（覆盖简版） - 含五维滑块
   window.editChr = function(i){
     var ch=P.characters[i];
     var ss=Object.entries(ch.stats||{}).map(function(e){return e[0]+":"+e[1];}).join(",");
-    function sl(label,key,val){return '<div class="slider-group"><label>'+label+'</label><input type="range" min="0" max="100" value="'+val+'" id="chr-sl-'+key+'" oninput="this.nextElementSibling.textContent=this.value"><span class="slider-val">'+val+'</span></div>';}
+    function sl(label,key,val){return '<div class="slider-group"><label>'+_edEsc(label)+'</label><input type="range" min="0" max="100" value="'+_edEsc(val)+'" id="chr-sl-'+_edEsc(key)+'" oninput="this.nextElementSibling.textContent=this.value"><span class="slider-val">'+_edEsc(val)+'</span></div>';}
     var sliders=sl("忠诚","loyalty",ch.loyalty!=null?ch.loyalty:70)+
       sl("士气","morale",ch.morale!=null?ch.morale:70)+
       sl("野心","ambition",ch.ambition!=null?ch.ambition:50)+
@@ -50,22 +56,22 @@
       sl("政务","administration",ch.administration!=null?ch.administration:50)+
       sl("魅力","charisma",ch.charisma!=null?ch.charisma:50)+
       sl("外交","diplomacy",ch.diplomacy!=null?ch.diplomacy:50);
-    _$("em").innerHTML="<div class=\"cd\"><h4>编辑角色: "+ch.name+"</h4>"+
-      "<div class=\"rw\"><div class=\"fd\"><label>名称</label><input id=\"chr-ed-name\" value=\""+ch.name+"\"></div><div class=\"fd\"><label>头衔</label><input id=\"chr-ed-title\" value=\""+ch.title+"\"></div><div class=\"fd\"><label>阵营</label><input id=\"chr-ed-faction\" value=\""+(ch.faction||"")+"\"></div></div>"+
-      "<div class=\"rw\"><div class=\"fd\"><label>立场</label><input id=\"chr-ed-stance\" value=\""+(ch.stance||"")+"\"></div><div class=\"fd q\"><label>年龄</label><input type=\"number\" id=\"chr-ed-age\" value=\""+(ch.age||30)+"\"></div><div class=\"fd q\"><label>性别</label><select id=\"chr-ed-gender\"><option "+(ch.gender==="男"?"selected":"")+">男</option><option "+(ch.gender==="女"?"selected":"")+">女</option></select></div><div class=\"fd q\"><label>类型</label><select id=\"chr-ed-hist\"><option value=\"false\" "+(ch.isHistorical?"":"selected")+">虚构</option><option value=\"true\" "+(ch.isHistorical?"selected":"")+">历史名臣</option></select></div></div>"+
+    _$("em").innerHTML="<div class=\"cd\"><h4>编辑角色: "+_edEsc(ch.name)+"</h4>"+
+      "<div class=\"rw\"><div class=\"fd\"><label>名称</label><input id=\"chr-ed-name\" value=\""+_edEsc(ch.name)+"\"></div><div class=\"fd\"><label>头衔</label><input id=\"chr-ed-title\" value=\""+_edEsc(ch.title)+"\"></div><div class=\"fd\"><label>阵营</label><input id=\"chr-ed-faction\" value=\""+_edEsc(ch.faction||"")+"\"></div></div>"+
+      "<div class=\"rw\"><div class=\"fd\"><label>立场</label><input id=\"chr-ed-stance\" value=\""+_edEsc(ch.stance||"")+"\"></div><div class=\"fd q\"><label>年龄</label><input type=\"number\" id=\"chr-ed-age\" value=\""+_edEsc(ch.age||30)+"\"></div><div class=\"fd q\"><label>性别</label><select id=\"chr-ed-gender\"><option "+(ch.gender==="男"?"selected":"")+">男</option><option "+(ch.gender==="女"?"selected":"")+">女</option></select></div><div class=\"fd q\"><label>类型</label><select id=\"chr-ed-hist\"><option value=\"false\" "+(ch.isHistorical?"":"selected")+">虚构</option><option value=\"true\" "+(ch.isHistorical?"selected":"")+">历史名臣</option></select></div></div>"+
       "<div style=\"background:var(--bg-3);border:1px solid var(--bdr);border-radius:8px;padding:0.6rem;margin:0.5rem 0;\"><div style=\"font-size:0.85rem;font-weight:700;color:var(--gold);margin-bottom:0.3rem;\">五维属性</div>"+sliders+"</div>"+
-      "<div class=\"fd full\"><label>描述</label><textarea rows=\"2\" id=\"chr-ed-desc\">"+ch.desc+"</textarea></div>"+
-      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>性格</label><textarea rows=\"2\" id=\"chr-ed-personality\">"+(ch.personality||"")+"</textarea></div>"+
-      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>外貌</label><input id=\"chr-ed-appearance\" value=\""+(ch.appearance||"")+"\"></div>"+
-      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>属性(k:v,k:v)</label><input id=\"chr-ed-stats\" value=\""+ss+"\"></div>"+
-      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>技能(逗号)</label><input id=\"chr-ed-skills\" value=\""+(ch.skills||[]).join(",")+"\"></div>"+
-      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>台词(每行)</label><textarea rows=\"2\" id=\"chr-ed-dialogues\">"+(ch.dialogues||[]).join("\n")+"</textarea></div>"+
-      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>秘密目标</label><input id=\"chr-ed-secret\" value=\""+(ch.secret||"")+"\"></div>"+
+      "<div class=\"fd full\"><label>描述</label><textarea rows=\"2\" id=\"chr-ed-desc\">"+_edEsc(ch.desc)+"</textarea></div>"+
+      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>性格</label><textarea rows=\"2\" id=\"chr-ed-personality\">"+_edEsc(ch.personality||"")+"</textarea></div>"+
+      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>外貌</label><input id=\"chr-ed-appearance\" value=\""+_edEsc(ch.appearance||"")+"\"></div>"+
+      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>属性(k:v,k:v)</label><input id=\"chr-ed-stats\" value=\""+_edEsc(ss)+"\"></div>"+
+      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>技能(逗号)</label><input id=\"chr-ed-skills\" value=\""+_edEsc((ch.skills||[]).join(","))+"\"></div>"+
+      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>台词(每行)</label><textarea rows=\"2\" id=\"chr-ed-dialogues\">"+_edEsc((ch.dialogues||[]).join("\n"))+"</textarea></div>"+
+      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>秘密目标</label><input id=\"chr-ed-secret\" value=\""+_edEsc(ch.secret||"")+"\"></div>"+
       "<hr class=\"dv\"><div style=\"font-size:0.88rem;font-weight:700;color:var(--purple);margin-bottom:0.5rem;\">AI深度设定</div>"+
-      "<div class=\"fd full\"><label>AI人设文本</label><textarea rows=\"3\" id=\"chr-ed-aiPersona\" placeholder=\"详细描述供AI判断角色行为\">"+(ch.aiPersonaText||"")+"</textarea></div>"+
-      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>行为模式</label><textarea rows=\"2\" id=\"chr-ed-behavior\" placeholder=\"AI如何决定行动\">"+(ch.behaviorMode||"")+"</textarea></div>"+
-      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>价值观</label><textarea rows=\"2\" id=\"chr-ed-values\">"+(ch.valueSystem||"")+"</textarea></div>"+
-      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>说话风格</label><textarea rows=\"2\" id=\"chr-ed-speech\">"+(ch.speechStyle||"")+"</textarea></div>"+
+      "<div class=\"fd full\"><label>AI人设文本</label><textarea rows=\"3\" id=\"chr-ed-aiPersona\" placeholder=\"详细描述供AI判断角色行为\">"+_edEsc(ch.aiPersonaText||"")+"</textarea></div>"+
+      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>行为模式</label><textarea rows=\"2\" id=\"chr-ed-behavior\" placeholder=\"AI如何决定行动\">"+_edEsc(ch.behaviorMode||"")+"</textarea></div>"+
+      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>价值观</label><textarea rows=\"2\" id=\"chr-ed-values\">"+_edEsc(ch.valueSystem||"")+"</textarea></div>"+
+      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>说话风格</label><textarea rows=\"2\" id=\"chr-ed-speech\">"+_edEsc(ch.speechStyle||"")+"</textarea></div>"+
       "<button class=\"bt bp\" onclick=\"saveChrEdit("+i+")\" style=\"margin-top:0.5rem;\">完成</button></div>";
   };
 
@@ -104,16 +110,16 @@
     em.innerHTML="<h4 style=\"color:var(--gold);\">物品/科技/政策 ("+list.length+")</h4>"+
       "<div style=\"display:flex;gap:0.3rem;margin-bottom:0.8rem;\"><button class=\"bt bp bsm\" onclick=\"P.items.push({sid:editingScenarioId,name:'新',type:'item',desc:'',effect:{},prereq:'',acquired:false});renderEdTab('t-itm');\">＋物品</button><button class=\"bt bp bsm\" onclick=\"P.items.push({sid:editingScenarioId,name:'新',type:'tech',desc:'',effect:{},prereq:'',acquired:false});renderEdTab('t-itm');\">＋科技</button><button class=\"bt bp bsm\" onclick=\"P.items.push({sid:editingScenarioId,name:'新',type:'policy',desc:'',effect:{},prereq:'',acquired:false});renderEdTab('t-itm');\">＋政策</button><button class=\"bai\" onclick=\"aiGenItems()\">🤖</button></div>"+
       list.map(function(t){var i=P.items.indexOf(t);var eff=Object.entries(t.effect||{}).map(function(e){return(e[1]>0?"+":"")+e[1]+" "+e[0];}).join(", ");
-        return "<div class=\"cd\"><div style=\"display:flex;justify-content:space-between;\"><div><span class=\"tg\">"+t.type+"</span> <strong>"+t.name+"</strong></div><div><button class=\"bs bsm\" onclick=\"editItm("+i+")\">编辑</button> <button class=\"bd bsm\" onclick=\"P.items.splice("+i+",1);renderEdTab('t-itm');\">✕</button></div></div><div style=\"font-size:0.78rem;color:var(--txt-s);\">"+t.desc+"</div>"+(eff?"<div style=\"margin-top:0.2rem;\">"+eff+"</div>":"")+(t.prereq?"<div style=\"font-size:0.7rem;color:var(--txt-d);\">前置: "+t.prereq+"</div>":"")+"</div>";}).join("")||"<div style=\"color:var(--txt-d);\">暂无</div>";
+        return "<div class=\"cd\"><div style=\"display:flex;justify-content:space-between;\"><div><span class=\"tg\">"+_edEsc(t.type)+"</span> <strong>"+_edEsc(t.name)+"</strong></div><div><button class=\"bs bsm\" onclick=\"editItm("+i+")\">编辑</button> <button class=\"bd bsm\" onclick=\"P.items.splice("+i+",1);renderEdTab('t-itm');\">✕</button></div></div><div style=\"font-size:0.78rem;color:var(--txt-s);\">"+_edEsc(t.desc)+"</div>"+(eff?"<div style=\"margin-top:0.2rem;\">"+_edEsc(eff)+"</div>":"")+(t.prereq?"<div style=\"font-size:0.7rem;color:var(--txt-d);\">前置: "+_edEsc(t.prereq)+"</div>":"")+"</div>";}).join("")||"<div style=\"color:var(--txt-d);\">暂无</div>";
   };
 
   window.editItm = function(i){
     var t=P.items[i];var effStr=Object.entries(t.effect||{}).map(function(e){return e[0]+":"+e[1];}).join(",");
     _$("em").innerHTML="<div class=\"cd\"><h4>编辑</h4>"+
-      "<div class=\"rw\"><div class=\"fd\"><label>名称</label><input value=\""+t.name+"\" onchange=\"P.items["+i+"].name=this.value\"></div><div class=\"fd q\"><label>类型</label><select onchange=\"P.items["+i+"].type=this.value\"><option "+(t.type==="item"?"selected":"")+">物品</option><option value=\"tech\" "+(t.type==="tech"?"selected":"")+">科技</option><option value=\"policy\" "+(t.type==="policy"?"selected":"")+">政策</option></select></div></div>"+
-      "<div class=\"fd full\"><label>描述</label><textarea rows=\"3\" onchange=\"P.items["+i+"].desc=this.value\">"+t.desc+"</textarea></div>"+
-      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>效果(变量:值,逗号)</label><input value=\""+effStr+"\" onchange=\"var o={};this.value.split(',').forEach(function(p){var kv=p.split(':');if(kv[0]&&kv[1])o[kv[0].trim()]=parseInt(kv[1])||0;});P.items["+i+"].effect=o;\"></div>"+
-      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>前置条件</label><input value=\""+(t.prereq||"")+"\" onchange=\"P.items["+i+"].prereq=this.value\" placeholder=\"如: 变法支持>50\"></div>"+
+      "<div class=\"rw\"><div class=\"fd\"><label>名称</label><input value=\""+_edEsc(t.name)+"\" onchange=\"P.items["+i+"].name=this.value\"></div><div class=\"fd q\"><label>类型</label><select onchange=\"P.items["+i+"].type=this.value\"><option "+(t.type==="item"?"selected":"")+">物品</option><option value=\"tech\" "+(t.type==="tech"?"selected":"")+">科技</option><option value=\"policy\" "+(t.type==="policy"?"selected":"")+">政策</option></select></div></div>"+
+      "<div class=\"fd full\"><label>描述</label><textarea rows=\"3\" onchange=\"P.items["+i+"].desc=this.value\">"+_edEsc(t.desc)+"</textarea></div>"+
+      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>效果(变量:值,逗号)</label><input value=\""+_edEsc(effStr)+"\" onchange=\"var o={};this.value.split(',').forEach(function(p){var kv=p.split(':');if(kv[0]&&kv[1])o[kv[0].trim()]=parseInt(kv[1])||0;});P.items["+i+"].effect=o;\"></div>"+
+      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>前置条件</label><input value=\""+_edEsc(t.prereq||"")+"\" onchange=\"P.items["+i+"].prereq=this.value\" placeholder=\"如: 变法支持>50\"></div>"+
       "<button class=\"bt bp\" onclick=\"renderEdTab('t-itm');toast('已保存')\" style=\"margin-top:0.5rem;\">完成</button></div>";
   };
 
@@ -147,11 +153,11 @@
     em.innerHTML="<h4 style=\"color:var(--gold);\">规则 ("+list.length+")</h4>"+
       "<div style=\"display:flex;gap:0.3rem;margin-bottom:0.8rem;\"><button class=\"bt bp\" onclick=\"P.rules.push({sid:editingScenarioId,name:'新',enabled:true,trigger:{type:'threshold',variable:'',op:'<',value:20},effect:{narrative:'',varChg:{},event:null}});renderEdTab('t-rul');\">＋</button><button class=\"bai\" onclick=\"aiGenRules()\">🤖</button></div>"+
       list.map(function(r){var i=P.rules.indexOf(r);var t=r.trigger;
-        return "<div class=\"cd\" style=\"border-left:3px solid "+(r.enabled?"var(--green)":"var(--red)")+"\"><div style=\"display:flex;justify-content:space-between;margin-bottom:0.3rem;\"><div style=\"display:flex;gap:0.3rem;align-items:center;\"><input type=\"checkbox\" "+(r.enabled?"checked":"")+" onchange=\"P.rules["+i+"].enabled=this.checked;renderEdTab('t-rul');\"><input value=\""+r.name+"\" style=\"background:transparent;border:none;color:var(--txt);font-weight:700;\" onchange=\"P.rules["+i+"].name=this.value\"></div><button class=\"bd bsm\" onclick=\"P.rules.splice("+i+",1);renderEdTab('t-rul');\">✕</button></div>"+
+        return "<div class=\"cd\" style=\"border-left:3px solid "+(r.enabled?"var(--green)":"var(--red)")+"\"><div style=\"display:flex;justify-content:space-between;margin-bottom:0.3rem;\"><div style=\"display:flex;gap:0.3rem;align-items:center;\"><input type=\"checkbox\" "+(r.enabled?"checked":"")+" onchange=\"P.rules["+i+"].enabled=this.checked;renderEdTab('t-rul');\"><input value=\""+_edEsc(r.name)+"\" style=\"background:transparent;border:none;color:var(--txt);font-weight:700;\" onchange=\"P.rules["+i+"].name=this.value\"></div><button class=\"bd bsm\" onclick=\"P.rules.splice("+i+",1);renderEdTab('t-rul');\">✕</button></div>"+
         "<div style=\"background:var(--bg-1);border-radius:4px;padding:0.4rem;font-size:0.8rem;\"><select onchange=\"P.rules["+i+"].trigger.type=this.value;renderEdTab('t-rul');\"><option value=\"threshold\" "+(t.type==="threshold"?"selected":"")+">阈值</option><option value=\"keyword\" "+(t.type==="keyword"?"selected":"")+">关键词</option><option value=\"turn\" "+(t.type==="turn"?"selected":"")+">回合</option><option value=\"random\" "+(t.type==="random"?"selected":"")+">随机</option></select>"+
-        (t.type==="threshold"?" <select onchange=\"P.rules["+i+"].trigger.variable=this.value\">"+vn.map(function(n){return "<option "+(t.variable===n?"selected":"")+">"+n+"</option>";}).join("")+"</select><select onchange=\"P.rules["+i+"].trigger.op=this.value\"><option "+(t.op==="<"?"selected":"")+">&lt;</option><option "+(t.op===">"?"selected":"")+">&gt;</option></select><input type=\"number\" value=\""+(t.value||0)+"\" style=\"width:45px;\" onchange=\"P.rules["+i+"].trigger.value=+this.value\">":"")+
-        (t.type==="keyword"?"<input value=\""+(t.keywords||[]).join(",")+"\" placeholder=\"关键词,逗号\" onchange=\"P.rules["+i+"].trigger.keywords=this.value.split(',').map(function(s){return s.trim();})\">":"")+
-        "</div><div style=\"background:var(--bg-1);border-radius:4px;padding:0.4rem;margin-top:0.3rem;\"><label style=\"font-size:0.72rem;color:var(--txt-d);\">触发效果</label><textarea rows=\"2\" style=\"width:100%;\" onchange=\"P.rules["+i+"].effect.narrative=this.value\">"+(r.effect.narrative||"")+"</textarea></div></div>";}).join("");
+        (t.type==="threshold"?" <select onchange=\"P.rules["+i+"].trigger.variable=this.value\">"+vn.map(function(n){return "<option "+(t.variable===n?"selected":"")+">"+_edEsc(n)+"</option>";}).join("")+"</select><select onchange=\"P.rules["+i+"].trigger.op=this.value\"><option "+(t.op==="<"?"selected":"")+">&lt;</option><option "+(t.op===">"?"selected":"")+">&gt;</option></select><input type=\"number\" value=\""+_edEsc(t.value||0)+"\" style=\"width:45px;\" onchange=\"P.rules["+i+"].trigger.value=+this.value\">":"")+
+        (t.type==="keyword"?"<input value=\""+_edEsc((t.keywords||[]).join(","))+"\" placeholder=\"关键词,逗号\" onchange=\"P.rules["+i+"].trigger.keywords=this.value.split(',').map(function(s){return s.trim();})\">":"")+
+        "</div><div style=\"background:var(--bg-1);border-radius:4px;padding:0.4rem;margin-top:0.3rem;\"><label style=\"font-size:0.72rem;color:var(--txt-d);\">触发效果</label><textarea rows=\"2\" style=\"width:100%;\" onchange=\"P.rules["+i+"].effect.narrative=this.value\">"+_edEsc(r.effect.narrative||"")+"</textarea></div></div>";}).join("");
   };
 
   window.aiGenRules = async function(){
@@ -176,7 +182,7 @@
     var list=P.events.filter(function(e){return e.sid===sid;});
     em.innerHTML="<h4 style=\"color:var(--gold);\">事件 ("+list.length+")</h4>"+
       "<div style=\"display:flex;gap:0.3rem;margin-bottom:0.8rem;\"><button class=\"bt bp\" onclick=\"P.events.push({sid:editingScenarioId,id:uid(),name:'新',type:'scripted',triggerTurn:0,oneTime:true,triggered:false,narrative:'',choices:[]});renderEdTab('t-evt');\">＋</button><button class=\"bai\" onclick=\"aiGenEvents()\">🤖</button></div>"+
-      list.map(function(ev){var i=P.events.indexOf(ev);return "<div class=\"cd\"><div style=\"display:flex;justify-content:space-between;\"><strong>"+ev.name+"</strong><div><button class=\"bs bsm\" onclick=\"editEvt("+i+")\">编辑</button> <button class=\"bd bsm\" onclick=\"P.events.splice("+i+",1);renderEdTab('t-evt');\">✕</button></div></div><div style=\"font-size:0.78rem;color:var(--txt-s);\">"+(ev.narrative||"").slice(0,60)+"…</div>"+(ev.choices&&ev.choices.length?"<div style=\"font-size:0.7rem;color:var(--txt-d);\">"+ev.choices.length+" 选项</div>":"")+"</div>";}).join("");
+      list.map(function(ev){var i=P.events.indexOf(ev);return "<div class=\"cd\"><div style=\"display:flex;justify-content:space-between;\"><strong>"+_edEsc(ev.name)+"</strong><div><button class=\"bs bsm\" onclick=\"editEvt("+i+")\">编辑</button> <button class=\"bd bsm\" onclick=\"P.events.splice("+i+",1);renderEdTab('t-evt');\">✕</button></div></div><div style=\"font-size:0.78rem;color:var(--txt-s);\">"+_edEsc((ev.narrative||"").slice(0,60))+"…</div>"+(ev.choices&&ev.choices.length?"<div style=\"font-size:0.7rem;color:var(--txt-d);\">"+ev.choices.length+" 选项</div>":"")+"</div>";}).join("");
   };
 
   window.aiGenEvents = async function(){
@@ -202,7 +208,7 @@
     var list=P.factions.filter(function(f){return f.sid===sid;});
     em.innerHTML="<h4 style=\"color:var(--gold);\">党派 ("+list.length+")</h4>"+
       "<div style=\"display:flex;gap:0.3rem;margin-bottom:0.8rem;\"><button class=\"bt bp\" onclick=\"P.factions.push({sid:editingScenarioId,name:'新',leader:'',desc:'',color:'#888',traits:[],strength:50,territory:'',ideology:'',courtInfluence:50,popularInfluence:30,members:'',partyRelations:''});renderEdTab('t-fac');\">＋</button><button class=\"bai\" onclick=\"aiGenFac()\">🤖</button></div>"+
-      list.map(function(f){var i=P.factions.indexOf(f);return "<div class=\"cd\"><div style=\"display:flex;justify-content:space-between;\"><strong>"+f.name+"</strong><div><button class=\"bs bsm\" onclick=\"editFac("+i+")\">编辑</button> <button class=\"bd bsm\" onclick=\"P.factions.splice("+i+",1);renderEdTab('t-fac');\">✕</button></div></div><div style=\"font-size:0.78rem;color:var(--txt-s);\">"+f.desc+"</div></div>";}).join("")||"<div style=\"color:var(--txt-d);\">暂无</div>";
+      list.map(function(f){var i=P.factions.indexOf(f);return "<div class=\"cd\"><div style=\"display:flex;justify-content:space-between;\"><strong>"+_edEsc(f.name)+"</strong><div><button class=\"bs bsm\" onclick=\"editFac("+i+")\">编辑</button> <button class=\"bd bsm\" onclick=\"P.factions.splice("+i+",1);renderEdTab('t-fac');\">✕</button></div></div><div style=\"font-size:0.78rem;color:var(--txt-s);\">"+_edEsc(f.desc)+"</div></div>";}).join("")||"<div style=\"color:var(--txt-d);\">暂无</div>";
   };
 
   // 阶层详细编辑
@@ -210,17 +216,17 @@
     var list=P.classes.filter(function(c){return c.sid===sid;});
     em.innerHTML="<h4 style=\"color:var(--gold);\">阶层 ("+list.length+")</h4>"+
       "<div style=\"display:flex;gap:0.3rem;margin-bottom:0.8rem;\"><button class=\"bt bp\" onclick=\"P.classes.push({sid:editingScenarioId,name:'新',desc:'',privileges:'',restrictions:'',population:'',influence:50});renderEdTab('t-class');\">＋</button><button class=\"bai\" onclick=\"aiGenClasses()\">🤖</button></div>"+
-      list.map(function(c){var i=P.classes.indexOf(c);return "<div class=\"cd\"><div style=\"display:flex;justify-content:space-between;\"><strong>"+c.name+"</strong><div><button class=\"bs bsm\" onclick=\"editClass2("+i+")\">编辑</button> <button class=\"bd bsm\" onclick=\"P.classes.splice("+i+",1);renderEdTab('t-class');\">✕</button></div></div><div style=\"font-size:0.78rem;color:var(--txt-s);\">"+c.desc+" | 影响:"+c.influence+"</div></div>";}).join("")||"<div style=\"color:var(--txt-d);\">暂无</div>";
+      list.map(function(c){var i=P.classes.indexOf(c);return "<div class=\"cd\"><div style=\"display:flex;justify-content:space-between;\"><strong>"+_edEsc(c.name)+"</strong><div><button class=\"bs bsm\" onclick=\"editClass2("+i+")\">编辑</button> <button class=\"bd bsm\" onclick=\"P.classes.splice("+i+",1);renderEdTab('t-class');\">✕</button></div></div><div style=\"font-size:0.78rem;color:var(--txt-s);\">"+_edEsc(c.desc)+" | 影响:"+_edEsc(c.influence)+"</div></div>";}).join("")||"<div style=\"color:var(--txt-d);\">暂无</div>";
   };
 
   window.editClass2 = function(i){
     var c=P.classes[i];
     _$("em").innerHTML="<div class=\"cd\"><h4>编辑阶层</h4>"+
-      "<div class=\"rw\"><div class=\"fd\"><label>名称</label><input value=\""+c.name+"\" onchange=\"P.classes["+i+"].name=this.value\"></div><div class=\"fd q\"><label>影响力</label><input type=\"number\" value=\""+c.influence+"\" onchange=\"P.classes["+i+"].influence=+this.value\"></div></div>"+
-      "<div class=\"fd full\"><label>描述</label><textarea rows=\"2\" onchange=\"P.classes["+i+"].desc=this.value\">"+c.desc+"</textarea></div>"+
-      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>特权</label><textarea rows=\"2\" onchange=\"P.classes["+i+"].privileges=this.value\">"+(c.privileges||"")+"</textarea></div>"+
-      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>限制</label><textarea rows=\"2\" onchange=\"P.classes["+i+"].restrictions=this.value\">"+(c.restrictions||"")+"</textarea></div>"+
-      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>人口比例</label><input value=\""+(c.population||"")+"\" onchange=\"P.classes["+i+"].population=this.value\"></div>"+
+      "<div class=\"rw\"><div class=\"fd\"><label>名称</label><input value=\""+_edEsc(c.name)+"\" onchange=\"P.classes["+i+"].name=this.value\"></div><div class=\"fd q\"><label>影响力</label><input type=\"number\" value=\""+_edEsc(c.influence)+"\" onchange=\"P.classes["+i+"].influence=+this.value\"></div></div>"+
+      "<div class=\"fd full\"><label>描述</label><textarea rows=\"2\" onchange=\"P.classes["+i+"].desc=this.value\">"+_edEsc(c.desc)+"</textarea></div>"+
+      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>特权</label><textarea rows=\"2\" onchange=\"P.classes["+i+"].privileges=this.value\">"+_edEsc(c.privileges||"")+"</textarea></div>"+
+      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>限制</label><textarea rows=\"2\" onchange=\"P.classes["+i+"].restrictions=this.value\">"+_edEsc(c.restrictions||"")+"</textarea></div>"+
+      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>人口比例</label><input value=\""+_edEsc(c.population||"")+"\" onchange=\"P.classes["+i+"].population=this.value\"></div>"+
       "<button class=\"bt bp\" onclick=\"renderEdTab('t-class');toast('已保存')\" style=\"margin-top:0.5rem;\">完成</button></div>";
   };
 
@@ -253,9 +259,9 @@
     var entries=P.world.entries.filter(function(e){return!e.sid||e.sid===sid;});
     em.innerHTML="<h4 style=\"color:var(--gold);\">世界设定</h4><div style=\"font-size:0.8rem;color:var(--txt-d);margin-bottom:0.8rem;\">自由编辑，每条可自定义分类。AI推演时全部读取。</div>"+
       "<div style=\"display:flex;gap:0.3rem;margin-bottom:0.8rem;\"><button class=\"bt bp\" onclick=\"if(!P.world.entries)P.world.entries=[];P.world.entries.push({sid:editingScenarioId,category:'新',content:'',tags:[]});renderEdTab('t-wld');\">＋ 新增</button><button class=\"bai\" onclick=\"aiGenWorld()\">🤖 AI生成</button></div>"+
-      entries.map(function(entry){var i=P.world.entries.indexOf(entry);return "<div class=\"cd\"><div style=\"display:flex;justify-content:space-between;margin-bottom:0.3rem;\"><input value=\""+(entry.category||"")+"\" placeholder=\"分类\" style=\"width:120px;font-weight:700;\" onchange=\"P.world.entries["+i+"].category=this.value\"><button class=\"bd bsm\" onclick=\"P.world.entries.splice("+i+",1);renderEdTab('t-wld');\">✕</button></div><textarea rows=\"4\" style=\"width:100%;\" onchange=\"P.world.entries["+i+"].content=this.value\">"+entry.content+"</textarea></div>";}).join("")+
+      entries.map(function(entry){var i=P.world.entries.indexOf(entry);return "<div class=\"cd\"><div style=\"display:flex;justify-content:space-between;margin-bottom:0.3rem;\"><input value=\""+_edEsc(entry.category||"")+"\" placeholder=\"分类\" style=\"width:120px;font-weight:700;\" onchange=\"P.world.entries["+i+"].category=this.value\"><button class=\"bd bsm\" onclick=\"P.world.entries.splice("+i+",1);renderEdTab('t-wld');\">✕</button></div><textarea rows=\"4\" style=\"width:100%;\" onchange=\"P.world.entries["+i+"].content=this.value\">"+_edEsc(entry.content)+"</textarea></div>";}).join("")+
       "<hr class=\"dv\"><div style=\"font-size:0.95rem;font-weight:700;color:var(--gold);margin-bottom:0.5rem;\">运行逻辑</div>"+
-      "<div class=\"fd full\"><label>世界规则</label><textarea rows=\"5\" onchange=\"P.world.rules=this.value\" placeholder=\"定义世界运作规则\">"+(P.world.rules||"")+"</textarea></div>";
+      "<div class=\"fd full\"><label>世界规则</label><textarea rows=\"5\" onchange=\"P.world.rules=this.value\" placeholder=\"定义世界运作规则\">"+_edEsc(P.world.rules||"")+"</textarea></div>";
   };
 
   window.aiGenWorld = async function(){
@@ -283,20 +289,20 @@
     em.innerHTML="<h4 style=\"color:var(--gold);\">科技树 ("+list.length+")</h4>"+
       "<div style=\"display:flex;gap:0.3rem;margin-bottom:0.8rem;\"><button class=\"bt bp\" onclick=\"P.techTree.push({sid:editingScenarioId,name:'新',desc:'',prereqs:[],costs:[],effect:{},era:'初级',unlocked:false});renderEdTab('t-tech');\">＋</button><button class=\"bai\" onclick=\"aiGenTech()\">🤖</button></div>"+
       list.map(function(t){var i=P.techTree.indexOf(t);var costStr=(t.costs||[]).map(function(c){return c.variable+":"+c.amount;}).join(", ");
-        return "<div class=\"cd\"><div style=\"display:flex;justify-content:space-between;\"><strong>"+t.name+"</strong> <span class=\"tg\">"+t.era+"</span><div><button class=\"bs bsm\" onclick=\"editTech2("+i+")\">编辑</button> <button class=\"bd bsm\" onclick=\"P.techTree.splice("+i+",1);renderEdTab('t-tech');\">✕</button></div></div><div style=\"font-size:0.78rem;color:var(--txt-s);\">"+t.desc+"</div>"+(costStr?"<div style=\"font-size:0.7rem;color:var(--txt-d);\">消耗: "+costStr+"</div>":"")+"</div>";}).join("")||"<div style=\"color:var(--txt-d);\">暂无</div>";
+        return "<div class=\"cd\"><div style=\"display:flex;justify-content:space-between;\"><strong>"+_edEsc(t.name)+"</strong> <span class=\"tg\">"+_edEsc(t.era)+"</span><div><button class=\"bs bsm\" onclick=\"editTech2("+i+")\">编辑</button> <button class=\"bd bsm\" onclick=\"P.techTree.splice("+i+",1);renderEdTab('t-tech');\">✕</button></div></div><div style=\"font-size:0.78rem;color:var(--txt-s);\">"+_edEsc(t.desc)+"</div>"+(costStr?"<div style=\"font-size:0.7rem;color:var(--txt-d);\">消耗: "+_edEsc(costStr)+"</div>":"")+"</div>";}).join("")||"<div style=\"color:var(--txt-d);\">暂无</div>";
   };
 
   window.editTech2 = function(i){
     var t=P.techTree[i];var sid=editingScenarioId;var vars=P.variables.filter(function(v){return v.sid===sid;});
     if(!t.costs)t.costs=[];
-    var costsHtml=t.costs.map(function(c,ci){var opts=vars.map(function(v){return "<option "+(v.name===c.variable?"selected":"")+">"+v.name+"</option>";}).join("");return "<div style=\"display:flex;gap:0.3rem;margin-bottom:0.2rem;\"><select onchange=\"P.techTree["+i+"].costs["+ci+"].variable=this.value\" style=\"flex:1;\">"+opts+"</select><input type=\"number\" value=\""+c.amount+"\" style=\"width:60px;\" onchange=\"P.techTree["+i+"].costs["+ci+"].amount=+this.value\"><button class=\"bd bsm\" onclick=\"P.techTree["+i+"].costs.splice("+ci+",1);editTech2("+i+");\">✕</button></div>";}).join("");
+    var costsHtml=t.costs.map(function(c,ci){var opts=vars.map(function(v){return "<option "+(v.name===c.variable?"selected":"")+">"+_edEsc(v.name)+"</option>";}).join("");return "<div style=\"display:flex;gap:0.3rem;margin-bottom:0.2rem;\"><select onchange=\"P.techTree["+i+"].costs["+ci+"].variable=this.value\" style=\"flex:1;\">"+opts+"</select><input type=\"number\" value=\""+_edEsc(c.amount)+"\" style=\"width:60px;\" onchange=\"P.techTree["+i+"].costs["+ci+"].amount=+this.value\"><button class=\"bd bsm\" onclick=\"P.techTree["+i+"].costs.splice("+ci+",1);editTech2("+i+");\">✕</button></div>";}).join("");
     _$("em").innerHTML="<div class=\"cd\"><h4>编辑科技</h4>"+
-      "<div class=\"rw\"><div class=\"fd\"><label>名称</label><input value=\""+t.name+"\" onchange=\"P.techTree["+i+"].name=this.value\"></div><div class=\"fd q\"><label>时代</label><select onchange=\"P.techTree["+i+"].era=this.value\"><option "+(t.era==="初级"?"selected":"")+">初级</option><option "+(t.era==="中级"?"selected":"")+">中级</option><option "+(t.era==="高级"?"selected":"")+">高级</option></select></div></div>"+
-      "<div class=\"fd full\"><label>描述</label><textarea rows=\"2\" onchange=\"P.techTree["+i+"].desc=this.value\">"+t.desc+"</textarea></div>"+
-      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>前置(逗号)</label><input value=\""+(t.prereqs||[]).join(",")+"\" onchange=\"P.techTree["+i+"].prereqs=this.value.split(',').map(function(s){return s.trim();}).filter(Boolean)\"></div>"+
-      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>效果(变量:值)</label><input value=\""+Object.entries(t.effect||{}).map(function(e){return e[0]+":"+e[1];}).join(",")+"\" onchange=\"var o={};this.value.split(',').forEach(function(p){var kv=p.split(':');if(kv[0]&&kv[1])o[kv[0].trim()]=parseInt(kv[1])||0;});P.techTree["+i+"].effect=o;\"></div>"+
+      "<div class=\"rw\"><div class=\"fd\"><label>名称</label><input value=\""+_edEsc(t.name)+"\" onchange=\"P.techTree["+i+"].name=this.value\"></div><div class=\"fd q\"><label>时代</label><select onchange=\"P.techTree["+i+"].era=this.value\"><option "+(t.era==="初级"?"selected":"")+">初级</option><option "+(t.era==="中级"?"selected":"")+">中级</option><option "+(t.era==="高级"?"selected":"")+">高级</option></select></div></div>"+
+      "<div class=\"fd full\"><label>描述</label><textarea rows=\"2\" onchange=\"P.techTree["+i+"].desc=this.value\">"+_edEsc(t.desc)+"</textarea></div>"+
+      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>前置(逗号)</label><input value=\""+_edEsc((t.prereqs||[]).join(","))+"\" onchange=\"P.techTree["+i+"].prereqs=this.value.split(',').map(function(s){return s.trim();}).filter(Boolean)\"></div>"+
+      "<div class=\"fd full\" style=\"margin-top:0.3rem;\"><label>效果(变量:值)</label><input value=\""+_edEsc(Object.entries(t.effect||{}).map(function(e){return e[0]+":"+e[1];}).join(","))+"\" onchange=\"var o={};this.value.split(',').forEach(function(p){var kv=p.split(':');if(kv[0]&&kv[1])o[kv[0].trim()]=parseInt(kv[1])||0;});P.techTree["+i+"].effect=o;\"></div>"+
       "<hr class=\"dv\"><div style=\"font-weight:700;color:var(--gold);margin-bottom:0.3rem;\">解锁消耗</div>"+costsHtml+
-      "<button class=\"bt bs bsm\" onclick=\"P.techTree["+i+"].costs.push({variable:'"+(vars[0]?vars[0].name:"")+"',amount:10});editTech2("+i+");\">＋ 添加</button>"+
+      "<button class=\"bt bs bsm\" onclick=\"var _v=(P.variables||[]).filter(function(v){return v.sid===editingScenarioId;})[0];P.techTree["+i+"].costs.push({variable:_v?_v.name:'',amount:10});editTech2("+i+");\">＋ 添加</button>"+
       "<br><button class=\"bt bp\" onclick=\"renderEdTab('t-tech');toast('已保存')\" style=\"margin-top:0.5rem;\">完成</button></div>";
   };
 

@@ -8,6 +8,7 @@ const vm = require('vm');
 const ROOT = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(ROOT, 'tm-economy.js'), 'utf8');
 const mapSource = fs.readFileSync(path.join(ROOT, 'tm-map-system.js'), 'utf8');
+const gameLoopSource = fs.readFileSync(path.join(ROOT, 'tm-game-loop.js'), 'utf8');
 let assertions = 0;
 
 function check(condition, message) {
@@ -99,5 +100,114 @@ vm.runInContext(extractFunction(mapSource, 'updateMapColors'), mapContext, { fil
 mapContext.updateMapColors();
 check(mapContext.GM.mapData.regions[0].color === '#abcdef', 'map color refresh must update the runtime GM region');
 check(mapContext.P.map.regions[0].color === '#111111', 'map color refresh must not mutate or display the scenario template region');
+
+function runEconomyCase(P, GM) {
+  const localChanges = [];
+  const local = {
+    console: { log() {}, warn() {}, error() {} },
+    Math, Date, JSON, Object, Array, Number, String, Boolean,
+    parseInt, parseFloat, isFinite,
+    finiteNumberOr(value, fallback) { return typeof value === 'number' && Number.isFinite(value) ? value : fallback; },
+    clamp(value, min, max) { return Math.max(min, Math.min(max, value)); },
+    recordChange() { localChanges.push(Array.from(arguments)); },
+    addEB() {},
+    P,
+    GM
+  };
+  local.getLiveMapData = () => local.GM.mapData || local.GM.map || null;
+  local.window = local;
+  local.global = local;
+  local.globalThis = local;
+  vm.createContext(local);
+  vm.runInContext(source, local, { filename: 'tm-economy.js' });
+  return { local, localChanges };
+}
+
+const zeroTax = runEconomyCase(
+  { economyConfig: { baseIncome: 1, redistributionRate: 0, dualTreasury: true, privateIncomeRatio: 0 } },
+  {
+    classes: [], eraState: { centralControl: 0.5, economicProsperity: 1, socialStability: 1 },
+    stateTreasury: 0, privateTreasury: 0,
+    mapData: { regions: [{ id: 'zero-tax', name: '免税州', owner: 'player' }] },
+    provinceStats: { 旧省: { taxRevenue: 1000 } }
+  }
+);
+zeroTax.local.updateEconomy(1);
+check(zeroTax.local.GM.stateTreasury === 0, 'a legitimate zero runtime-map tax must not activate provinceStats fallback income');
+check(zeroTax.localChanges.every((row) => row[1] !== '旧省'), 'province fallback ledger must stay untouched when runtime regions exist');
+
+const ownedOnly = runEconomyCase(
+  {
+    playerInfo: { factionName: '玩家国' },
+    factions: [{ id: 'fac-player', name: '玩家国' }, { id: 'fac-enemy', name: '敌国' }],
+    economyConfig: { baseIncome: 100, redistributionRate: 0 }
+  },
+  {
+    classes: [], facs: [{ id: 'fac-player', name: '玩家国', isPlayer: true }, { id: 'fac-enemy', name: '敌国' }],
+    eraState: { centralControl: 0.5, economicProsperity: 1, socialStability: 1 },
+    mapData: { regions: [
+      { id: 'ours', name: '我方州', owner: 'fac-player' },
+      { id: 'theirs', name: '敌方州', owner: 'fac-enemy' }
+    ] }
+  }
+);
+ownedOnly.local.updateEconomy(1);
+const ownedTributes = ownedOnly.localChanges.filter((row) => row[0] === 'economy' && row[2] === 'tribute');
+check(ownedTributes.length === 1 && ownedTributes[0][1] === '我方州', 'central revenue must exclude explicitly enemy-controlled runtime regions');
+
+[-0.1, 1.2].forEach((invalidRatio) => {
+  const invalid = runEconomyCase(
+    { economyConfig: { redistributionRate: invalidRatio } },
+    { classes: [], eraState: { centralControl: 0.5, economicProsperity: 1, socialStability: 1 }, mapData: { regions: [] } }
+  );
+  let rejected = false;
+  try { invalid.local.updateEconomy(1); } catch (error) { rejected = error && error.name === 'RangeError' && /between 0 and 1/.test(String(error)); }
+  check(rejected, 'out-of-range redistribution ratio ' + invalidRatio + ' must be rejected before settlement');
+});
+
+const zeroBankruptcy = runEconomyCase(
+  { economyConfig: { baseIncome: 1, redistributionRate: 0, dualTreasury: true, privateIncomeRatio: 0, bankruptcyThreshold: 0 } },
+  {
+    classes: [], eraState: { centralControl: 0.5, economicProsperity: 1, socialStability: 1 },
+    stateTreasury: -1, privateTreasury: 0, mapData: { regions: [{ id: 'zero', name: '零税州' }] }
+  }
+);
+zeroBankruptcy.local.updateEconomy(1);
+check(zeroBankruptcy.local.GM._bankruptcyTurns === 1, 'bankruptcyThreshold=0 must remain a valid configured threshold');
+
+const validationContext = {
+  P: { characters: [], factions: [], variables: [], relations: [], time: { year: 1 } },
+  clamp(value, min, max) { return Math.max(min, Math.min(max, value)); },
+  Number, Array, Object
+};
+vm.createContext(validationContext);
+vm.runInContext(extractFunction(gameLoopSource, 'validateScenario'), validationContext, { filename: 'validateScenario.js' });
+const invalidScenario = validationContext.validateScenario({
+  name: '非法财政配置',
+  economyConfig: { redistributionRate: -0.1, privateIncomeRatio: 1.2 }
+});
+check(invalidScenario.valid === false && invalidScenario.errors.length === 2, 'scenario validation must reject invalid fiscal ratios at import/start boundary');
+
+const migrationContext = {
+  console: { log() {}, warn() {}, error() {} },
+  Math, Date, JSON, Object, Array, Number, String, Boolean,
+  P: { map: { regions: [{ id: 'template', name: '模板州' }] } },
+  GM: {
+    mapData: { regions: [], cities: {}, polygons: {}, edges: {}, items: [], roads: [] },
+    map: { regions: [{ id: 'legacy', name: '旧档州', owner: '旧主' }], items: [] },
+    facs: []
+  },
+  _dbg() {}
+};
+migrationContext.window = migrationContext;
+migrationContext.globalThis = migrationContext;
+vm.createContext(migrationContext);
+vm.runInContext(mapSource, migrationContext, { filename: 'tm-map-system.js' });
+const migratedMap = migrationContext.getLiveMapData();
+check(migratedMap === migrationContext.GM.mapData && migratedMap.regions[0].id === 'legacy', 'empty GM.mapData scaffold must not hide populated legacy GM.map');
+check(migratedMap.mapSchemaVersion === 1, 'legacy runtime map migration must stamp a schema version');
+check(migratedMap !== migrationContext.GM.map, 'legacy map migration must detach the authoritative runtime object');
+migratedMap.regions[0].name = '运行州';
+check(migrationContext.GM.map.regions[0].name === '旧档州', 'legacy map source must remain isolated after migration');
 
 console.log('[smoke-runtime-map-economy] PASS assertions=' + assertions);

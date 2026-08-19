@@ -453,13 +453,13 @@
     var declaredDynamic = /^corruption\.byDept\.(central|provincial|county|military|palace|technical)$/.test(path);
     if (!r.parent || (!r.exists && !declaredDynamic)) return { ok: false, path: path, reason: 'path not declared in state schema' };
     var old = r.value;
-    function valueType(input) {
-      if (Array.isArray(input)) return 'array';
-      if (input === null) return 'null';
-      return typeof input;
-    }
-    if (r.exists && valueType(old) !== valueType(value)) {
+    if (r.exists && _jsonSchemaType(old) !== _jsonSchemaType(value)) {
       return { ok: false, path: path, reason: 'set value type does not match existing schema' };
+    }
+    // 通用 set 只允许叶子标量。整体替换人物、战争、财政配置等对象/数组，会绕过
+    // 领域 sink 的身份、存亡和不变量校验；复杂结构必须走语义操作或受形状约束的 merge/push。
+    if (r.exists && (_jsonSchemaType(old) === 'object' || _jsonSchemaType(old) === 'array')) {
+      return { ok: false, path: path, reason: 'structured set requires a domain operation or schema-aware merge' };
     }
     if (/^chars\.[^.]+\.loyalty$/.test(String(path)) && typeof global.setCharacterLoyalty === 'function') {
       var loySet = global.setCharacterLoyalty(r.parent, value, reason, {
@@ -508,6 +508,12 @@
     // vm/iframe 跨 realm 的 Object.prototype 引用不同；仍只接受构造器名为 Object 的普通 JSON 对象。
     return proto === null || !!(proto && Object.prototype.hasOwnProperty.call(proto, 'constructor') &&
       typeof proto.constructor === 'function' && proto.constructor.name === 'Object');
+  }
+
+  function _jsonSchemaType(value) {
+    if (Array.isArray(value)) return 'array';
+    if (value === null) return 'null';
+    return typeof value;
   }
 
   function _validateMergePatch(basePath, patch, depth) {
@@ -563,6 +569,15 @@
       if (_isPlainObject(patch[key])) {
         var nested = _validateMergeShape(target[key], patch[key], childPath);
         if (!nested.ok) return nested;
+      } else {
+        var targetType = _jsonSchemaType(target[key]);
+        var patchType = _jsonSchemaType(patch[key]);
+        if (targetType !== patchType) {
+          return { ok: false, reason: 'merge value type does not match existing schema: ' + childPath };
+        }
+        if (targetType === 'array' || targetType === 'object') {
+          return { ok: false, reason: 'merge cannot replace structured field without a domain operation: ' + childPath };
+        }
       }
     }
     return { ok: true };

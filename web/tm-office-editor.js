@@ -596,7 +596,7 @@ function _aiGenOptionsHTML(containerId, showMode) {
   return modeHtml +
     '<details style="margin-bottom:0.4rem;"><summary style="font-size:0.82rem;color:var(--txt-d);cursor:pointer;">\u2699\ufe0f \u9ad8\u7ea7\u9009\u9879</summary>'+
     '<div style="padding:0.4rem 0;">'+
-    '<div style="margin-bottom:0.3rem;"><label style="font-size:0.8rem;color:var(--txt-d);">\u5399\u4e8b\u98ce\u683c\u8986\u76d6 <span style="font-size:0.75rem;">(\u7a7a\u5219\u7528\u5168\u5c40\u8bbe\u7f6e: '+((typeof P!=='undefined'&&P.conf&&P.conf.style)||'\u6587\u5b66\u5316')+')</span></label>'+
+    '<div style="margin-bottom:0.3rem;"><label style="font-size:0.8rem;color:var(--txt-d);">\u5399\u4e8b\u98ce\u683c\u8986\u76d6 <span style="font-size:0.75rem;">(\u7a7a\u5219\u7528\u5168\u5c40\u8bbe\u7f6e: '+_officeEditorEsc((typeof P!=='undefined'&&P.conf&&P.conf.style)||'\u6587\u5b66\u5316')+')</span></label>'+
     '<input id="'+containerId+'-style" placeholder="\u5982\uff1a\u5c0f\u8bf4\u98ce\u683c/\u8bf4\u4e66\u4eba\u98ce\u683c/\u6b63\u53f2\u98ce\u683c" style="width:100%;font-size:0.82rem;"></div>'+
     '<div><label style="font-size:0.8rem;color:var(--txt-d);">\u53c2\u8003\u8d44\u6599\u8986\u76d6 <span style="font-size:0.75rem;">(\u7a7a\u5219\u7528\u5168\u5c40\u53c2\u8003\u6587\u672c)</span></label>'+
     '<textarea id="'+containerId+'-ref" rows="2" placeholder="\u53ef\u8d34\u5165\u53c2\u8003\u6587\u672c\u3001\u53f2\u4e66\u6bb5\u843d\u7b49\u2026" style="width:100%;font-size:0.82rem;"></textarea></div>'+
@@ -896,7 +896,7 @@ window.aiGenFullScenario = function() {
     '<select id="fg-words"><option value="brief">\u7b80\u7565\uff08\u5feb\u901f\uff09</option><option value="normal" selected>\u6807\u51c6\uff08\u63a8\u8350\uff09</option><option value="detailed">\u8be6\u7ec6\uff08\u5185\u5bb9\u4e30\u5bcc\uff09</option><option value="full">\u5b8c\u6574\uff08\u6700\u8be6\u5c3d\uff09</option></select></div></div>'+
     '<details style="margin:0.4rem 0;"><summary style="font-size:0.82rem;color:var(--txt-d);cursor:pointer;">\u2699\ufe0f \u9ad8\u7ea7\u9009\u9879</summary>'+
     '<div style="padding:0.4rem 0;">'+
-    '<div style="margin-bottom:0.3rem;"><label style="font-size:0.8rem;color:var(--txt-d);">\u5399\u4e8b\u98ce\u683c\u8986\u76d6 <span style="font-size:0.75rem;">(\u7a7a\u5219\u7528\u5168\u5c40: ' + globalStyle + ')</span></label>'+
+    '<div style="margin-bottom:0.3rem;"><label style="font-size:0.8rem;color:var(--txt-d);">\u5399\u4e8b\u98ce\u683c\u8986\u76d6 <span style="font-size:0.75rem;">(\u7a7a\u5219\u7528\u5168\u5c40: ' + _officeEditorEsc(globalStyle) + ')</span></label>'+
     '<input id="fg-style" placeholder="\u5982\uff1a\u5c0f\u8bf4\u98ce\u683c/\u8bf4\u4e66\u4eba\u98ce\u683c/\u6b63\u53f2\u98ce\u683c" style="width:100%;font-size:0.82rem;"></div>'+
     '<div><label style="font-size:0.8rem;color:var(--txt-d);">\u53c2\u8003\u8d44\u6599\u8986\u76d6 <span style="font-size:0.75rem;">(\u7a7a\u5219\u7528\u5168\u5c40\u53c2\u8003\u6587\u672c)</span></label>'+
     '<textarea id="fg-ref" rows="2" placeholder="\u53ef\u8d34\u5165\u53c2\u8003\u6587\u672c\u3001\u53f2\u4e66\u6bb5\u843d\u7b49\u2026" style="width:100%;font-size:0.82rem;"></textarea></div>'+
@@ -935,6 +935,12 @@ window.execFullGen = async function() {
 // Phase 6: editTech / editFac / editRul / editEvt
 // + render overrides with edit buttons
 // ========================================================
+function _officeEditorEsc(value) {
+  if (typeof escHtml === 'function') return escHtml(String(value == null ? '' : value));
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 
 // ---- editTech(i) ----
 function editTech(i) {
@@ -942,11 +948,11 @@ function editTech(i) {
   if (!t) return;
   openGenericModal(
     '\u7F16\u8F91\u79D1\u6280',
-    '<div class="form-group"><label>\u540D\u79F0</label><input id="etk-name" value="' + (t.name||'') + '"></div>'+
-    '<div class="form-group"><label>\u63CF\u8FF0</label><textarea id="etk-desc" rows="2">' + (t.desc||'') + '</textarea></div>'+
+    '<div class="form-group"><label>\u540D\u79F0</label><input id="etk-name" value="' + _officeEditorEsc(t.name||'') + '"></div>'+
+    '<div class="form-group"><label>\u63CF\u8FF0</label><textarea id="etk-desc" rows="2">' + _officeEditorEsc(t.desc||'') + '</textarea></div>'+
     '<div class="form-group"><label>\u65F6\u4EE3</label><select id="etk-era"><option value="\u521D\u7EA7"' + (t.era==='\u521D\u7EA7'?' selected':'') + '>\u521D\u7EA7</option><option value="\u4E2D\u7EA7"' + (t.era==='\u4E2D\u7EA7'?' selected':'') + '>\u4E2D\u7EA7</option><option value="\u9AD8\u7EA7"' + (t.era==='\u9AD8\u7EA7'?' selected':'') + '>\u9AD8\u7EA7</option></select></div>'+
-    '<div class="form-group"><label>\u524D\u7F6E\u6761\u4EF6(\u9017\u53F7\u5206\u9694)</label><input id="etk-prereqs" value="' + (t.prereqs||[]).join(',') + '"></div>'+
-    '<div class="form-group"><label>\u6548\u679C(JSON)</label><input id="etk-effect" value="' + JSON.stringify(t.effect||{}) + '"></div>',
+    '<div class="form-group"><label>\u524D\u7F6E\u6761\u4EF6(\u9017\u53F7\u5206\u9694)</label><input id="etk-prereqs" value="' + _officeEditorEsc((t.prereqs||[]).join(',')) + '"></div>'+
+    '<div class="form-group"><label>\u6548\u679C(JSON)</label><input id="etk-effect" value="' + _officeEditorEsc(JSON.stringify(t.effect||{})) + '"></div>',
     function() {
       var tk = P.techTree[i];
       if (!tk) return;
@@ -973,10 +979,10 @@ function renderTechTab(em, sid) {
     list.map(function(t) {
       var i = P.techTree.indexOf(t);
       return '<div class="cd"><div style="display:flex;justify-content:space-between;align-items:center;">'+
-        '<span><strong>' + t.name + '</strong> <span class="tg">' + (t.era||'') + '</span></span>'+
+        '<span><strong>' + _officeEditorEsc(t.name) + '</strong> <span class="tg">' + _officeEditorEsc(t.era||'') + '</span></span>'+
         '<span><button class="bt bsm" onclick="editTech(' + i + ')">\u7F16\u8F91</button>'+
         '<button class="bd bsm" onclick="P.techTree.splice(' + i + ',1);renderEdTab(\u0027t-tech\u0027);">\u2715</button></span></div>'+
-        (t.desc ? '<div style="font-size:0.82rem;color:var(--txt-d);margin-top:0.3rem;">' + t.desc + '</div>' : '') +
+        (t.desc ? '<div style="font-size:0.82rem;color:var(--txt-d);margin-top:0.3rem;">' + _officeEditorEsc(t.desc) + '</div>' : '') +
         '</div>';
     }).join('') || '<div style="color:var(--txt-d);font-size:0.85rem;">\u6682\u65E0</div>';
 }
@@ -987,12 +993,12 @@ function editFac(i) {
   if (!f) return;
   openGenericModal(
     '\u7F16\u8F91\u6D3E\u7CFB',
-    '<div class="form-group"><label>\u540D\u79F0</label><input id="efc-name" value="' + (f.name||'') + '"></div>'+
-    '<div class="form-group"><label>\u9886\u8896</label><input id="efc-leader" value="' + (f.leader||'') + '"></div>'+
-    '<div class="form-group"><label>\u63CF\u8FF0</label><textarea id="efc-desc" rows="2">' + (f.desc||'') + '</textarea></div>'+
-    '<div class="form-group"><label>\u610F\u8BC6\u5F62\u6001</label><input id="efc-ideology" value="' + (f.ideology||'') + '"></div>'+
-    '<div class="form-group"><label>\u5730\u76D8</label><input id="efc-territory" value="' + (f.territory||'') + '"></div>'+
-    '<div class="form-group"><label>\u5B9E\u529B (0-100)</label><input type="range" id="efc-strength" min="0" max="100" value="' + (f.strength!=null?f.strength:50) + '" oninput="document.getElementById(\u0027efc-strength-v\u0027).textContent=this.value"> <span id="efc-strength-v">' + (f.strength!=null?f.strength:50) + '</span></div>',
+    '<div class="form-group"><label>\u540D\u79F0</label><input id="efc-name" value="' + _officeEditorEsc(f.name||'') + '"></div>'+
+    '<div class="form-group"><label>\u9886\u8896</label><input id="efc-leader" value="' + _officeEditorEsc(f.leader||'') + '"></div>'+
+    '<div class="form-group"><label>\u63CF\u8FF0</label><textarea id="efc-desc" rows="2">' + _officeEditorEsc(f.desc||'') + '</textarea></div>'+
+    '<div class="form-group"><label>\u610F\u8BC6\u5F62\u6001</label><input id="efc-ideology" value="' + _officeEditorEsc(f.ideology||'') + '"></div>'+
+    '<div class="form-group"><label>\u5730\u76D8</label><input id="efc-territory" value="' + _officeEditorEsc(f.territory||'') + '"></div>'+
+    '<div class="form-group"><label>\u5B9E\u529B (0-100)</label><input type="range" id="efc-strength" min="0" max="100" value="' + _officeEditorEsc(f.strength!=null?f.strength:50) + '" oninput="document.getElementById(\u0027efc-strength-v\u0027).textContent=this.value"> <span id="efc-strength-v">' + _officeEditorEsc(f.strength!=null?f.strength:50) + '</span></div>',
     function() {
       var fc = P.factions[i];
       if (!fc) return;
@@ -1018,10 +1024,10 @@ function renderFacTab(em, sid) {
     list.map(function(f) {
       var i = P.factions.indexOf(f);
       return '<div class="cd"><div style="display:flex;justify-content:space-between;align-items:center;">'+
-        '<strong>' + f.name + '</strong>'+
+        '<strong>' + _officeEditorEsc(f.name) + '</strong>'+
         '<span><button class="bt bsm" onclick="editFac(' + i + ')">\u7F16\u8F91</button>'+
         '<button class="bd bsm" onclick="P.factions.splice(' + i + ',1);renderEdTab(\u0027t-fac\u0027);">\u2715</button></span></div>'+
-        (f.desc ? '<div style="font-size:0.82rem;color:var(--txt-d);margin-top:0.2rem;">' + f.desc + '</div>' : '') +
+        (f.desc ? '<div style="font-size:0.82rem;color:var(--txt-d);margin-top:0.2rem;">' + _officeEditorEsc(f.desc) + '</div>' : '') +
         '</div>';
     }).join('') || '<div style="color:var(--txt-d);font-size:0.85rem;">\u6682\u65E0</div>';
 }
@@ -1032,14 +1038,14 @@ function editRul(i) {
   if (!r) return;
   openGenericModal(
     '\u7F16\u8F91\u89C4\u5219',
-    '<div class="form-group"><label>\u540D\u79F0</label><input id="erl-name" value="' + (r.name||'') + '"></div>'+
-    '<div class="form-group"><label>\u89E6\u53D1\u53D8\u91CF</label><input id="erl-var" value="' + (r.trigger&&r.trigger.variable||'') + '"></div>'+
+    '<div class="form-group"><label>\u540D\u79F0</label><input id="erl-name" value="' + _officeEditorEsc(r.name||'') + '"></div>'+
+    '<div class="form-group"><label>\u89E6\u53D1\u53D8\u91CF</label><input id="erl-var" value="' + _officeEditorEsc(r.trigger&&r.trigger.variable||'') + '"></div>'+
     '<div class="form-group"><label>\u89E6\u53D1\u6761\u4EF6</label>'+
     '<select id="erl-op"><option value="&lt;"' + ((r.trigger&&r.trigger.op)==='<'?' selected':'') + '>&lt;</option>'+
     '<option value="&gt;"' + ((r.trigger&&r.trigger.op)==='>'?' selected':'') + '>&gt;</option>'+
     '<option value="=="' + ((r.trigger&&r.trigger.op)==='=='?' selected':'') + '>&gt;=</option></select>'+
-    ' <input id="erl-val" type="number" value="' + (r.trigger&&r.trigger.value!=null?r.trigger.value:20) + '" style="width:60px;"></div>'+
-    '<div class="form-group"><label>\u53D9\u4E8B\u6548\u679C</label><textarea id="erl-narrative" rows="2">' + (r.effect&&r.effect.narrative||'') + '</textarea></div>'+
+    ' <input id="erl-val" type="number" value="' + _officeEditorEsc(r.trigger&&r.trigger.value!=null?r.trigger.value:20) + '" style="width:60px;"></div>'+
+    '<div class="form-group"><label>\u53D9\u4E8B\u6548\u679C</label><textarea id="erl-narrative" rows="2">' + _officeEditorEsc(r.effect&&r.effect.narrative||'') + '</textarea></div>'+
     '<div class="form-group"><label>\u542F\u7528</label><input type="checkbox" id="erl-enabled"' + (r.enabled?' checked':'') + '></div>',
     function() {
       var rl = P.rules[i];
@@ -1066,10 +1072,10 @@ function renderRulTab(em, sid) {
     list.map(function(r) {
       var i = P.rules.indexOf(r);
       return '<div class="cd"><div style="display:flex;justify-content:space-between;align-items:center;">'+
-        '<strong>' + r.name + '</strong>'+
+        '<strong>' + _officeEditorEsc(r.name) + '</strong>'+
         '<span><button class="bt bsm" onclick="editRul(' + i + ')">\u7F16\u8F91</button>'+
         '<button class="bd bsm" onclick="P.rules.splice(' + i + ',1);renderEdTab(\u0027t-rul\u0027);">\u2715</button></span></div>'+
-        '<div style="font-size:0.78rem;color:var(--txt-d);">' + (r.trigger&&r.trigger.variable?r.trigger.variable+' '+r.trigger.op+' '+r.trigger.value:'') + '</div>'+
+        '<div style="font-size:0.78rem;color:var(--txt-d);">' + _officeEditorEsc(r.trigger&&r.trigger.variable?r.trigger.variable+' '+r.trigger.op+' '+r.trigger.value:'') + '</div>'+
         '</div>';
     }).join('') || '<div style="color:var(--txt-d);font-size:0.85rem;">\u6682\u65E0</div>';
 }
@@ -1080,12 +1086,12 @@ function editEvt(i) {
   if (!ev) return;
   openGenericModal(
     '\u7F16\u8F91\u4E8B\u4EF6',
-    '<div class="form-group"><label>\u540D\u79F0</label><input id="evt-name" value="' + (ev.name||'') + '"></div>'+
-    '<div class="form-group"><label>\u89E6\u53D1\u56DE\u5408</label><input type="number" id="evt-turn" value="' + (ev.triggerTurn||0) + '"></div>'+
+    '<div class="form-group"><label>\u540D\u79F0</label><input id="evt-name" value="' + _officeEditorEsc(ev.name||'') + '"></div>'+
+    '<div class="form-group"><label>\u89E6\u53D1\u56DE\u5408</label><input type="number" id="evt-turn" value="' + _officeEditorEsc(ev.triggerTurn||0) + '"></div>'+
     '<div class="form-group"><label>\u7C7B\u578B</label>'+
     '<select id="evt-type"><option value="scripted"' + (ev.type==='scripted'?' selected':'') + '>scripted</option>'+
     '<option value="random"' + (ev.type==='random'?' selected':'') + '>random</option></select></div>'+
-    '<div class="form-group"><label>\u53D9\u4E8B</label><textarea id="evt-narrative" rows="3">' + (ev.narrative||'') + '</textarea></div>'+
+    '<div class="form-group"><label>\u53D9\u4E8B</label><textarea id="evt-narrative" rows="3">' + _officeEditorEsc(ev.narrative||'') + '</textarea></div>'+
     '<div class="form-group"><label><input type="checkbox" id="evt-onetime"' + (ev.oneTime?' checked':'') + '> \u4EC5\u89E6\u53D1\u4E00\u6B21</label></div>',
     function() {
       var ev2 = P.events[i];
@@ -1109,10 +1115,10 @@ function renderEvtTab(em, sid) {
     list.map(function(ev) {
       var i = P.events.indexOf(ev);
       return '<div class="cd"><div style="display:flex;justify-content:space-between;align-items:center;">'+
-        '<strong>' + ev.name + '</strong>'+
+        '<strong>' + _officeEditorEsc(ev.name) + '</strong>'+
         '<span><button class="bt bsm" onclick="editEvt(' + i + ')">\u7F16\u8F91</button>'+
         '<button class="bd bsm" onclick="P.events.splice(' + i + ',1);renderEdTab(\u0027t-evt\u0027);">\u2715</button></span></div>'+
-        '<div style="font-size:0.78rem;color:var(--txt-d);">\u7B2C ' + (ev.triggerTurn||0) + ' \u56DE\u5408 | ' + (ev.type||'scripted') + (ev.oneTime?' | \u5355\u6B21':'') + '</div>'+
+        '<div style="font-size:0.78rem;color:var(--txt-d);">\u7B2C ' + _officeEditorEsc(ev.triggerTurn||0) + ' \u56DE\u5408 | ' + _officeEditorEsc(ev.type||'scripted') + (ev.oneTime?' | \u5355\u6B21':'') + '</div>'+
         '</div>';
     }).join('') || '<div style="color:var(--txt-d);font-size:0.85rem;">\u6682\u65E0</div>';
 }
@@ -1136,7 +1142,7 @@ function renderEvtTab(em, sid) {
       '<div style="font-size:0.8rem;color:var(--txt-d);margin-bottom:0.5rem;">全局参考资料，供 AI 生成和史实模式使用。</div>'+
       '<div class="fd full">'+
       '<label>参考资料（可粘贴史书段落、论文等）</label>'+
-      '<textarea id="wld-ref-text" rows="6" style="width:100%;" placeholder="在此粘贴参考文本…">' + (refVal.replace(/</g,'&lt;').replace(/>/g,'&gt;')) + '</textarea>'+
+      '<textarea id="wld-ref-text" rows="6" style="width:100%;" placeholder="在此粘贴参考文本…">' + _officeEditorEsc(refVal) + '</textarea>'+
       '</div>'+
       '<div style="display:flex;gap:0.4rem;margin-top:0.4rem;">'+
       '<button class="bt bp" onclick="_wldSaveRef()">✅ 保存参考资料</button>'+
@@ -1190,11 +1196,11 @@ function renderCivicTab(em) {
     if (c.sid !== sid) return '';
     return '<div class="card" style="margin-bottom:6px;">'+
       '<div style="display:flex;justify-content:space-between;align-items:center;">'+
-      '<strong>' + (c.name || '') + '</strong>'+
+      '<strong>' + _officeEditorEsc(c.name || '') + '</strong>'+
       '<span><button class="bt bsm" onclick="editCivic(' + i + ')">' + '\u7F16\u8F91</button>'+
       '<button class="bd bsm" onclick="P.civicTree.splice(' + i + ',1);renderEdTab(\'t-civic\');">\u2715</button></span>'+
       '</div>'+
-      '<div style="font-size:12px;color:var(--txt-d);margin-top:2px;">' + (c.desc || '') + '</div>'+
+      '<div style="font-size:12px;color:var(--txt-d);margin-top:2px;">' + _officeEditorEsc(c.desc || '') + '</div>'+
       '</div>';
   }).join('');
   em.innerHTML = '<h4 style="color:var(--gold);">\u5E02\u653F\u6811</h4>'+
@@ -1641,11 +1647,11 @@ function renderOfficeTab(em) {
       }
       nodesDivs +=
         '<div style="font-size:12px;color:#9ac870;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
-        + (nd.name || '?') + _svgSuccLabel + '</div>';
+         + _officeEditorEsc(nd.name || '?') + _svgSuccLabel + '</div>';
       if (nd.rank || nd.holder) {
         nodesDivs += '<div style="font-size:11px;color:#5a7a42;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">';
-        if (nd.rank)   nodesDivs += nd.rank;
-        if (nd.holder) nodesDivs += (nd.rank ? ' \u2013 ' : '') + nd.holder;
+        if (nd.rank)   nodesDivs += _officeEditorEsc(nd.rank);
+        if (nd.holder) nodesDivs += (nd.rank ? ' \u2013 ' : '') + _officeEditorEsc(nd.holder);
         nodesDivs += '</div>';
       }
       nodesDivs += '</div>';
@@ -1698,7 +1704,7 @@ function renderOfficeTab(em) {
         + 'font-size:12px;color:' + nameClr + ';flex-shrink:0">' + icon + '</div>';
       nodesDivs +=
         '<span style="flex:1;font-size:12px;font-weight:bold;color:' + nameClr + ';'
-        + 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (nd.name || '?') + '</span>';
+        + 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _officeEditorEsc(nd.name || '?') + '</span>';
       nodesDivs += colBtn;
       if (!isEmperor) {
         nodesDivs +=
@@ -1721,7 +1727,7 @@ function renderOfficeTab(em) {
       nodesDivs +=
         '<div style="display:flex;align-items:center;gap:4px;padding:2px 5px;font-size:10px;color:#6a5020">';
       nodesDivs += (descText4
-        ? '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + descText4 + '</span>'
+        ? '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _officeEditorEsc(descText4) + '</span>'
         : '<span style="flex:1"></span>');
       if (statsText4)
         nodesDivs += '<span>' + statsText4 + '</span>';
@@ -1835,19 +1841,19 @@ function _renderOfficeDept(dept, path, depth) {
       fns.map(function(fn, fi) {
         return '<span style="background:var(--bg-4,#2a2a2a);color:var(--txt-d);font-size:12px;'
           + 'padding:1px 6px;border-radius:10px;cursor:pointer" '
-          + 'onclick="_officeFnDel(' + pathStr + ',' + fi + ')" title="点击删除">× ' + fn + '</span>';
+          + 'onclick="_officeFnDel(' + pathStr + ',' + fi + ')" title="点击删除">× ' + _officeEditorEsc(fn) + '</span>';
       }).join('') + '</div>'
     : '';
   var posHTML = ps.map(function(p, pi) {
     return '<div style="display:flex;align-items:center;gap:6px;padding:3px 8px;border-top:1px solid var(--bg-4,#333)">'
       + '<span style="flex:1;font-size:12px;color:var(--txt-s)">'
-      + (p.name||'')
-      + (p.rank ? ' <span style="color:var(--txt-d);font-size:12px">('+p.rank+')</span>' : '')
+      + _officeEditorEsc(p.name||'')
+      + (p.rank ? ' <span style="color:var(--txt-d);font-size:12px">('+_officeEditorEsc(p.rank)+')</span>' : '')
       + (function(){var _sl={appointment:'\u6D41',hereditary:'\u88AD',examination:'\u79D1',military:'\u519B',recommendation:'\u8350'};return p.succession&&_sl[p.succession]?' <span style="font-size:10px;background:var(--bg-4);padding:0 3px;border-radius:2px;color:var(--txt-d)">'+_sl[p.succession]+'</span>':'';})()
-      + (p.holder ? ' <span style="color:var(--gold);font-size:12px">&mdash;'+p.holder+'</span>' : '')
+      + (p.holder ? ' <span style="color:var(--gold);font-size:12px">&mdash;'+_officeEditorEsc(p.holder)+'</span>' : '')
       + '</span>'
       + '<span style="font-size:12px;color:var(--txt-d);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
-      + (p.desc||'') + '</span>'
+      + _officeEditorEsc(p.desc||'') + '</span>'
       + '<button class="bd bsm" onclick="_officeEditPos(' + pathStr + ',' + pi + ')">✎</button>'
       + '<button class="bd bsm" onclick="_officeDelPos(' + pathStr + ',' + pi + ')">✕</button>'
       + '</div>';
@@ -1857,9 +1863,9 @@ function _renderOfficeDept(dept, path, depth) {
   }).join('');
   return '<div style="' + borderStyle + 'overflow:hidden">'
     + '<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:' + bgColor + '">'
-    + '<strong style="flex:0 0 auto;color:var(--gold)">' + (depth===0?'▶':'▸') + ' ' + (dept.name||'') + '</strong>'
+    + '<strong style="flex:0 0 auto;color:var(--gold)">' + (depth===0?'▶':'▸') + ' ' + _officeEditorEsc(dept.name||'') + '</strong>'
     + (dept.desc
-        ? '<span style="font-size:12px;color:var(--txt-d);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + dept.desc + '</span>'
+        ? '<span style="font-size:12px;color:var(--txt-d);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _officeEditorEsc(dept.desc) + '</span>'
         : '<span style="flex:1"></span>')
     + '<button class="bt bsm" onclick="_officeEditDept(' + pathStr + ')">✎ 编辑</button>'
     + '<button class="bt bsm" onclick="_officeAddFn(' + pathStr + ')">＋ 职能</button>'
@@ -1888,10 +1894,10 @@ function _officeEditDept(path) {
   if (!dept) return;
   var fns = dept.functions || [];
   openGenericModal('编辑部门',
-    '<div class="form-group"><label>部门名</label><input id="gmf-name" value="' + (dept.name||'') + '"></div>'+
-    '<div class="form-group"><label>简介</label><input id="gmf-desc" value="' + (dept.desc||'') + '"></div>'+
+    '<div class="form-group"><label>部门名</label><input id="gmf-name" value="' + _officeEditorEsc(dept.name||'') + '"></div>'+
+    '<div class="form-group"><label>简介</label><input id="gmf-desc" value="' + _officeEditorEsc(dept.desc||'') + '"></div>'+
     '<div class="form-group"><label>现有职能（共 ' + fns.length + ' 项，在部门卡头点『＋职能』添加）</label>'+
-    '<div style="font-size:12px;color:var(--txt-d)">' + (fns.length ? fns.join('、') : '暂无') + '</div></div>',
+    '<div style="font-size:12px;color:var(--txt-d)">' + _officeEditorEsc(fns.length ? fns.join('、') : '暂无') + '</div></div>',
     function() {
       dept.name = gv('gmf-name') || dept.name;
       dept.desc = gv('gmf-desc');
@@ -1958,10 +1964,10 @@ function _officeEditPos(path, pi) {
   if (!dept || !dept.positions[pi]) return;
   var p = dept.positions[pi];
   openGenericModal('编辑官职',
-    '<div class="form-group"><label>官职名</label><input id="gmf-name" value="' + (p.name||'') + '"></div>'+
-    '<div class="form-group"><label>任职者</label><input id="gmf-holder" value="' + (p.holder||'') + '"></div>'+
-    '<div class="form-group"><label>品级</label><input id="gmf-rank" value="' + (p.rank||'') + '"></div>'+
-    '<div class="form-group"><label>职能描述</label><textarea id="gmf-desc">' + (p.desc||'') + '</textarea></div>',
+    '<div class="form-group"><label>官职名</label><input id="gmf-name" value="' + _officeEditorEsc(p.name||'') + '"></div>'+
+    '<div class="form-group"><label>任职者</label><input id="gmf-holder" value="' + _officeEditorEsc(p.holder||'') + '"></div>'+
+    '<div class="form-group"><label>品级</label><input id="gmf-rank" value="' + _officeEditorEsc(p.rank||'') + '"></div>'+
+    '<div class="form-group"><label>职能描述</label><textarea id="gmf-desc">' + _officeEditorEsc(p.desc||'') + '</textarea></div>',
     function() {
       p.name = gv('gmf-name') || p.name;
       p.holder = gv('gmf-holder');

@@ -21,7 +21,7 @@ function makeFakeIndexedDB(legacySaves) {
     stores.set('projects', new Map());
   }
   const oldVersion = Array.isArray(legacySaves) ? 2 : 0;
-  const counters = { openedVersion: 0, getAll: Object.create(null), get: Object.create(null) };
+  const counters = { openedVersion: 0, openCalls: 0, closed: 0, getAll: Object.create(null), get: Object.create(null) };
 
   function clone(value) {
     return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -73,6 +73,7 @@ function makeFakeIndexedDB(legacySaves) {
 
   const db = {
     objectStoreNames: { contains(name) { return stores.has(name); } },
+    close() { counters.closed += 1; },
     createObjectStore(name) {
       stores.set(name, new Map());
       return objectStore(name);
@@ -92,8 +93,10 @@ function makeFakeIndexedDB(legacySaves) {
 
   return {
     stores,
+    db,
     counters,
     open(name, version) {
+      counters.openCalls += 1;
       counters.openedVersion = version;
       const request = {};
       setTimeout(() => {
@@ -166,6 +169,14 @@ function makeLocalStorage() {
   await context.TM_SaveDB.delete('slot_42');
   check(!indexedDB.stores.get('saves').has('slot_42') && !indexedDB.stores.get('saveMetadata').has('slot_42'),
     'delete must atomically remove payload and metadata records');
+
+  check(typeof indexedDB.db.onversionchange === 'function', 'opened connection must register an onversionchange release hook');
+  indexedDB.db.onversionchange();
+  check(indexedDB.counters.closed === 1 && context.TM_SaveDB.isAvailable() === false,
+    'version change closes the stale connection and clears availability');
+  await context.TM_SaveDB.open();
+  check(indexedDB.counters.openCalls === 2 && context.TM_SaveDB.isAvailable() === true,
+    'next operation can establish a fresh connection after version change');
 
   const legacyIndexedDB = makeFakeIndexedDB([
     { id: 'legacy-a', name: '旧档甲', type: 'manual', timestamp: 10, turn: 3, gameState: '{"GM":{"turn":3},"P":{}}' },

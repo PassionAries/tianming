@@ -93,9 +93,27 @@ async function _endTurn_publishStagedTurnData(ctx) {
   var marker = ctx && ctx.meta && ctx.meta.stagedTurnData;
   if (!marker) return true;
   if (!(window.tianming && typeof window.tianming.publishTurnData === 'function')) throw new Error('桌面回合分卷发布接口缺失');
+  var targetGM = GM;
+  var targetP = P;
+  var targetLoadGen = (typeof window !== 'undefined' && window._tmLoadGen) || 0;
+  function publishLeaseCurrent() {
+    return GM === targetGM && P === targetP &&
+      (((typeof window !== 'undefined' && window._tmLoadGen) || 0) === targetLoadGen) &&
+      String((GM && GM._campaignId) || '') === String(marker.campaignId || '');
+  }
   var result = await window.tianming.publishTurnData(marker);
   if (!(result && result.success === true)) throw new Error('回合分卷发布失败' + (result && result.error ? '：' + result.error : ''));
-  if (GM && GM._pendingTurnDataPublish && GM._pendingTurnDataPublish.transactionId === marker.transactionId) delete GM._pendingTurnDataPublish; // arch-ok: publish owns its committed marker cleanup
+  if (!publishLeaseCurrent()) throw new Error('回合分卷发布完成时世界身份已变化');
+  if (targetGM._pendingTurnDataPublish && targetGM._pendingTurnDataPublish.transactionId === marker.transactionId) delete targetGM._pendingTurnDataPublish; // arch-ok: publish owns its committed marker cleanup
+  if (!(typeof TM_SaveDB !== 'undefined' && typeof TM_SaveDB.clearPendingTurnDataPublishAtomic === 'function')) {
+    targetGM._pendingTurnDataPublish = deepClone(marker); // arch-ok: keep recoverable receipt when durable checkpoint is unavailable
+    throw new Error('回合分卷发布标记 checkpoint 接口缺失');
+  }
+  var cleared = await TM_SaveDB.clearPendingTurnDataPublishAtomic(['autosave', 'slot_0'], marker.transactionId, { writeGuard: publishLeaseCurrent });
+  if (cleared !== true) {
+    if (publishLeaseCurrent()) targetGM._pendingTurnDataPublish = deepClone(marker); // arch-ok: failed checkpoint remains idempotently recoverable
+    throw new Error('回合分卷已发布，但 canonical 标记清理失败');
+  }
   ctx.meta.stagedTurnData = null;
   return true;
 }
@@ -571,8 +589,23 @@ function _endTurn_finalizeRecords(shizhengji, zhengwen, playerStatus, playerInne
 
 // 玩家输入必须在世界与 canonical 存档都提交以后才清空；失败回滚无需重建 DOM 草稿。
 function _endTurn_clearCommittedInputs() {
-  ["edict-pol","edict-mil","edict-dip","edict-eco","edict-oth","xinglu","xinglu-pub","xinglu-prv"].forEach(function(id){var el=typeof _$ === 'function' ? _$(id) : null;if(el)el.value="";});
-  if (window.TMPhase8FormalBridge && typeof window.TMPhase8FormalBridge.clearEdictDrafts === 'function') window.TMPhase8FormalBridge.clearEdictDrafts();
+  var errors = [];
+  ["edict-pol","edict-mil","edict-dip","edict-eco","edict-oth","xinglu","xinglu-pub","xinglu-prv"].forEach(function(id){
+    try { var el=typeof _$ === 'function' ? _$(id) : null;if(el)el.value=""; }
+    catch (error) { errors.push(error); }
+  });
+  try {
+    if (window.TMPhase8FormalBridge && typeof window.TMPhase8FormalBridge.clearEdictDrafts === 'function') {
+      var result = window.TMPhase8FormalBridge.clearEdictDrafts();
+      if (result && result.ok === false) errors = errors.concat(result.errors || [new Error('正式诏令草稿持久层清理失败')]);
+    }
+  } catch (error) { errors.push(error); }
+  if (errors.length) {
+    try { if (window.TM && TM.errors && TM.errors.capture) TM.errors.capture(errors[0], 'endTurn] clear committed drafts'); } catch (_) {}
+    try { if (typeof toast === 'function') toast('本回合诏令已经生效；界面草稿清理不完整，已阻止其再次提交。'); } catch (_) {}
+    return false;
+  }
+  return true;
 }
 
 // 纯展示阶段：只在事务 commit 后调用。这里的异常可降级，不能反向回滚已提交世界。

@@ -189,12 +189,13 @@ var TM_SaveDB = (function() {
     };
   }
 
-  function _dropOldestAutoSave(writeGuard) {
+  function _dropOldestAutoSave(writeGuard, excludedIds) {
     if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
+    excludedIds = excludedIds || {};
     return _listSaveMetadata().then(function(records) {
       // 列表读取本身是异步的；失效请求不得为了一个已取消的写入删除仍可恢复的旧 autosave。
       if (!_writeGuardAllows(writeGuard)) return false;
-      var autos = (records || []).filter(function(r){ return r.type === 'auto'; })
+      var autos = (records || []).filter(function(r){ return r.type === 'auto' && !excludedIds[String(r.id)]; })
                                  .sort(function(a,b){ return (a.timestamp||0) - (b.timestamp||0); });
       if (autos.length === 0) return false; // 没 auto 可清
       var victim = autos[0];
@@ -257,7 +258,7 @@ var TM_SaveDB = (function() {
     });
   }
 
-  function _putSaveRecordsAtomic(records, writeGuard) {
+  function _putSaveRecordsAtomic(records, writeGuard, _retryCount) {
     records = Array.isArray(records) ? records : [];
     if (!records.length) return Promise.resolve(false);
     if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
@@ -281,11 +282,24 @@ var TM_SaveDB = (function() {
         localStorage.removeItem(LOCAL_SAVE_BATCH_JOURNAL);
         return Promise.resolve(true);
       } catch (error) {
+        var restored = false;
         try {
           _restoreLocalSaveBatchItems(items);
           localStorage.removeItem(LOCAL_SAVE_BATCH_JOURNAL);
+          restored = true;
         } catch (_) {
           // 保留 prepared journal；下次 open() 会继续恢复旧值。
+        }
+        if (restored && error && error.name === 'QuotaExceededError' && !_retryCount) {
+          var excludedLocal = Object.create(null);
+          records.forEach(function(record) { excludedLocal[String(record.id)] = true; });
+          if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
+          return _dropOldestAutoSave(writeGuard, excludedLocal).then(function(dropped) {
+            if (!_writeGuardAllows(writeGuard)) return false;
+            if (dropped) return _putSaveRecordsAtomic(records, writeGuard, 1);
+            if (typeof window.toast === 'function') window.toast('❌ 存档空间满·请手动删除旧存档后重试');
+            return false;
+          });
         }
         return Promise.reject(error);
       }
@@ -305,7 +319,23 @@ var TM_SaveDB = (function() {
         function fail(e) {
           if (settled) return;
           settled = true;
-          reject(e && e.target && e.target.error || tx.error || new Error('IndexedDB 批量存档事务失败'));
+          var error = e && e.target && e.target.error || tx.error || new Error('IndexedDB 批量存档事务失败');
+          if (error && error.name === 'QuotaExceededError' && !_retryCount) {
+            var excluded = Object.create(null);
+            records.forEach(function(record) { excluded[String(record.id)] = true; });
+            if (!_writeGuardAllows(writeGuard)) { resolve(false); return; }
+            console.warn('[SaveDB] canonical 批量存档配额已满·整批回滚后清理旧自动档并重试');
+            _dropOldestAutoSave(writeGuard, excluded).then(function(dropped) {
+              if (!_writeGuardAllows(writeGuard)) { resolve(false); return; }
+              if (dropped) _putSaveRecordsAtomic(records, writeGuard, 1).then(resolve, reject);
+              else {
+                if (typeof window.toast === 'function') window.toast('❌ 存档空间满·请手动删除旧存档后重试');
+                resolve(false);
+              }
+            }).catch(reject);
+            return;
+          }
+          reject(error);
         }
         tx.onerror = fail;
         tx.onabort = fail;
@@ -645,6 +675,38 @@ var TM_SaveDB = (function() {
     });
   }
 
+  /** 分卷发布成功后，以同一批量事务清除 canonical 槽位中的 durable publish marker。 */
+  function clearPendingTurnDataPublishAtomic(ids, transactionId, options) {
+    ids = Array.isArray(ids) ? ids.map(String) : [];
+    transactionId = String(transactionId || '');
+    options = options || {};
+    if (!ids.length || !transactionId) return Promise.resolve(false);
+    function stillAllowed() {
+      if (typeof options.writeGuard !== 'function') return true;
+      try { return options.writeGuard() === true; }
+      catch (_) { return false; }
+    }
+    if (!stillAllowed()) return Promise.resolve(false);
+    return Promise.all(ids.map(function(id) { return load(id); })).then(function(records) {
+      if (!stillAllowed() || records.some(function(record) { return !record || !record.gameState; })) return false;
+      var changed = false;
+      var entries = [];
+      for (var i = 0; i < records.length; i++) {
+        var record = records[i];
+        var state = record.gameState;
+        var marker = state && state.GM && state.GM._pendingTurnDataPublish;
+        if (marker && String(marker.transactionId || '') !== transactionId) return false;
+        if (marker) {
+          delete state.GM._pendingTurnDataPublish;
+          changed = true;
+        }
+        entries.push({ id: record.id, gameState: state, meta: _toSaveMetadata(record) });
+      }
+      if (!changed) return true;
+      return saveManyAtomic(entries, { writeGuard: stillAllowed });
+    });
+  }
+
   /** 读取游戏存档（7.1: 支持gzip解压，兼容旧存档） */
   function load(id) {
     return _ensureOpen().then(function() {
@@ -928,6 +990,7 @@ var TM_SaveDB = (function() {
     open: open,
     save: save,
     saveManyAtomic: saveManyAtomic,
+    clearPendingTurnDataPublishAtomic: clearPendingTurnDataPublishAtomic,
     load: load,
     list: list,
     delete: deleteSave,

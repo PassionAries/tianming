@@ -103,8 +103,8 @@ ok(/rotateAutoSaveSession/.test(preloadImpl) && /_tmRotateDesktopAutoSaveSession
   && /_tmRotateDesktopAutoSaveSession\('new-game'/.test(startPatch), 'preload + 读档 + 新局共同切换 auto-save session');
 ok(/stageTurnData\([\s\S]*?result\.success === true[\s\S]*?回合分卷暂存失败/.test(render)
   && /_tmCommitEndTurnTransaction[\s\S]*?await _endTurn_publishStagedTurnData/.test(core), '回合分卷先暂存并仅在世界 commit 后发布');
-ok(/function _recoverPendingTurnDataPublish\(\)[\s\S]*?recoverTurnData\(marker\)[\s\S]*?transactionId !== marker\.transactionId[\s\S]*?delete GM\._pendingTurnDataPublish/.test(lifecycle),
-  '读档按世界身份和 transactionId 租约幂等补发未发布分卷');
+ok(/function _recoverPendingTurnDataPublish\(\)[\s\S]*?function recoveryLeaseCurrent\(\)[\s\S]*?_tmLoadGen[\s\S]*?transactionId === marker\.transactionId[\s\S]*?recoverTurnData\(marker\)[\s\S]*?clearPendingTurnDataPublishAtomic\(\['autosave', 'slot_0'\][\s\S]*?delete GM\._pendingTurnDataPublish/.test(lifecycle),
+  '读档按世界身份和 transactionId 租约补发，并在双槽 checkpoint 后清除 durable marker');
 {
   const finalizerFn = sliceFn(render, 'function _endTurn_finalizeRecords(');
   const uiRenderFn = sliceFn(render, 'function _endTurn_render(');

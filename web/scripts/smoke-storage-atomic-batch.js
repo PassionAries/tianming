@@ -16,7 +16,7 @@ function check(value, message) {
 }
 function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
 
-function makeLocalStorage(initial, failKey) {
+function makeLocalStorage(initial, failKey, failureName) {
   const rows = new Map(Object.entries(initial || {}).map(([k, v]) => [k, String(v)]));
   let failed = false;
   return {
@@ -25,14 +25,19 @@ function makeLocalStorage(initial, failKey) {
     key(i) { return Array.from(rows.keys())[i] || null; },
     getItem(k) { return rows.has(String(k)) ? rows.get(String(k)) : null; },
     setItem(k, v) {
-      if (!failed && failKey && String(k) === failKey) { failed = true; throw new Error('injected-local-write-failure'); }
+      if (!failed && failKey && String(k) === failKey) {
+        failed = true;
+        const error = new Error('injected-local-write-failure');
+        error.name = failureName || 'Error';
+        throw error;
+      }
       rows.set(String(k), String(v));
     },
     removeItem(k) { rows.delete(String(k)); }
   };
 }
 
-function makeIndexedDB(initial, failPutAt) {
+function makeIndexedDB(initial, failPutAt, failureName) {
   const stores = new Map([
     ['saves', new Map(Object.entries(initial && initial.saves || {}).map(([k, v]) => [k, clone(v)]))],
     ['saveMetadata', new Map(Object.entries(initial && initial.saveMetadata || {}).map(([k, v]) => [k, clone(v)]))],
@@ -63,6 +68,7 @@ function makeIndexedDB(initial, failPutAt) {
       setTimeout(() => {
         if (failPutAt && pending.some(op => op.putNo === failPutAt)) {
           tx.error = new Error('injected-idb-write-failure');
+          tx.error.name = failureName || 'Error';
           if (tx.onabort) tx.onabort({ target: { error: tx.error } });
           return;
         }
@@ -133,6 +139,62 @@ function makeContext(indexedDB, localStorage) {
   check(rejected && failingIdb.stores.get('saves').get('autosave').gameState === 'old-auto' && failingIdb.stores.get('saves').get('slot_0').gameState === 'old-slot',
     'an injected second-slot failure aborts the complete IndexedDB batch');
 
+  const quotaInitial = {
+    saves: {
+      autosave: { id: 'autosave', type: 'auto', gameState: 'old-auto' },
+      slot_0: { id: 'slot_0', type: 'auto', gameState: 'old-slot' },
+      older_auto_1: { id: 'older_auto_1', type: 'auto', gameState: 'disposable' }
+    },
+    saveMetadata: {
+      autosave: { id: 'autosave', type: 'auto', turn: 49, timestamp: 20 },
+      slot_0: { id: 'slot_0', type: 'auto', turn: 49, timestamp: 20 },
+      older_auto_1: { id: 'older_auto_1', type: 'auto', turn: 12, timestamp: 1 }
+    }
+  };
+  const quotaIdb = makeIndexedDB(quotaInitial, 1, 'QuotaExceededError');
+  const quotaCtx = makeContext(quotaIdb, makeLocalStorage());
+  await quotaCtx.TM_SaveDB.open();
+  const quotaSaved = await quotaCtx.TM_SaveDB.saveManyAtomic([
+    { id: 'autosave', gameState: state, meta: { type: 'auto', turn: 50 } },
+    { id: 'slot_0', gameState: state, meta: { type: 'auto', turn: 50 } }
+  ]);
+  check(quotaSaved === true && !quotaIdb.stores.get('saves').has('older_auto_1'),
+    'quota failure aborts the batch, deletes one disposable old auto save, then retries once');
+  check(JSON.parse(quotaIdb.stores.get('saves').get('autosave').gameState).GM.turn === 50
+    && JSON.parse(quotaIdb.stores.get('saves').get('slot_0').gameState).GM.turn === 50,
+  'quota recovery still advances both canonical slots together');
+
+  const noDisposableIdb = makeIndexedDB({ saves: { autosave: oldAuto, slot_0: oldSlot }, saveMetadata: {
+    autosave: { id: 'autosave', type: 'auto', turn: 49, timestamp: 1 },
+    slot_0: { id: 'slot_0', type: 'auto', turn: 49, timestamp: 1 }
+  } }, 1, 'QuotaExceededError');
+  const noDisposableCtx = makeContext(noDisposableIdb, makeLocalStorage());
+  await noDisposableCtx.TM_SaveDB.open();
+  const noDisposableSaved = await noDisposableCtx.TM_SaveDB.saveManyAtomic([
+    { id: 'autosave', gameState: state, meta: { type: 'auto', turn: 50 } },
+    { id: 'slot_0', gameState: state, meta: { type: 'auto', turn: 50 } }
+  ]);
+  check(noDisposableSaved === false
+    && noDisposableIdb.stores.get('saves').get('autosave').gameState === 'old-auto'
+    && noDisposableIdb.stores.get('saves').get('slot_0').gameState === 'old-slot',
+  'quota recovery never deletes either canonical slot when no disposable auto save exists');
+
+  const marker = { transactionId: 'turn-marker-12345678', campaignId: 'campaign-1', turn: 50 };
+  const markerState = { GM: { turn: 51, _pendingTurnDataPublish: marker }, P: {} };
+  const markerIdb = makeIndexedDB({ saves: {
+    autosave: { id: 'autosave', type: 'auto', turn: 51, gameState: JSON.stringify(markerState), _compressed: false },
+    slot_0: { id: 'slot_0', type: 'auto', turn: 51, gameState: JSON.stringify(markerState), _compressed: false }
+  }, saveMetadata: {
+    autosave: { id: 'autosave', type: 'auto', turn: 51 }, slot_0: { id: 'slot_0', type: 'auto', turn: 51 }
+  } });
+  const markerCtx = makeContext(markerIdb, makeLocalStorage());
+  await markerCtx.TM_SaveDB.open();
+  const markerCleared = await markerCtx.TM_SaveDB.clearPendingTurnDataPublishAtomic(['autosave', 'slot_0'], marker.transactionId);
+  const clearedAuto = await markerCtx.TM_SaveDB.load('autosave');
+  const clearedSlot = await markerCtx.TM_SaveDB.load('slot_0');
+  check(markerCleared === true && !clearedAuto.gameState.GM._pendingTurnDataPublish && !clearedSlot.gameState.GM._pendingTurnDataPublish,
+    'successful turn-data publish checkpoint clears both canonical markers atomically');
+
   const keys = {
     auto: 'tm_idb_saves_autosave', autoMeta: 'tm_idb_saveMetadata_autosave',
     slot: 'tm_idb_saves_slot_0', slotMeta: 'tm_idb_saveMetadata_slot_0'
@@ -150,6 +212,29 @@ function makeContext(indexedDB, localStorage) {
   } catch (_) { rejected = true; }
   check(rejected && Object.entries(initial).every(([k, v]) => local.getItem(k) === v), 'localStorage failure restores all four prior values');
   check(local.getItem('tm_save_batch_journal_v1') === null, 'successful rollback removes the local batch journal');
+
+  const localQuotaInitial = {
+    [keys.auto]: JSON.stringify({ id: 'autosave', type: 'auto', name: 'old auto', timestamp: 20, turn: 49, gameState: JSON.stringify({ GM: { turn: 49 }, P: {} }) }),
+    [keys.autoMeta]: JSON.stringify({ id: 'autosave', type: 'auto', name: 'old auto', turn: 49, timestamp: 20 }),
+    [keys.slot]: JSON.stringify({ id: 'slot_0', type: 'auto', name: 'old slot', timestamp: 20, turn: 49, gameState: JSON.stringify({ GM: { turn: 49 }, P: {} }) }),
+    [keys.slotMeta]: JSON.stringify({ id: 'slot_0', type: 'auto', name: 'old slot', turn: 49, timestamp: 20 }),
+    tm_idb_saves_older_auto_1: JSON.stringify({ id: 'older_auto_1', type: 'auto', gameState: '{}' }),
+    tm_idb_saveMetadata_older_auto_1: JSON.stringify({ id: 'older_auto_1', type: 'auto', turn: 12, timestamp: 1 })
+  };
+  const localQuota = makeLocalStorage(localQuotaInitial, keys.slotMeta, 'QuotaExceededError');
+  const localQuotaCtx = makeContext(null, localQuota);
+  await localQuotaCtx.TM_SaveDB.open();
+  const localQuotaSaved = await localQuotaCtx.TM_SaveDB.saveManyAtomic([
+    { id: 'autosave', gameState: state, meta: { type: 'auto', turn: 50 } },
+    { id: 'slot_0', gameState: state, meta: { type: 'auto', turn: 50 } }
+  ]);
+  check(localQuotaSaved === true
+    && localQuota.getItem('tm_idb_saves_older_auto_1') === null
+    && localQuota.getItem('tm_idb_saveMetadata_older_auto_1') === null,
+  'localStorage quota recovery restores the batch, removes one disposable auto save, and retries once');
+  check(JSON.parse(JSON.parse(localQuota.getItem(keys.auto)).gameState).GM.turn === 50
+    && JSON.parse(JSON.parse(localQuota.getItem(keys.slot)).gameState).GM.turn === 50,
+  'localStorage quota recovery still advances both canonical slots together');
 
   const preparedItems = Object.entries(initial).map(([key, previous]) => ({ key, previous }));
   const crashLocal = makeLocalStorage(Object.assign({}, initial, {

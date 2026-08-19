@@ -3,7 +3,7 @@
 // ============================================================
 // tm-chronicle-system.js — 编年史系统
 //
-// R89 从 tm-endturn.js 抽出·单一对象字面量
+// R89 从 tm-endturn.js 抽出·战役状态随 GM 持久化，对象本身只提供操作服务
 //   原位置 L3282-3486 (205 行)
 //
 // 依赖外部：_getDaysPerTurn / callAI / extractJSON / _dbg / addEB （均为 window 全局）
@@ -12,72 +12,179 @@
 // 加载顺序：必须在 tm-endturn.js 之前（index.html 顺序已调整）
 // ============================================================
 
+function _chronicleEmptyState() {
+  return { version: 2, monthDrafts: {}, yearChronicles: {} };
+}
+
+var _chronicleDetachedState = _chronicleEmptyState();
+
+function _chronicleState(targetGM, create) {
+  var owner = targetGM || ((typeof GM !== 'undefined' && GM) ? GM : null);
+  if (!owner) return _chronicleDetachedState;
+  var state = owner._chronicleSysState;
+  if (!state || typeof state !== 'object' || Array.isArray(state)) {
+    if (!create) return null;
+    state = _chronicleEmptyState();
+    owner._chronicleSysState = state;
+  }
+  if (!state.monthDrafts || typeof state.monthDrafts !== 'object' || Array.isArray(state.monthDrafts)) state.monthDrafts = {};
+  if (!state.yearChronicles || typeof state.yearChronicles !== 'object' || Array.isArray(state.yearChronicles)) state.yearChronicles = {};
+  state.version = 2;
+  return state;
+}
+
+function _chronicleCloneState(data) {
+  var source = data && typeof data === 'object' ? data : _chronicleEmptyState();
+  try {
+    var cloned = JSON.parse(JSON.stringify(source));
+    if (!cloned || typeof cloned !== 'object') return _chronicleEmptyState();
+    if (!cloned.monthDrafts || typeof cloned.monthDrafts !== 'object' || Array.isArray(cloned.monthDrafts)) cloned.monthDrafts = {};
+    if (!cloned.yearChronicles || typeof cloned.yearChronicles !== 'object' || Array.isArray(cloned.yearChronicles)) cloned.yearChronicles = {};
+    cloned.version = 2;
+    return cloned;
+  } catch (_) {
+    return _chronicleEmptyState();
+  }
+}
+
+function _chronicleDateForTurn(turn) {
+  if (typeof TimeUtils !== 'undefined' && TimeUtils && typeof TimeUtils.turnToDate === 'function') {
+    var canonical = TimeUtils.turnToDate(turn);
+    return {
+      year: Number(canonical.year), month: Number(canonical.month), day: Number(canonical.day),
+      season: canonical.season || '', monthLabel: canonical.monthLabel || String(canonical.month || '')
+    };
+  }
+  if (typeof calcDateFromTurn === 'function') {
+    var legacy = calcDateFromTurn(turn);
+    return {
+      year: Number(legacy.adYear), month: Number(legacy.solarMonth), day: Number(legacy.solarDay),
+      season: legacy.season || '', monthLabel: String(legacy.solarMonth || '')
+    };
+  }
+  return null;
+}
+
+function _chronicleDraftLimit() {
+  var keepYears = Number(P && P.conf && P.conf.chronicleKeep);
+  if (!isFinite(keepYears) || keepYears <= 0) keepYears = 10;
+  var daysPerTurn = Number(typeof _getDaysPerTurn === 'function' ? _getDaysPerTurn() : 30);
+  if (!isFinite(daysPerTurn) || daysPerTurn <= 0) daysPerTurn = 30;
+  return Math.max(12, Math.ceil(366 / daysPerTurn)) * Math.floor(keepYears);
+}
+
+function _chronicleRequestId() {
+  ChronicleSystem._requestSeq = (ChronicleSystem._requestSeq || 0) + 1;
+  return 'chronicle-' + Date.now() + '-' + ChronicleSystem._requestSeq;
+}
+
 var ChronicleSystem = {
-  monthDrafts: {},  // key: 'year-month', value: {summary, events}
-  yearChronicles: {},  // key: 'year', value: {content, afterword, read}
+  _inFlight: [],
+  _requestSeq: 0,
+
+  // 兼容旧消费者的属性访问；真正数据始终落在当前 GM._chronicleSysState。
+  get monthDrafts() { return _chronicleState(null, true).monthDrafts; },
+  set monthDrafts(value) { _chronicleState(null, true).monthDrafts = (value && typeof value === 'object' && !Array.isArray(value)) ? value : {}; },
+  get yearChronicles() { return _chronicleState(null, true).yearChronicles; },
+  set yearChronicles(value) { _chronicleState(null, true).yearChronicles = (value && typeof value === 'object' && !Array.isArray(value)) ? value : {}; },
 
   /** 记录本回合摘要（每回合末调用） */
   addMonthDraft: function(turn, shizhengji, zhengwen) {
-    if (!P.time) return;
-    var t = P.time;
-    var _dpv = _getDaysPerTurn();
-    var totalDays = (turn - 1) * _dpv;
-    var yo = Math.floor(totalDays / 365);
-    var year = (t.year||0) + yo;
-    var seasonIdx = Math.floor((totalDays % 365) / 91.25); // 0-3
-    var season = Math.min(seasonIdx, (t.seasons||[]).length - 1);
-    var key = year + '-' + season;
+    if (!P || !P.time) return null;
+    turn = Number(turn);
+    if (!Number.isSafeInteger(turn) || turn < 1) return null;
+    var date = _chronicleDateForTurn(turn);
+    if (!date || !isFinite(date.year)) return null;
+    var state = _chronicleState(null, true);
+    var key = String(turn);
 
-    ChronicleSystem.monthDrafts[key] = {
+    state.monthDrafts[key] = {
       turn: turn,
-      year: year,
-      season: season,
+      year: date.year,
+      month: date.month,
+      day: date.day,
+      season: date.season,
+      monthLabel: date.monthLabel,
       summary: (shizhengji || '').substring(0, 300),
       narrative: (zhengwen || '').substring(0, 200),
       timestamp: Date.now()
     };
 
-    // 限制月度摘要数量（保留最近 N 个月，N = chronicleKeep * 12）
-    var draftKeys = Object.keys(ChronicleSystem.monthDrafts);
-    var maxDrafts = ((P.conf && P.conf.chronicleKeep) || 10) * 12;
+    // 每回合一份、同一回合幂等覆盖；按回合号裁剪，不能再以季度键吞掉同季多回合。
+    var draftKeys = Object.keys(state.monthDrafts);
+    var maxDrafts = _chronicleDraftLimit();
     if (draftKeys.length > maxDrafts) {
-      draftKeys.sort();
+      draftKeys.sort(function(a, b) {
+        return Number(state.monthDrafts[a] && state.monthDrafts[a].turn || 0) - Number(state.monthDrafts[b] && state.monthDrafts[b].turn || 0);
+      });
       var toRemove = draftKeys.slice(0, draftKeys.length - maxDrafts);
-      toRemove.forEach(function(k) { delete ChronicleSystem.monthDrafts[k]; });
+      toRemove.forEach(function(k) { delete state.monthDrafts[k]; });
     }
 
-    // 检查是否年末（累计天数跨年）
-    if (typeof isYearBoundary === 'function' && isYearBoundary()) {
-      ChronicleSystem._tryGenerateYearChronicle(year);
+    // 使用统一历法判断“本回合结束后跨年”，不复制固定 365/91.25 天公式。
+    var nextDate = _chronicleDateForTurn(turn + 1);
+    if (nextDate && nextDate.year > date.year) {
+      ChronicleSystem._tryGenerateYearChronicle(date.year);
     }
+    return state.monthDrafts[key];
   },
 
   /** 尝试生成年度正史（异步，不阻塞游戏） */
   _tryGenerateYearChronicle: function(year) {
-    if (ChronicleSystem.yearChronicles[year]) return; // 已生成
-    if (!P.ai.key) return; // 无 AI 跳过
+    year = Number(year);
+    if (!isFinite(year)) return Promise.resolve({ ok: false, reason: 'invalid-year' });
+    var targetGM = (typeof GM !== 'undefined') ? GM : null;
+    var targetP = (typeof P !== 'undefined') ? P : null;
+    var targetState = _chronicleState(targetGM, true);
+    if (!targetGM || !targetP || !targetState) return Promise.resolve({ ok: false, reason: 'missing-world' });
+    if (targetState.yearChronicles[year]) return Promise.resolve({ ok: true, existing: true });
+    if (!(targetP.ai && targetP.ai.key)) return Promise.resolve({ ok: false, reason: 'missing-ai' });
+
+    var existing = ChronicleSystem._inFlight.find(function(item) {
+      return item && item.stateRef === targetState && item.year === year;
+    });
+    if (existing) return existing.promise;
 
     // 收集该年所有月度摘要
     var drafts = [];
-    Object.keys(ChronicleSystem.monthDrafts).forEach(function(key) {
-      var d = ChronicleSystem.monthDrafts[key];
+    Object.keys(targetState.monthDrafts).forEach(function(key) {
+      var d = targetState.monthDrafts[key];
       if (d.year === year) drafts.push(d);
     });
-    if (drafts.length === 0) return;
+    if (drafts.length === 0) return Promise.resolve({ ok: false, reason: 'missing-drafts' });
 
     drafts.sort(function(a, b) { return a.turn - b.turn; });
 
+    var lease = {
+      requestId: _chronicleRequestId(),
+      gmRef: targetGM,
+      pRef: targetP,
+      stateRef: targetState,
+      campaignId: String(targetGM._campaignId || ''),
+      loadGen: (typeof window !== 'undefined' && window._tmLoadGen) || 0,
+      year: year,
+      promise: null
+    };
+    function leaseIsCurrent() {
+      return typeof GM !== 'undefined' && typeof P !== 'undefined' &&
+        GM === lease.gmRef && P === lease.pRef &&
+        (((typeof window !== 'undefined' && window._tmLoadGen) || 0) === lease.loadGen) &&
+        String((GM && GM._campaignId) || '') === lease.campaignId &&
+        _chronicleState(lease.gmRef, false) === lease.stateRef &&
+        ChronicleSystem._inFlight.some(function(item) { return item && item.requestId === lease.requestId; });
+    }
+
     // 构建 AI prompt（不硬编码朝代，从 P 中读取）
-    var sc = findScenarioById(GM.sid);
+    var sc = findScenarioById(targetGM.sid);
     var dynasty = sc ? sc.dynasty || sc.era || '' : '';
     var emperor = sc ? sc.emperor || sc.role || '' : '';
     var prevAfterword = '';
-    if (ChronicleSystem.yearChronicles[year - 1]) {
-      prevAfterword = ChronicleSystem.yearChronicles[year - 1].afterword || '';
+    if (targetState.yearChronicles[year - 1]) {
+      prevAfterword = targetState.yearChronicles[year - 1].afterword || '';
     }
 
     // 编年史风格（从chronicleConfig读取）
-    var _ccfg = P.chronicleConfig || {};
+    var _ccfg = targetP.chronicleConfig || {};
     var _style = _ccfg.style || 'biannian';
     var _styleGuide = {
       biannian: '编年体（仿《资治通鉴》），以时间为纲，逐月叙事，客观冷静。',
@@ -100,8 +207,8 @@ var ChronicleSystem = {
     if (emperor) prompt += '当朝天子/主角：' + emperor + '\n';
     if (prevAfterword) prompt += '上年史评：' + prevAfterword + '\n';
     // 6.1联动：注入该年回收的伏笔因果链
-    if (GM._foreshadowings) {
-      var _yearResolved = GM._foreshadowings.filter(function(f) {
+    if (targetGM._foreshadowings) {
+      var _yearResolved = targetGM._foreshadowings.filter(function(f) {
         return f.resolved && f.resolveTurn && (typeof calcDateFromTurn === 'function') &&
           calcDateFromTurn(f.resolveTurn) && calcDateFromTurn(f.resolveTurn).adYear === year;
       });
@@ -113,13 +220,13 @@ var ChronicleSystem = {
       }
     }
     // 6.5联动：注入每回合一句话摘要
-    if (GM._yearlyDigest && GM._yearlyDigest.length > 0) {
+    if (targetGM._yearlyDigest && targetGM._yearlyDigest.length > 0) {
       prompt += '\n\u672C\u5E74\u5404\u56DE\u5408\u4E00\u53E5\u8BDD\u6458\u8981\uFF1A\n';
-      GM._yearlyDigest.forEach(function(d) { prompt += 'T' + d.turn + ': ' + d.summary + '\n'; });
+      targetGM._yearlyDigest.forEach(function(d) { prompt += 'T' + d.turn + ': ' + d.summary + '\n'; });
     }
     // 6.7联动：本年度下达诏令+其后续影响（colorEdicts + _chainEffects）
-    if (GM._edictTracker && GM._edictTracker.length > 0) {
-      var _yearEdicts = GM._edictTracker.filter(function(e) {
+    if (targetGM._edictTracker && targetGM._edictTracker.length > 0) {
+      var _yearEdicts = targetGM._edictTracker.filter(function(e) {
         if (!e || !e.turn) return false;
         var _d = (typeof calcDateFromTurn === 'function') ? calcDateFromTurn(e.turn) : null;
         return _d && _d.adYear === year;
@@ -144,10 +251,10 @@ var ChronicleSystem = {
         prompt += '  \u203B \u7F16\u5E74\u4E2D\u8BE5\u4EE5\u300C\u8BCFXX\u300D\u300C\u884C\u81F3X\u6708\u67D0\u65E5\uFF0CXX\u4E8B\u5E94\u300D\u7B49\u53E5\u5F0F\uFF0C\u5C06\u8BCF\u4EE4\u9881\u5E03\u2014\u6267\u884C\u2014\u4F59\u6CE2\u7ED3\u6210\u56E0\u679C\u94FE\uFF0C\u4E0D\u53EF\u53EA\u63D0\u9881\u5E03\u800C\u4E0D\u63D0\u7ED3\u679C\n';
       }
     }
-    prompt += '\n\u5404\u5B63\u6458\u8981\uFF1A\n';
+    prompt += '\n\u5404\u56DE\u5408\u6458\u8981\uFF1A\n';
     drafts.forEach(function(d) {
-      var seasonName = (P.time.seasons || ['\u6625','\u590F','\u79CB','\u51AC'])[d.season] || '';
-      prompt += '\u3010' + seasonName + '\u3011' + d.summary + '\n';
+      var dateLabel = d.year + '\u5E74' + (d.monthLabel || d.month || '') + '\u6708' + (d.day ? d.day + '\u65E5' : '');
+      prompt += '\u3010T' + d.turn + '\u00B7' + dateLabel + '\u3011' + d.summary + '\n';
     });
     prompt += '\n请返回 JSON: {"chronicle":"正史正文' + _charRangeText('chronicle') + '","afterword":"史评/论赞' + _charRangeScaled('comment', 1.0) + '"}';
 
@@ -155,14 +262,22 @@ var ChronicleSystem = {
     if (typeof _buildTemporalConstraint === 'function') { try { prompt += '\n' + _buildTemporalConstraint(null, {}); } catch (_) {} }
 
     // 异步生成，不阻塞；年度编年不应抢占玩家正在等待的主推演通道。
-    callAI(prompt, 1500, null, 'primary', {
-      priority: 'background',
-      timeoutMs: 60000,
-      maxRetries: 1
-    }).then(function(result) {
+    var request;
+    try {
+      request = callAI(prompt, 1500, null, 'primary', {
+        priority: 'background',
+        timeoutMs: 60000,
+        maxRetries: 1
+      });
+    } catch (syncError) {
+      (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(syncError, 'Chronicle') : console.warn('[Chronicle] 年度正史生成失败:', syncError);
+      return Promise.resolve({ ok: false, error: syncError });
+    }
+    lease.promise = Promise.resolve(request).then(function(result) {
+      if (!leaseIsCurrent()) return { ok: false, stale: true };
       var parsed = extractJSON(result);
       if (parsed) {
-        ChronicleSystem.yearChronicles[year] = {
+        targetState.yearChronicles[year] = {
           content: parsed.chronicle || result,
           afterword: parsed.afterword || '',
           read: false,
@@ -172,19 +287,28 @@ var ChronicleSystem = {
         };
 
         // 限制年度正史数量
-        var yearKeys = Object.keys(ChronicleSystem.yearChronicles);
-        var maxYears = ((P.conf && P.conf.chronicleKeep) || 10) * 2;
+        var yearKeys = Object.keys(targetState.yearChronicles);
+        var maxYears = ((targetP.conf && targetP.conf.chronicleKeep) || 10) * 2;
         if (yearKeys.length > maxYears) {
           yearKeys.sort(function(a,b){return a-b;});
           var removeYears = yearKeys.slice(0, yearKeys.length - maxYears);
-          removeYears.forEach(function(k) { delete ChronicleSystem.yearChronicles[k]; });
+          removeYears.forEach(function(k) { delete targetState.yearChronicles[k]; });
         }
 
         _dbg('[Chronicle] 年度正史生成完成:', year);
         if (typeof addEB === 'function') addEB('正史', year + '年编年史已完成');
+        return { ok: true, year: year };
       }
+      return { ok: false, reason: 'invalid-result' };
     }).catch(function(e) {
-      (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'Chronicle') : console.warn('[Chronicle] 年度正史生成失败:', e); });
+      (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'Chronicle') : console.warn('[Chronicle] 年度正史生成失败:', e);
+      return { ok: false, error: e };
+    }).then(function(outcome) {
+      ChronicleSystem._inFlight = ChronicleSystem._inFlight.filter(function(item) { return item && item.requestId !== lease.requestId; });
+      return outcome;
+    });
+    ChronicleSystem._inFlight.push(lease);
+    return lease.promise;
   },
 
   /** 获取年度正史（UI 用） */
@@ -205,23 +329,21 @@ var ChronicleSystem = {
   },
 
   /** 序列化（存档用） */
-  serialize: function() {
-    return {
-      monthDrafts: ChronicleSystem.monthDrafts,
-      yearChronicles: ChronicleSystem.yearChronicles
-    };
+  serialize: function(targetGM) {
+    return _chronicleCloneState(_chronicleState(targetGM, false));
   },
 
   /** 反序列化（读档用） */
-  deserialize: function(data) {
-    if (!data) return;
-    ChronicleSystem.monthDrafts = data.monthDrafts || {};
-    ChronicleSystem.yearChronicles = data.yearChronicles || {};
+  deserialize: function(data, targetGM) {
+    var owner = targetGM || ((typeof GM !== 'undefined' && GM) ? GM : null);
+    var next = _chronicleCloneState(data);
+    if (owner) owner._chronicleSysState = next;
+    else _chronicleDetachedState = next;
+    return next;
   },
 
   /** 重置 */
-  reset: function() {
-    ChronicleSystem.monthDrafts = {};
-    ChronicleSystem.yearChronicles = {};
+  reset: function(targetGM) {
+    return ChronicleSystem.deserialize(null, targetGM);
   }
 };

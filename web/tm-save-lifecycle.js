@@ -368,7 +368,8 @@ function _prepareGMForSave(GM, P) {
   }
   // 系统序列化
   // 注意：GM._chronicle是编年事件数组，不可与ChronicleSystem的月/年摘要对象混用——分开存
-  GM._chronicleSysState = typeof ChronicleSystem !== 'undefined' ? ChronicleSystem.serialize() : null;
+  // 编年状态已经属于传入的 GM 快照；不得从当前全局世界重新读取后覆盖跨档快照。
+  GM._chronicleSysState = typeof ChronicleSystem !== 'undefined' ? ChronicleSystem.serialize(GM) : null;
   GM._warTruces = typeof WarWeightSystem !== 'undefined' ? WarWeightSystem.serialize() : null;
   GM._rngState = typeof getRngState === 'function' ? getRngState() : null;
   // 亲疏/得罪/反弹/观感
@@ -867,10 +868,23 @@ var PREF_CONF_KEYS = [
 function _recoverPendingTurnDataPublish() {
   if (!(GM && GM._pendingTurnDataPublish && window.tianming && typeof window.tianming.recoverTurnData === 'function')) return;
   var targetGM = GM;
+  var targetP = P;
+  var targetLoadGen = (typeof window !== 'undefined' && window._tmLoadGen) || 0;
   var marker = deepClone(GM._pendingTurnDataPublish);
-  window.tianming.recoverTurnData(marker).then(function(result) {
-    if (GM !== targetGM || !GM._pendingTurnDataPublish || GM._pendingTurnDataPublish.transactionId !== marker.transactionId) return;
+  function recoveryLeaseCurrent() {
+    return GM === targetGM && P === targetP &&
+      (((typeof window !== 'undefined' && window._tmLoadGen) || 0) === targetLoadGen) &&
+      String((GM && GM._campaignId) || '') === String(marker.campaignId || '') &&
+      !!GM._pendingTurnDataPublish && GM._pendingTurnDataPublish.transactionId === marker.transactionId;
+  }
+  window.tianming.recoverTurnData(marker).then(async function(result) {
+    if (!recoveryLeaseCurrent()) return;
     if (!(result && result.success === true)) throw new Error(result && result.error || '回合分卷恢复失败');
+    if (!(typeof TM_SaveDB !== 'undefined' && typeof TM_SaveDB.clearPendingTurnDataPublishAtomic === 'function')) {
+      throw new Error('回合分卷恢复标记 checkpoint 接口缺失');
+    }
+    var cleared = await TM_SaveDB.clearPendingTurnDataPublishAtomic(['autosave', 'slot_0'], marker.transactionId, { writeGuard: recoveryLeaseCurrent });
+    if (cleared !== true || !recoveryLeaseCurrent()) throw new Error('回合分卷已恢复，但 canonical 标记清理失败');
     delete GM._pendingTurnDataPublish;
   }).catch(function(error) {
     if (GM !== targetGM) return;
@@ -953,7 +967,8 @@ function fullLoadGame(data, loadOptions){
       if (!GM._chronicleSysState) GM._chronicleSysState = GM._chronicle;
       GM._chronicle = [];
     }
-    if(GM._chronicleSysState && typeof ChronicleSystem !== 'undefined') ChronicleSystem.deserialize(GM._chronicleSysState);
+    // 每次读档都绑定（包括没有旧字段的空档），避免沿用上一战役的进程级单例残留。
+    if(typeof ChronicleSystem !== 'undefined') ChronicleSystem.deserialize(GM._chronicleSysState || null, GM);
     if(GM._warTruces && typeof WarWeightSystem !== 'undefined') WarWeightSystem.deserialize(GM._warTruces);
 
     // 恢复所有_saved*字段

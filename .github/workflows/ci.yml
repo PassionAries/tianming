@@ -26,6 +26,8 @@ jobs:
           cache: npm
       - name: Install release-gate dependencies
         run: npm ci --ignore-scripts
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
       - name: Regenerate official scenario products
         run: node web/scripts/sync-official-scenarios.js
       - name: Reject stale generated products

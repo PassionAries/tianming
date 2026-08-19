@@ -14,7 +14,6 @@ const crypto = require('crypto');
 const dns = require('dns').promises;
 const nodeNet = require('net');
 const { pathToFileURL, fileURLToPath } = require('url');
-const AdmZip = require('adm-zip');
 const yauzl = require('yauzl');
 const { pipeline } = require('stream');
 const { autoUpdater } = require('electron-updater');
@@ -799,6 +798,16 @@ const WORKSHOP_ZIP_LIMITS = Object.freeze({
   maxNameBytes: 240,
   maxDepth: 16
 });
+const HOT_UPDATE_ZIP_LIMITS = Object.freeze({
+  maxEntries: 8192,
+  maxArchiveBytes: 2 * 1024 * 1024 * 1024,
+  maxTotalBytes: 2 * 1024 * 1024 * 1024,
+  maxFileBytes: 1024 * 1024 * 1024,
+  maxCompressionRatio: 1000,
+  compressionRatioMinBytes: 1024 * 1024,
+  maxNameBytes: 320,
+  maxDepth: 32
+});
 
 function walkPackFiles(root) {
   const out = [];
@@ -891,13 +900,15 @@ function openWorkshopZip(zipPath) {
   });
 }
 
-function validateWorkshopZipEntry(entry, seenPaths) {
+function validateZipEntryByPolicy(entry, seenPaths, limits, blockedExts, allowedExts, label) {
+  limits = limits || WORKSHOP_ZIP_LIMITS;
+  label = label || '压缩包';
   const rawName = String(entry && entry.fileName || '');
   if (!rawName || rawName.indexOf('\0') >= 0) throw new Error('压缩包包含空文件名或 NUL 字节');
   if (rawName.indexOf('\\') >= 0 || rawName[0] === '/' || /^[a-zA-Z]:/.test(rawName)) {
     throw new Error('压缩包包含绝对或非规范路径: ' + rawName);
   }
-  if (Buffer.byteLength(rawName, 'utf8') > WORKSHOP_ZIP_LIMITS.maxNameBytes) {
+  if (Buffer.byteLength(rawName, 'utf8') > limits.maxNameBytes) {
     throw new Error('压缩包文件名过长: ' + rawName.slice(0, 80));
   }
   const isDirectory = /\/$/.test(rawName);
@@ -906,7 +917,7 @@ function validateWorkshopZipEntry(entry, seenPaths) {
   if (!normalized || segments.some(part => !part || part === '.' || part === '..')) {
     throw new Error('压缩包包含越界或非规范路径: ' + rawName);
   }
-  if (segments.length > WORKSHOP_ZIP_LIMITS.maxDepth) {
+  if (segments.length > limits.maxDepth) {
     throw new Error('压缩包目录层级过深: ' + rawName);
   }
   const canonical = segments.join('/');
@@ -915,8 +926,8 @@ function validateWorkshopZipEntry(entry, seenPaths) {
   if (seenPaths) seenPaths.add(duplicateKey);
 
   const mode = (Number(entry.externalFileAttributes) >>> 16) & 0xffff;
-  if ((mode & 0xf000) === 0xa000) throw new Error('工坊包不允许包含符号链接: ' + rawName);
-  if ((Number(entry.generalPurposeBitFlag) & 1) !== 0) throw new Error('工坊包不允许加密条目: ' + rawName);
+  if ((mode & 0xf000) === 0xa000) throw new Error(label + '不允许包含符号链接: ' + rawName);
+  if ((Number(entry.generalPurposeBitFlag) & 1) !== 0) throw new Error(label + '不允许加密条目: ' + rawName);
 
   const compressedSize = Number(entry.compressedSize);
   const uncompressedSize = Number(entry.uncompressedSize);
@@ -924,26 +935,39 @@ function validateWorkshopZipEntry(entry, seenPaths) {
       !Number.isSafeInteger(uncompressedSize) || uncompressedSize < 0) {
     throw new Error('压缩包条目大小非法: ' + rawName);
   }
-  if (uncompressedSize > WORKSHOP_ZIP_LIMITS.maxFileBytes) {
-    throw new Error('工坊包单文件超过 128MB 上限: ' + rawName);
+  if (uncompressedSize > limits.maxFileBytes) {
+    throw new Error(label + '单文件声明解压体积超过上限: ' + rawName);
   }
-  if (!isDirectory && uncompressedSize >= WORKSHOP_ZIP_LIMITS.compressionRatioMinBytes) {
+  if (!isDirectory && uncompressedSize >= limits.compressionRatioMinBytes) {
     const ratio = compressedSize > 0 ? uncompressedSize / compressedSize : Infinity;
-    if (ratio > WORKSHOP_ZIP_LIMITS.maxCompressionRatio) {
-      throw new Error('工坊包条目压缩比异常，疑似 ZIP 炸弹: ' + rawName);
+    if (ratio > limits.maxCompressionRatio) {
+      throw new Error(label + '条目压缩比异常，疑似 ZIP 炸弹: ' + rawName);
     }
   }
   if (!isDirectory) {
     const ext = path.posix.extname(canonical).toLowerCase();
-    if (BLOCKED_PACK_EXTS.has(ext)) throw new Error('工坊包含有禁止类型文件: ' + rawName);
-    if (!ALLOWED_PACK_EXTS.has(ext)) throw new Error('工坊包含有未允许的文件类型: ' + rawName);
+    if (blockedExts && blockedExts.has(ext)) throw new Error(label + '包含有禁止类型文件: ' + rawName);
+    if (allowedExts && !allowedExts.has(ext)) throw new Error(label + '包含有未允许的文件类型: ' + rawName);
   }
   return { rawName, canonical, isDirectory, compressedSize, uncompressedSize };
 }
 
-async function preflightWorkshopZip(zipPath) {
+function validateWorkshopZipEntry(entry, seenPaths) {
+  return validateZipEntryByPolicy(entry, seenPaths, WORKSHOP_ZIP_LIMITS, BLOCKED_PACK_EXTS, ALLOWED_PACK_EXTS, '工坊包');
+}
+
+function validateHotUpdateZipEntry(entry, seenPaths) {
+  return validateZipEntryByPolicy(entry, seenPaths, HOT_UPDATE_ZIP_LIMITS, null, ALLOWED_HOT_UPDATE_EXTS, '热更新包');
+}
+
+async function preflightCheckedZip(zipPath, limits, validateEntry, label) {
+  limits = limits || WORKSHOP_ZIP_LIMITS;
+  label = label || '压缩包';
   const archiveStat = fs.statSync(zipPath);
-  if (!archiveStat.isFile()) throw new Error('工坊压缩包不是普通文件');
+  if (!archiveStat.isFile()) throw new Error(label + '不是普通文件');
+  if (limits.maxArchiveBytes && archiveStat.size > limits.maxArchiveBytes) {
+    throw new Error(label + '压缩体积超过上限');
+  }
   const zip = await openWorkshopZip(zipPath);
   return new Promise((resolve, reject) => {
     const seenPaths = new Set();
@@ -974,13 +998,13 @@ async function preflightWorkshopZip(zipPath) {
     zip.on('entry', entry => {
       try {
         entries += 1;
-        if (entries > WORKSHOP_ZIP_LIMITS.maxEntries) throw new Error('工坊包文件数量超过 4096 上限');
-        const info = validateWorkshopZipEntry(entry, seenPaths);
+        if (entries > limits.maxEntries) throw new Error(label + '文件数量超过上限');
+        const info = validateEntry(entry, seenPaths);
         if (!info.isDirectory) {
           files += 1;
           totalBytes += info.uncompressedSize;
-          if (!Number.isSafeInteger(totalBytes) || totalBytes > WORKSHOP_ZIP_LIMITS.maxTotalBytes) {
-            throw new Error('工坊包声明解压体积超过 250MB 上限');
+          if (!Number.isSafeInteger(totalBytes) || totalBytes > limits.maxTotalBytes) {
+            throw new Error(label + '声明解压体积超过上限');
           }
         }
         zip.readEntry();
@@ -989,15 +1013,25 @@ async function preflightWorkshopZip(zipPath) {
       }
     });
     zip.on('end', finish);
-    if (Number(zip.entryCount) > WORKSHOP_ZIP_LIMITS.maxEntries) {
-      fail(new Error('工坊包文件数量超过 4096 上限'));
+    if (Number(zip.entryCount) > limits.maxEntries) {
+      fail(new Error(label + '文件数量超过上限'));
       return;
     }
     zip.readEntry();
   });
 }
 
-function streamWorkshopEntry(zip, entry, target, counters) {
+function preflightWorkshopZip(zipPath) {
+  return preflightCheckedZip(zipPath, WORKSHOP_ZIP_LIMITS, validateWorkshopZipEntry, '工坊包');
+}
+
+function preflightHotUpdateZip(zipPath) {
+  return preflightCheckedZip(zipPath, HOT_UPDATE_ZIP_LIMITS, validateHotUpdateZipEntry, '热更新包');
+}
+
+function streamCheckedZipEntry(zip, entry, target, counters, limits, label) {
+  limits = limits || WORKSHOP_ZIP_LIMITS;
+  label = label || '压缩包';
   return new Promise((resolve, reject) => {
     zip.openReadStream(entry, (openError, readStream) => {
       if (openError) { reject(openError); return; }
@@ -1007,10 +1041,10 @@ function streamWorkshopEntry(zip, entry, target, counters) {
       readStream.on('data', chunk => {
         entryBytes += chunk.length;
         counters.totalBytes += chunk.length;
-        if (entryBytes > WORKSHOP_ZIP_LIMITS.maxFileBytes ||
-            counters.totalBytes > WORKSHOP_ZIP_LIMITS.maxTotalBytes ||
+        if (entryBytes > limits.maxFileBytes ||
+            counters.totalBytes > limits.maxTotalBytes ||
             entryBytes > Number(entry.uncompressedSize)) {
-          quotaError = new Error('工坊包实际解压体积超过配额: ' + entry.fileName);
+          quotaError = new Error(label + '实际解压体积超过配额: ' + entry.fileName);
           readStream.destroy(quotaError);
         }
       });
@@ -1023,7 +1057,7 @@ function streamWorkshopEntry(zip, entry, target, counters) {
         }
         if (entryBytes !== Number(entry.uncompressedSize)) {
           try { fs.rmSync(target, { force: true }); } catch (_) {}
-          reject(new Error('工坊包条目解压大小与中央目录不一致: ' + entry.fileName));
+          reject(new Error(label + '条目解压大小与中央目录不一致: ' + entry.fileName));
           return;
         }
         resolve(entryBytes);
@@ -1032,7 +1066,9 @@ function streamWorkshopEntry(zip, entry, target, counters) {
   });
 }
 
-async function extractWorkshopZipStreamed(zipPath, temp, expected) {
+async function extractCheckedZipStreamed(zipPath, temp, expected, limits, validateEntry, label) {
+  limits = limits || WORKSHOP_ZIP_LIMITS;
+  label = label || '压缩包';
   const zip = await openWorkshopZip(zipPath);
   return new Promise((resolve, reject) => {
     const seenPaths = new Set();
@@ -1049,7 +1085,7 @@ async function extractWorkshopZipStreamed(zipPath, temp, expected) {
       if (settled) return;
       if (counters.entries !== expected.entries || counters.files !== expected.files ||
           counters.totalBytes !== expected.totalBytes) {
-        fail(new Error('工坊包在预检后发生变化，拒绝安装'));
+        fail(new Error(label + '在预检后发生变化，拒绝安装'));
         return;
       }
       settled = true;
@@ -1062,8 +1098,8 @@ async function extractWorkshopZipStreamed(zipPath, temp, expected) {
       let info;
       try {
         counters.entries += 1;
-        if (counters.entries > WORKSHOP_ZIP_LIMITS.maxEntries) throw new Error('工坊包文件数量超过 4096 上限');
-        info = validateWorkshopZipEntry(entry, seenPaths);
+        if (counters.entries > limits.maxEntries) throw new Error(label + '文件数量超过上限');
+        info = validateEntry(entry, seenPaths);
         const target = path.resolve(temp, info.canonical);
         if (!isInsideDir(temp, target)) throw new Error('压缩包包含越界路径: ' + info.rawName);
         if (info.isDirectory) {
@@ -1073,7 +1109,7 @@ async function extractWorkshopZipStreamed(zipPath, temp, expected) {
         }
         fs.mkdirSync(path.dirname(target), { recursive: true });
         counters.files += 1;
-        streamWorkshopEntry(zip, entry, target, counters).then(() => {
+        streamCheckedZipEntry(zip, entry, target, counters, limits, label).then(() => {
           if (!settled) zip.readEntry();
         }, fail);
       } catch (error) {
@@ -1083,6 +1119,14 @@ async function extractWorkshopZipStreamed(zipPath, temp, expected) {
     zip.on('end', finish);
     zip.readEntry();
   });
+}
+
+function extractWorkshopZipStreamed(zipPath, temp, expected) {
+  return extractCheckedZipStreamed(zipPath, temp, expected, WORKSHOP_ZIP_LIMITS, validateWorkshopZipEntry, '工坊包');
+}
+
+function extractHotUpdateZipStreamed(zipPath, temp, expected) {
+  return extractCheckedZipStreamed(zipPath, temp, expected, HOT_UPDATE_ZIP_LIMITS, validateHotUpdateZipEntry, '热更新包');
 }
 
 async function extractZipToTemp(zipPath) {
@@ -1106,15 +1150,26 @@ async function extractZipToTemp(zipPath) {
   }
 }
 
-function extractZipToTempChecked(zipPath, prefix) {
+async function extractZipToTempChecked(zipPath, prefix) {
+  // 热更新 ZIP 同样先完整扫描中央目录，再以实际字节配额逐项流式解压。
+  // 这里不能调用 adm-zip：受污染的 size header 会在业务配额检查前触发巨量 Buffer 分配。
+  const preflight = await preflightHotUpdateZip(zipPath);
+  const currentStat = fs.statSync(zipPath);
+  if (currentStat.size !== preflight.archiveSize || currentStat.mtimeMs !== preflight.archiveMtimeMs) {
+    throw new Error('热更新包在预检后发生变化，拒绝安装');
+  }
   const temp = createTempDir(prefix || 'tianming-hot-');
-  const zip = new AdmZip(zipPath);
-  zip.getEntries().forEach(entry => {
-    const target = path.resolve(temp, entry.entryName);
-    if (!isInsideDir(temp, target)) throw new Error('压缩包包含越界路径: ' + entry.entryName);
-  });
-  zip.extractAllTo(temp, true);
-  return temp;
+  try {
+    await extractHotUpdateZipStreamed(zipPath, temp, preflight);
+    return temp;
+  } catch (error) {
+    try {
+      if (isInsideDir(os.tmpdir(), temp) && path.basename(temp).indexOf(prefix || 'tianming-hot-') === 0) {
+        fs.rmSync(temp, { recursive: true, force: true });
+      }
+    } catch (_) {}
+    throw error;
+  }
 }
 
 function createScenarioPackFromJson(jsonPath) {
@@ -2174,7 +2229,7 @@ async function installHotUpdateFromFeed_zipFallback(feedInfo, options = {}) {
       throw new Error('hot update package sha256 mismatch');
     }
     sendHotUpdateStatus('downloaded', { version: feedInfo.version, size: fileInfo.size, sha256: fileInfo.sha256 });
-    tempDir = extractZipToTempChecked(zipPath, 'tianming-hot-');
+    tempDir = await extractZipToTempChecked(zipPath, 'tianming-hot-');
     sendHotUpdateStatus('verifying', { version: feedInfo.version });
     const installed = installHotUpdateFromBundle(tempDir, {
       feedUrl: feedInfo.feedUrl,
@@ -3866,6 +3921,9 @@ if (TEST_MODE) {
     preflightWorkshopZip,
     extractZipToTemp,
     WORKSHOP_ZIP_LIMITS,
+    preflightHotUpdateZip,
+    extractZipToTempChecked,
+    HOT_UPDATE_ZIP_LIMITS,
     verifyAuthenticatedUpdateDocument,
     getCurrentComparableVersion,
     getPackageBuildVersion,

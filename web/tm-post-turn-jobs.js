@@ -417,6 +417,57 @@ function _ensurePostTurnJobQueue() {
 
 // Phase 4 P3·post-turn DAG·_enqueuePostTurnJob 支持 dependsOn:['sc28', 'sc25c'] 正式 API
 // 与 _awaitPostTurnJobsById 互补·dependsOn 在入队时声明·调度时自动 await 前置
+function _runPostTurnJobAttempt(job) {
+  if (!job) return Promise.resolve({ ok: false, error: new Error('post-turn job missing') });
+  if (job.status === 'running' && job.promise) return job.promise;
+  if (job.status === 'done' && job.promise) return job.promise;
+  if (job.status === 'failed' && job.promise) return job.promise;
+  job.status = 'running';
+  job.failureObserved = false;
+  job.attempts = (job.attempts || 0) + 1;
+  job.promise = Promise.resolve().then(job.run).then(function(value) {
+    job.status = 'done';
+    job.value = value;
+    job.lastError = null;
+    return { ok: true, value: value, attempt: job.attempts };
+  }, function(error) {
+    job.lastError = error;
+    job.status = job.attempts < job.maxAttempts ? 'retryable' : 'failed';
+    try {
+      if (typeof recordMemoryDiagnostic === 'function') recordMemoryDiagnostic('post_turn_job', {
+        id: job.id,
+        status: job.status,
+        attempt: job.attempts,
+        maxAttempts: job.maxAttempts,
+        error: String(error && error.message || error)
+      });
+    } catch(_) {}
+    _dbg('[PostTurn]' + job.id + ' failed attempt ' + job.attempts + '/' + job.maxAttempts + ':', error);
+    return { ok: false, error: error, attempt: job.attempts, retryable: job.status === 'retryable' };
+  });
+  return job.promise;
+}
+
+function _postTurnJobPromiseForWait(job) {
+  if (!job) return Promise.resolve({ ok: false, error: new Error('post-turn job missing') });
+  // 第一次等待负责把失败明确交给调用者；只有该失败已经被观察过，下一次保存/过回合才重建 Promise。
+  if (job.status === 'retryable' && job.failureObserved) return _runPostTurnJobAttempt(job);
+  if (!job.promise) return _runPostTurnJobAttempt(job);
+  return job.promise;
+}
+
+function _collectPostTurnFailures(waiting, results) {
+  var failed = [];
+  (results || []).forEach(function(result, index) {
+    if (result && result.ok === false) {
+      var job = waiting[index];
+      if (job) job.failureObserved = true;
+      failed.push({ id: job && job.id, error: result.error, retryable: !!result.retryable, attempt: result.attempt });
+    }
+  });
+  return failed;
+}
+
 function _enqueuePostTurnJob(id, fn, opts) {
   var q = _ensurePostTurnJobQueue();
   if (!q || typeof fn !== 'function') return null;
@@ -429,15 +480,24 @@ function _enqueuePostTurnJob(id, fn, opts) {
     if (!_tmWorldLeaseCurrent(lease)) return { stale: true };
     return fn(lease);
   };
-  var p = Promise.resolve().then(wrappedFn).then(function(value) {
-    return { ok: true, value: value };
-  }, function(e) {
-    try { if (typeof recordMemoryDiagnostic === 'function') recordMemoryDiagnostic('post_turn_job', { id: id, status: 'fail', error: String(e && e.message || e) }); } catch(_) {}
-    _dbg('[PostTurn]' + id + ' failed:', e);
-    return { ok: false, error: e };
-  });
-  q.pending.push({ id: id, promise: p, dependsOn: dependsOn, lease: lease });
-  return p;
+  var configuredAttempts = Number(opts && opts.maxAttempts);
+  var maxAttempts = Number.isFinite(configuredAttempts) && configuredAttempts > 0
+    ? Math.floor(configuredAttempts)
+    : ((_isCriticalPostTurnJob({ id: id }) || _isSaveRequiredPostTurnJob({ id: id })) ? 3 : 2);
+  var job = {
+    id: id,
+    run: wrappedFn,
+    promise: null,
+    dependsOn: dependsOn,
+    lease: lease,
+    status: 'pending',
+    attempts: 0,
+    maxAttempts: maxAttempts,
+    failureObserved: false,
+    lastError: null
+  };
+  q.pending.push(job);
+  return _runPostTurnJobAttempt(job);
 }
 
 async function _awaitPostTurnJobsById(ids) {
@@ -447,11 +507,8 @@ async function _awaitPostTurnJobsById(ids) {
     return job && ids.indexOf(job.id) >= 0;
   });
   if (!waiting.length) return;
-  var results = await Promise.all(waiting.map(function(job) { return job.promise; }));
-  var failed = [];
-  results.forEach(function(result, index) {
-    if (result && result.ok === false) failed.push({ id: waiting[index].id, error: result.error });
-  });
+  var results = await Promise.all(waiting.map(_postTurnJobPromiseForWait));
+  var failed = _collectPostTurnFailures(waiting, results);
   if (failed.length) {
     var error = new Error('关键后台任务失败：' + failed.map(function(item) { return item.id; }).join(', '));
     error.postTurnFailures = failed;
@@ -521,11 +578,8 @@ async function _awaitPostTurnJobs(opts) {
   var waiting = criticalOnly ? pending.filter(_isCriticalPostTurnJob) : pending.slice();
   var remaining = criticalOnly ? pending.filter(function(job) { return !_isCriticalPostTurnJob(job); }) : [];
   _dbg('[PostTurn] wait', waiting.length, criticalOnly ? 'critical jobs' : 'jobs', 'detach', remaining.length);
-  var results = waiting.length ? await Promise.all(waiting.map(function(job) { return job.promise; })) : [];
-  var failed = [];
-  results.forEach(function(result, index) {
-    if (result && result.ok === false) failed.push({ id: waiting[index].id, error: result.error });
-  });
+  var results = waiting.length ? await Promise.all(waiting.map(_postTurnJobPromiseForWait)) : [];
+  var failed = _collectPostTurnFailures(waiting, results);
   if (failed.length) {
     try {
       if (typeof recordMemoryDiagnostic === 'function') recordMemoryDiagnostic('post_turn_await', {
@@ -567,11 +621,8 @@ async function _awaitPostTurnJobsForSave(ids) {
   }
   if (!wanted.length) return;
   _dbg('[PostTurn] wait before save:', wanted.map(function(job) { return job.id || '?'; }).join(','));
-  var results = await Promise.all(wanted.map(function(job) { return job.promise; }));
-  var failed = [];
-  results.forEach(function(result, index) {
-    if (result && result.ok === false) failed.push({ id: wanted[index].id, error: result.error });
-  });
+  var results = await Promise.all(wanted.map(_postTurnJobPromiseForWait));
+  var failed = _collectPostTurnFailures(wanted, results);
   if (failed.length) {
     var error = new Error('保存前关键后台任务失败：' + failed.map(function(item) { return item.id; }).join(', '));
     error.postTurnFailures = failed;

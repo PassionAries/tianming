@@ -183,6 +183,33 @@ async function main() {
   check(typeMismatch.applied.failed.filter((row) => /type does not match existing schema/.test(row.reason || '')).length === 3,
     'each schema type mismatch must be visible in applied.failed');
 
+  // B4. 粗粒度类型相同也不能整体覆盖结构；否则完整人物→{}、战争数组→畸形数组仍可绕过领域 sink。
+  ctx.GM = baseGM({
+    chars: [{ name: '真人', id: 'char-real', alive: true, loyalty: 60 }],
+    activeWars: [{ id: 'war-1', attacker: '甲', defender: '乙', status: 'active' }],
+    custom: { score: 40, settings: { enabled: true, nested: { level: 1 } } }
+  });
+  const structuralMismatch = ctx.applyAITurnChanges({
+    changes: [
+      { path: 'custom.score', op: 'delta', delta: 5, reason: '合法兄弟项也须回滚' },
+      { path: 'chars.真人', op: 'set', value: {} },
+      { path: 'activeWars', op: 'set', value: [{ wrongField: true }] },
+      { path: 'custom.settings', op: 'merge', value: { enabled: 'yes' } }
+    ]
+  });
+  check(structuralMismatch.ok === false && structuralMismatch.rolledBack === true, 'structured set/merge schema violations must reject the whole batch');
+  check(ctx.GM.custom.score === 40 && ctx.GM.chars[0].alive === true && ctx.GM.activeWars[0].id === 'war-1',
+    'structured schema rejection must restore every sibling mutation');
+  check(structuralMismatch.applied.failed.some((row) => /structured set requires/.test(row.reason || '')) &&
+    structuralMismatch.applied.failed.some((row) => /merge value type does not match/.test(row.reason || '')),
+    'structured replacement and nested merge type errors must remain observable');
+
+  const compatibleMerge = ctx.applyAITurnChanges({
+    changes: [{ path: 'custom.settings', op: 'merge', value: { enabled: false, nested: { level: 2 } } }]
+  });
+  check(compatibleMerge.ok === true && ctx.GM.custom.settings.enabled === false && ctx.GM.custom.settings.nested.level === 2,
+    'schema-compatible scalar leaf merge must remain available');
+
   // C. faction leader 与 army commander 的最终 sink 只接受真实活人，并同步所有镜像。
   ctx.GM = baseGM({
     chars: [{ name: '韩旷', id: 'char_hankuang', alive: true }, { name: '亡将', alive: false, dead: true }],

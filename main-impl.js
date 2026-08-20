@@ -258,12 +258,51 @@ function desktopSaveMetadataPath(storageKey) {
   return path.join(SAVE_METADATA_DIR, storageKey + '.json');
 }
 
-function desktopSavePayloadStamp(stats) {
-  if (!stats || !Number.isFinite(Number(stats.size)) || !Number.isFinite(Number(stats.mtimeMs))) return null;
-  return { size: Number(stats.size), mtimeMs: Number(stats.mtimeMs) };
+function desktopSaveGenerationPath(storageKey) {
+  storageKey = String(storageKey == null ? '' : storageKey);
+  if (!storageKey || storageKey.length > 140 || path.basename(storageKey) !== storageKey || /[<>:"/\\|?*]/.test(storageKey)) {
+    throw new Error('存档代际标识非法');
+  }
+  return path.join(SAVE_METADATA_DIR, storageKey + '.generation.json');
 }
 
-function desktopSaveMetadataFromData(data, storageKey, payloadStats) {
+function normalizeDesktopSaveGeneration(value) {
+  value = String(value || '').trim();
+  return value.length >= 16 && value.length <= 160 && /^[A-Za-z0-9._:-]+$/.test(value) ? value : '';
+}
+
+function desktopSaveGenerationFromData(data) {
+  return normalizeDesktopSaveGeneration(data && data.__tmDesktopSaveGeneration);
+}
+
+function prepareDesktopSavePayload(data, requestedGeneration) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('存档正文必须是对象');
+  // 每次正文提交必须轮换 generation；不得复用 renderer 随存档带回的旧值，
+  // 否则同尺寸快速覆盖且 sidecar 写失败时，旧元数据仍可能被误认作当前。
+  const generation = normalizeDesktopSaveGeneration(requestedGeneration) || crypto.randomUUID();
+  // generation 必须位于 JSON 前缀，列表页只读一个很小的正文头即可将 sidecar/commit marker
+  // 绑定到真实 payload，而不必解析几十至数百 MB 的世界正文。
+  const preparedData = Object.assign({ __tmDesktopSaveGeneration: generation }, data);
+  preparedData.__tmDesktopSaveGeneration = generation;
+  return { data: preparedData, generation, text: JSON.stringify(preparedData) };
+}
+
+function desktopSavePayloadStamp(stats) {
+  if (!stats || !Number.isFinite(Number(stats.size)) || !Number.isFinite(Number(stats.mtimeMs))) return null;
+  const stamp = { size: Number(stats.size), mtimeMs: Number(stats.mtimeMs) };
+  if (Number.isFinite(Number(stats.ctimeMs))) stamp.ctimeMs = Number(stats.ctimeMs);
+  if (Number.isFinite(Number(stats.birthtimeMs))) stamp.birthtimeMs = Number(stats.birthtimeMs);
+  if (Number.isFinite(Number(stats.ino))) stamp.ino = Number(stats.ino);
+  if (Number.isFinite(Number(stats.dev))) stamp.dev = Number(stats.dev);
+  return stamp;
+}
+
+function desktopSavePayloadStampMatches(recorded, current) {
+  if (!recorded || !current || recorded.size !== current.size || recorded.mtimeMs !== current.mtimeMs) return false;
+  return ['ctimeMs', 'birthtimeMs', 'ino', 'dev'].every(key => recorded[key] == null || recorded[key] === current[key]);
+}
+
+function desktopSaveMetadataFromData(data, storageKey, payloadStats, payloadGeneration) {
   const envelope = data && data.__tmAutoSaveEnvelope === 1 ? data.data : data;
   const meta = envelope && envelope._saveMeta && typeof envelope._saveMeta === 'object' ? envelope._saveMeta : {};
   const state = envelope && envelope.gameState;
@@ -275,7 +314,7 @@ function desktopSaveMetadataFromData(data, storageKey, payloadStats) {
     ? '__autosave__'
     : clean(meta.name || meta.saveName || (gm && gm.saveName) || storageKey, 200);
   return {
-    version: 2,
+    version: 3,
     storageKey: String(storageKey),
     name: canonicalName,
     meta: {
@@ -288,14 +327,69 @@ function desktopSaveMetadataFromData(data, storageKey, payloadStats) {
       timelineId: clean(gm && gm._timelineId, 128)
     },
     payload: desktopSavePayloadStamp(payloadStats),
+    payloadGeneration: normalizeDesktopSaveGeneration(payloadGeneration) || desktopSaveGenerationFromData(data),
     metadataGeneration: crypto.randomUUID(),
     updatedAt: Date.now()
   };
 }
 
-function writeDesktopSaveMetadata(storageKey, data, payloadStats) {
-  const record = desktopSaveMetadataFromData(data, storageKey, payloadStats);
-  if (!record.payload) throw new Error('存档 sidecar 缺少正文版本戳');
+function writeDesktopSaveGeneration(storageKey, payloadGeneration) {
+  payloadGeneration = normalizeDesktopSaveGeneration(payloadGeneration);
+  if (!payloadGeneration) throw new Error('存档正文缺少真实代际');
+  writeJsonAtomic(desktopSaveGenerationPath(storageKey), {
+    version: 1,
+    storageKey: String(storageKey),
+    payloadGeneration,
+    updatedAt: Date.now()
+  });
+  return payloadGeneration;
+}
+
+function invalidateDesktopSaveGeneration(storageKey) {
+  try { fs.unlinkSync(desktopSaveGenerationPath(storageKey)); }
+  catch (error) { if (!(error && error.code === 'ENOENT')) throw error; }
+}
+
+async function readDesktopSavePayloadGeneration(payloadPath) {
+  let handle = null;
+  try {
+    handle = await fs.promises.open(payloadPath, 'r');
+    const buffer = Buffer.alloc(512);
+    const result = await handle.read(buffer, 0, buffer.length, 0);
+    const prefix = buffer.subarray(0, result.bytesRead).toString('utf8').replace(/^\uFEFF/, '');
+    const match = /^\s*\{\s*"__tmDesktopSaveGeneration"\s*:\s*"([A-Za-z0-9._:-]{16,160})"/.exec(prefix);
+    return normalizeDesktopSaveGeneration(match && match[1]);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return '';
+    console.warn('[save-metadata] payload generation read failed:', payloadPath, error && error.message || error);
+    return '';
+  } finally {
+    if (handle) {
+      try { await handle.close(); } catch (_) {}
+    }
+  }
+}
+
+async function readDesktopSaveGeneration(storageKey, payloadPath) {
+  try {
+    const raw = await fs.promises.readFile(desktopSaveGenerationPath(storageKey), 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.version !== 1 || String(parsed.storageKey || '') !== String(storageKey)) return '';
+    const markerGeneration = normalizeDesktopSaveGeneration(parsed.payloadGeneration);
+    const payloadGeneration = await readDesktopSavePayloadGeneration(payloadPath);
+    return markerGeneration && markerGeneration === payloadGeneration ? markerGeneration : '';
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return '';
+    console.warn('[save-metadata] generation read failed:', storageKey, error && error.message || error);
+    return '';
+  }
+}
+
+function writeDesktopSaveMetadata(storageKey, data, payloadStats, payloadGeneration) {
+  payloadGeneration = normalizeDesktopSaveGeneration(payloadGeneration) || desktopSaveGenerationFromData(data);
+  const record = desktopSaveMetadataFromData(data, storageKey, payloadStats, payloadGeneration);
+  if (!record.payload || !record.payloadGeneration) throw new Error('存档 sidecar 缺少正文版本戳或代际');
+  writeDesktopSaveGeneration(storageKey, payloadGeneration);
   writeJsonAtomic(desktopSaveMetadataPath(storageKey), record);
   return record;
 }
@@ -304,15 +398,17 @@ function fallbackDesktopSaveName(storageKey) {
   return String(storageKey || '').replace(/--[0-9a-f]{16}$/i, '') || '未命名存档';
 }
 
-async function readDesktopSaveMetadata(storageKey, payloadStats) {
+async function readDesktopSaveMetadata(storageKey, payloadStats, payloadGeneration) {
   try {
     const raw = await fs.promises.readFile(desktopSaveMetadataPath(storageKey), 'utf-8');
     const parsed = JSON.parse(raw);
-    if (!parsed || (parsed.version !== 1 && parsed.version !== 2) || String(parsed.storageKey || '') !== String(storageKey)) return null;
+    if (!parsed || ![1, 2, 3].includes(parsed.version) || String(parsed.storageKey || '') !== String(storageKey)) return null;
     const current = desktopSavePayloadStamp(payloadStats);
     const recorded = desktopSavePayloadStamp(parsed.payload);
-    parsed._payloadCurrent = !!(parsed.version === 2 && current && recorded
-      && recorded.size === current.size && recorded.mtimeMs === current.mtimeMs);
+    const currentGeneration = normalizeDesktopSaveGeneration(payloadGeneration);
+    parsed._payloadCurrent = !!(parsed.version === 3 && currentGeneration
+      && normalizeDesktopSaveGeneration(parsed.payloadGeneration) === currentGeneration
+      && desktopSavePayloadStampMatches(recorded, current));
     return parsed;
   } catch (error) {
     if (error && error.code === 'ENOENT') return null;
@@ -2856,10 +2952,12 @@ ipcMain.handle('save-project', async (event, { filename, data }) => {
     ensureSaveDir();
     const key = stableStorageKey(filename);
     const filepath = path.join(SAVE_DIR, key + '.json');
+    const prepared = prepareDesktopSavePayload(data);
     // 2026-06-10·紧凑写盘:同 auto-save·缩进占体积 55%·手动存档同步砍半
-    writeFileAtomic(filepath, JSON.stringify(data), 'utf-8');
+    invalidateDesktopSaveGeneration(key);
+    writeFileAtomic(filepath, prepared.text, 'utf-8');
     let metadataWarning = '';
-    try { writeDesktopSaveMetadata(key, data, fs.statSync(filepath)); }
+    try { writeDesktopSaveMetadata(key, prepared.data, fs.statSync(filepath), prepared.generation); }
     catch (metadataError) {
       metadataWarning = String(metadataError && metadataError.message || metadataError);
       console.warn('[save-project] 正文已保存，sidecar 写入失败:', metadataWarning);
@@ -2876,7 +2974,14 @@ ipcMain.handle('load-project', async (event, filename) => {
     const ref = saveFileRef(filename);
     if (!fs.existsSync(ref.path)) return { success: false, error: '文件不存在' };
     const data = JSON.parse(fs.readFileSync(ref.path, 'utf-8'));
-    try { writeDesktopSaveMetadata(ref.key, data, fs.statSync(ref.path)); } catch (metadataError) {
+    let payloadGeneration = desktopSaveGenerationFromData(data);
+    if (!payloadGeneration) {
+      const prepared = prepareDesktopSavePayload(data);
+      payloadGeneration = prepared.generation;
+      invalidateDesktopSaveGeneration(ref.key);
+      writeFileAtomic(ref.path, prepared.text, 'utf-8');
+    }
+    try { writeDesktopSaveMetadata(ref.key, data, fs.statSync(ref.path), payloadGeneration); } catch (metadataError) {
       console.warn('[load-project] sidecar 回填失败:', metadataError && metadataError.message || metadataError);
     }
     return { success: true, data, storageKey: ref.key };
@@ -2897,7 +3002,8 @@ ipcMain.handle('list-saves', async () => {
         const fp = path.join(SAVE_DIR, f);
         const stats = await fs.promises.stat(fp);
         const storageKey = f.replace(/\.json$/i, '');
-        const sidecar = await readDesktopSaveMetadata(storageKey, stats);
+        const payloadGeneration = await readDesktopSaveGeneration(storageKey, fp);
+        const sidecar = await readDesktopSaveMetadata(storageKey, stats, payloadGeneration);
         const sidecarCurrent = !!(sidecar && sidecar._payloadCurrent === true);
         const _saveMeta = sidecarCurrent && sidecar.meta || null;
         return {
@@ -2933,7 +3039,8 @@ ipcMain.handle('list-save-timeline-refs', async () => {
       const storageKey = entry.name.replace(/\.json$/i, '');
       const payloadPath = path.join(SAVE_DIR, entry.name);
       const stats = await fs.promises.stat(payloadPath);
-      const sidecar = await readDesktopSaveMetadata(storageKey, stats);
+      const payloadGeneration = await readDesktopSaveGeneration(storageKey, payloadPath);
+      const sidecar = await readDesktopSaveMetadata(storageKey, stats, payloadGeneration);
       if (!(sidecar && sidecar._payloadCurrent === true && sidecar.meta)) {
         complete = false;
         continue;
@@ -2959,6 +3066,8 @@ ipcMain.handle('delete-save', async (event, filename) => {
     if (fs.existsSync(ref.path)) fs.unlinkSync(ref.path);
     try { fs.unlinkSync(desktopSaveMetadataPath(ref.key)); }
     catch (metadataError) { if (!(metadataError && metadataError.code === 'ENOENT')) throw metadataError; }
+    try { fs.unlinkSync(desktopSaveGenerationPath(ref.key)); }
+    catch (generationError) { if (!(generationError && generationError.code === 'ENOENT')) throw generationError; }
     return { success: true };
   } catch (e) {
     return { success: false, error: e.message };
@@ -3043,19 +3152,21 @@ ipcMain.handle('auto-save', (event, payload) => {
       const diskPayload = requestToken
         ? { __tmAutoSaveEnvelope: 1, sessionToken: requestToken, data: data }
         : data;
+      const prepared = prepareDesktopSavePayload(diskPayload);
       // 2026-06-10·紧凑写盘:pretty-print 缩进占存档体积 55%(实测 113MB→48MB)·机器读写无人看·JSON.parse 两者通吃
-      await fs.promises.writeFile(tmpFile, JSON.stringify(diskPayload), 'utf-8');
+      await fs.promises.writeFile(tmpFile, prepared.text, 'utf-8');
       // writeFile 在途可跨越 renderer 的同步 rotate；rename 前必须按 sidecar 再验。
       if (requestToken && !autoSaveSessionMatches(requestToken)) {
         try { await fs.promises.unlink(tmpFile); } catch (_) {}
         return { success: false, stale: true, error: '自动存档写入期间已跨档失效', sessionToken: getAutoSaveSessionToken() };
       }
+      invalidateDesktopSaveGeneration('__autosave__');
       await fs.promises.rename(tmpFile, AUTO_SAVE_FILE);
       // rotate 可与原子 rename 的系统调用并行完成；即使旧 envelope 已落下，sidecar 不匹配也使其不可恢复。
       if (requestToken && !autoSaveSessionMatches(requestToken)) {
         return { success: false, stale: true, error: '自动存档提交期间已跨档失效', sessionToken: getAutoSaveSessionToken() };
       }
-      try { writeDesktopSaveMetadata('__autosave__', diskPayload, await fs.promises.stat(AUTO_SAVE_FILE)); }
+      try { writeDesktopSaveMetadata('__autosave__', prepared.data, await fs.promises.stat(AUTO_SAVE_FILE), prepared.generation); }
       catch (metadataError) { console.warn('[auto-save] sidecar 写入失败:', metadataError && metadataError.message || metadataError); }
       return { success: true, sessionToken: requestToken || '' };
     } catch (e) {
@@ -3068,6 +3179,7 @@ ipcMain.handle('auto-save', (event, payload) => {
 
 ipcMain.handle('load-auto-save', async () => {
   try {
+    await autoSaveWriteQueue;
     if (!fs.existsSync(AUTO_SAVE_FILE)) return { success: false };
     const parsed = JSON.parse(fs.readFileSync(AUTO_SAVE_FILE, 'utf-8'));
     if (parsed && parsed.__tmAutoSaveEnvelope === 1) {
@@ -3078,13 +3190,27 @@ ipcMain.handle('load-auto-save', async () => {
       if (!fileToken || fileToken !== currentToken) {
         return { success: false, stale: true, error: '自动存档属于已失效的旧局' };
       }
-      try { writeDesktopSaveMetadata('__autosave__', parsed, fs.statSync(AUTO_SAVE_FILE)); }
+      let payloadGeneration = desktopSaveGenerationFromData(parsed);
+      if (!payloadGeneration) {
+        const prepared = prepareDesktopSavePayload(parsed);
+        payloadGeneration = prepared.generation;
+        invalidateDesktopSaveGeneration('__autosave__');
+        writeFileAtomic(AUTO_SAVE_FILE, prepared.text, 'utf-8');
+      }
+      try { writeDesktopSaveMetadata('__autosave__', parsed, fs.statSync(AUTO_SAVE_FILE), payloadGeneration); }
       catch (metadataError) { console.warn('[load-auto-save] sidecar 回填失败:', metadataError && metadataError.message || metadataError); }
       return { success: true, data: parsed.data, sessionToken: fileToken };
     }
     // 首次升级前的无 envelope 旧档仅在 sidecar 尚不存在时兼容读取。
     if (getAutoSaveSessionToken()) return { success: false, stale: true, error: '旧自动存档已被新局失效' };
-    try { writeDesktopSaveMetadata('__autosave__', parsed, fs.statSync(AUTO_SAVE_FILE)); }
+    let payloadGeneration = desktopSaveGenerationFromData(parsed);
+    if (!payloadGeneration) {
+      const prepared = prepareDesktopSavePayload(parsed);
+      payloadGeneration = prepared.generation;
+      invalidateDesktopSaveGeneration('__autosave__');
+      writeFileAtomic(AUTO_SAVE_FILE, prepared.text, 'utf-8');
+    }
+    try { writeDesktopSaveMetadata('__autosave__', parsed, fs.statSync(AUTO_SAVE_FILE), payloadGeneration); }
     catch (metadataError) { console.warn('[load-auto-save] legacy sidecar 回填失败:', metadataError && metadataError.message || metadataError); }
     return { success: true, data: parsed, sessionToken: '' };
   } catch (e) {
@@ -4051,6 +4177,9 @@ if (TEST_MODE) {
     isStrictRendererUpgrade,
     sanitize,
     desktopSaveMetadataFromData,
+    prepareDesktopSavePayload,
+    desktopSavePayloadStampMatches,
+    normalizeDesktopSaveGeneration,
     fallbackDesktopSaveName,
     downloadRemoteFile,
     sha256FileStream,

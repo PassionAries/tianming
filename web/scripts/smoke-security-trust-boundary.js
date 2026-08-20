@@ -181,15 +181,25 @@ async function main() {
   check(bodyError && /大小上限/.test(bodyError.message), 'undeclared oversized response is rejected after bounded read');
 
   const hostileSaveName = '<img src=x onerror="globalThis.__desktopSaveOwned=1">';
-  const sidecar = T.desktopSaveMetadataFromData({
+  const preparedSidecarPayload = T.prepareDesktopSavePayload({
     _saveMeta: { name: hostileSaveName, scenario: '<script>owned()</script>', turn: 0 },
     gameState: { turn: 0, _campaignId: 'campaign-sidecar', _timelineId: 'tml_sidecar_12345678', privatePayload: 'must-not-leak' }
-  }, 'manual-save-key', { size: 123, mtimeMs: 456 });
+  }, 'payload-generation-sidecar-0001');
+  const sidecar = T.desktopSaveMetadataFromData(preparedSidecarPayload.data, 'manual-save-key',
+    { size: 123, mtimeMs: 456, ctimeMs: 457, ino: 9 }, preparedSidecarPayload.generation);
   check(sidecar.name === hostileSaveName && sidecar.meta.turn === 0
     && sidecar.meta.campaignId === 'campaign-sidecar' && sidecar.meta.timelineId === 'tml_sidecar_12345678'
-    && sidecar.version === 2 && sidecar.payload.size === 123 && sidecar.payload.mtimeMs === 456
+    && sidecar.version === 3 && sidecar.payload.size === 123 && sidecar.payload.mtimeMs === 456
+    && sidecar.payload.ctimeMs === 457 && sidecar.payload.ino === 9
+    && sidecar.payloadGeneration === 'payload-generation-sidecar-0001'
+    && preparedSidecarPayload.data.__tmDesktopSaveGeneration === sidecar.payloadGeneration
+    && preparedSidecarPayload.text.startsWith('{"__tmDesktopSaveGeneration":"payload-generation-sidecar-0001"')
     && !Object.prototype.hasOwnProperty.call(sidecar, 'gameState') && !Object.prototype.hasOwnProperty.call(sidecar.meta, 'privatePayload'),
-  'desktop save sidecar preserves display text and identity but never copies world payloads');
+  'desktop save sidecar preserves display text and identity, binds a payload generation, and never copies world payloads');
+  const rotatedPayload = T.prepareDesktopSavePayload({ __tmDesktopSaveGeneration: 'old-payload-generation-0001', marker: true });
+  check(rotatedPayload.generation !== 'old-payload-generation-0001'
+    && rotatedPayload.text.startsWith('{"__tmDesktopSaveGeneration":"' + rotatedPayload.generation + '"'),
+  'every desktop save commit rotates the embedded payload generation instead of trusting a renderer-carried old value');
   const autoSidecar = T.desktopSaveMetadataFromData({ gameState: { turn: 3, saveName: '玩家档名' } }, '__autosave__');
   check(autoSidecar.name === '__autosave__', 'desktop canonical autosave remains hidden from manual-save listings');
 
@@ -242,7 +252,8 @@ async function main() {
   const listSavesEnd = mainSource.indexOf("ipcMain.handle('delete-save'", listSavesStart);
   const listSavesSource = mainSource.slice(listSavesStart, listSavesEnd);
   check(listSavesStart >= 0 && listSavesEnd > listSavesStart
-    && /readDesktopSaveMetadata\(storageKey, stats\)/.test(listSavesSource)
+    && /readDesktopSaveGeneration\(storageKey, fp\)/.test(listSavesSource)
+    && /readDesktopSaveMetadata\(storageKey, stats, payloadGeneration\)/.test(listSavesSource)
     && !/readFileSync\(fp|JSON\.parse\(raw/.test(listSavesSource),
   'desktop save listing reads lightweight sidecars without parsing every world payload');
   const desktopSaveDir = path.join(TMP, 'userData', 'saves');
@@ -251,16 +262,24 @@ async function main() {
   for (let i = 0; i < 100; i++) {
     const storageKey = 'large-save-' + i;
     const payloadPath = path.join(desktopSaveDir, storageKey + '.json');
-    fs.writeFileSync(payloadPath, '<invalid-json>' + 'x'.repeat(64 * 1024));
+    const payloadGeneration = 'fixture-payload-generation-' + String(i).padStart(4, '0');
+    fs.writeFileSync(payloadPath, '{"__tmDesktopSaveGeneration":"' + payloadGeneration + '","invalid":"' + 'x'.repeat(64 * 1024));
     const payloadStats = fs.statSync(payloadPath);
     fs.writeFileSync(path.join(desktopMetadataDir, storageKey + '.json'), JSON.stringify({
-      version: 2,
+      version: 3,
       storageKey,
       name: '大型存档 ' + i,
       meta: { scenario: '测试剧本', turn: i, campaignId: 'campaign-sidecars', timelineId: 'tml_sidecars_12345678' },
-      payload: { size: payloadStats.size, mtimeMs: payloadStats.mtimeMs },
+      payload: {
+        size: payloadStats.size, mtimeMs: payloadStats.mtimeMs, ctimeMs: payloadStats.ctimeMs,
+        birthtimeMs: payloadStats.birthtimeMs, ino: payloadStats.ino, dev: payloadStats.dev
+      },
+      payloadGeneration,
       metadataGeneration: 'fixture-' + i,
       updatedAt: Date.now()
+    }));
+    fs.writeFileSync(path.join(desktopMetadataDir, storageKey + '.generation.json'), JSON.stringify({
+      version: 1, storageKey, payloadGeneration, updatedAt: Date.now()
     }));
   }
   const listHandler = ipcHandlers.get('list-saves');
@@ -277,13 +296,13 @@ async function main() {
   check(listed && listed.success === true && listed.files.length === 100
     && listed.files.every(file => file.meta && file.meta.timelineId === 'tml_sidecars_12345678'),
   '100 desktop saves list successfully even when every full payload is deliberately unparsable');
-  check(readPaths.length === 100 && readPaths.every(file => path.dirname(file) === path.resolve(desktopMetadataDir)),
-    'desktop listing reads only 100 small sidecars and zero world payload files');
+  check(readPaths.length === 200 && readPaths.every(file => path.dirname(file) === path.resolve(desktopMetadataDir)),
+    'desktop listing reads only small sidecar/generation records plus bounded payload prefixes, never full world payloads');
   const refHandler = ipcHandlers.get('list-save-timeline-refs');
   const refs = await refHandler({ senderFrame: mainFrame, sender: { mainFrame } });
   check(refs && refs.success === true && refs.complete === true && refs.refs.length === 100
     && refs.refs.every(ref => ref.campaignId === 'campaign-sidecars' && ref.timelineId === 'tml_sidecars_12345678'),
-  'desktop timeline reference registry is complete when every payload has a current v2 sidecar');
+    'desktop timeline reference registry is complete when every payload has a current v3 sidecar generation');
 
   const stalePayloadPath = path.join(desktopSaveDir, 'large-save-0.json');
   fs.appendFileSync(stalePayloadPath, 'new-generation');
@@ -294,6 +313,16 @@ async function main() {
     'payload overwrite with a failed sidecar update is shown as metadataPending, never as trusted stale metadata');
   check(staleRefs && staleRefs.success === true && staleRefs.complete === false,
     'timeline GC reference registry fails closed while any desktop sidecar is missing or stale');
+
+  const sameStampPayloadPath = path.join(desktopSaveDir, 'large-save-1.json');
+  const sameStampBefore = fs.statSync(sameStampPayloadPath);
+  const sameStampBytes = fs.readFileSync(sameStampPayloadPath);
+  fs.writeFileSync(sameStampPayloadPath, Buffer.alloc(sameStampBytes.length, 0x79));
+  fs.utimesSync(sameStampPayloadPath, sameStampBefore.atime, sameStampBefore.mtime);
+  const sameStampListed = await listHandler({ senderFrame: mainFrame, sender: { mainFrame } });
+  const sameStampRow = sameStampListed.files.find(file => file.storageKey === 'large-save-1');
+  check(sameStampRow && sameStampRow.metadataPending === true && sameStampRow.meta === null,
+    'same-size payload replacement with restored mtime is rejected by the embedded payload generation');
   check(mainSource.includes("redirect: 'manual'") && mainSource.includes('dns.lookup(hostname, { all: true')
     && mainSource.includes("credentials: 'omit'") && mainSource.includes("referrerPolicy: 'no-referrer'"), 'network proxy revalidates DNS/redirects and omits ambient credentials');
   check(mainSource.includes('WORKSHOP_CATALOG_AUTHORIZATIONS.get(packageUrl)')

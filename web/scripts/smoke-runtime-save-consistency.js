@@ -30,6 +30,7 @@ const mainImpl = fs.readFileSync(path.join(ROOT, '..', 'main-impl.js'), 'utf8');
 const preloadImpl = fs.readFileSync(path.join(ROOT, '..', 'preload-impl.js'), 'utf8');
 const startPatch = fs.readFileSync(path.join(ROOT, 'tm-patches-start.js'), 'utf8');
 const integrationBridge = fs.readFileSync(path.join(ROOT, 'tm-integration-bridge.js'), 'utf8');
+const hujiEngine = fs.readFileSync(path.join(ROOT, 'tm-huji-engine.js'), 'utf8');
 
 console.log('=== 1. unified save snapshot builder ===');
 const snapshotSrc = sliceFn(lifecycle, 'function _autoSaveSnapshotGM(');
@@ -112,10 +113,10 @@ ok(/_tmRebindRuntimeWorld\(\{ strict: true, integration: false/.test(lifecycle)
   && /_tmRunCriticalLoadStep\('loaded world validation'/.test(lifecycle),
   'state-mutating load migrations propagate into the load transaction instead of failing open');
 ok(/function aggregateRegionsToVariables\(options\)[\s\S]*?var strict = options\.strict === true/.test(integrationBridge)
-  && /var advanceSimulation = options\.advanceSimulation === true/.test(integrationBridge)
-  && /function migrateAndRebind\(options\)[\s\S]*?advanceSimulation: false/.test(integrationBridge)
-  && /function tick\(options\)[\s\S]*?advanceSimulation: true/.test(integrationBridge),
-  'integration bridge separates pure load rebind from the one explicit simulation tick');
+  && !/function _naturalPopulationGrowth\(/.test(integrationBridge)
+  && !/function _accumulateCorruptionFromNpcs\(/.test(integrationBridge)
+  && /function tick\(options\)[\s\S]*?aggregateRegionsToVariables\(\{ strict: strict \}\)/.test(integrationBridge),
+  'integration bridge is aggregation-only; Huji and CorruptionEngine own simulation time');
 ok(/function _tmStripSaveTransportMetadata\([\s\S]*?\^__tm\(\?:Desktop\|AutoSave\)/.test(lifecycle)
   && /_tmStripSaveTransportMetadata\(_incomingP\)/.test(lifecycle)
   && /_tmStripSaveTransportMetadata\(_incomingGM\)/.test(lifecycle),
@@ -246,15 +247,22 @@ async function runDynamicLeaseSmokes() {
       console, Promise, JSON, Math, Number, Object, Array, Date,
       GM: {
         turn: 10, adminHierarchy: { player: { divisions: [division] } },
-        population: { national: { mouths: 50000000, households: 10000000 } },
+        population: {
+          national: { mouths: 50000000, households: 10000000, ding: 12500000 },
+          dynamics: { birthRateBase: 0.03, deathRateBase: 0.022, yearlyLog: [] }
+        },
         minxin: { trueIndex: 60 }, corruption: { trueIndex: 30, overall: 30, byDept: {} },
         chars: [{ name: '测试官', officialTitle: '知县', integrity: 0, resources: { private: { money: 500000 } } }]
       },
-      P: {}, TM: { errors: { capture() {}, captureSilent() {} } }
+      P: { conf: { populationBottomUpEnabled: false }, time: { year: 1627 } },
+      TM: { errors: { capture() {}, captureSilent() {} } },
+      turnsForMonths(months) { return months; },
+      _getDaysPerTurn() { return 30; }
     };
     ctx.window = ctx;
     vm.createContext(ctx);
     vm.runInContext(integrationBridge, ctx);
+    vm.runInContext(hujiEngine, ctx);
     ctx.IntegrationBridge.migrateAndRebind({ strict: true }); // 一次性 schema 对齐
     function gameplayState() {
       const leaf = ctx.GM.adminHierarchy.player.divisions[0];
@@ -270,14 +278,18 @@ async function runDynamicLeaseSmokes() {
       ctx.IntegrationBridge.migrateAndRebind({ strict: true });
     }
     const afterTenLoads = gameplayState();
+    ctx.HujiEngine.tick({ turn: ctx.GM.turn, monthRatio: 1, strict: true });
+    const afterHuji = gameplayState();
     ctx.IntegrationBridge.tick({ strict: true });
-    const afterTick = gameplayState();
-    ok(afterTenLoads === stable && afterTick !== stable,
-      '读档—保存循环 10 次不推进人口/腐败/承载，唯一 tick 才推进玩法状态');
+    const afterBridge = gameplayState();
+    ok(afterTenLoads === stable && afterHuji !== stable && afterBridge === afterHuji,
+      '读档—保存循环不推进玩法，Huji 单次推进且 IntegrationBridge 不再重复结算');
   }
   {
     const helpers = [
       sliceFn(lifecycle, 'function _tmStripSaveTransportMetadata('),
+      sliceFn(lifecycle, 'function _tmStableIdMissing('),
+      sliceFn(lifecycle, 'function _tmCollectAdminDivisionEntries('),
       sliceFn(lifecycle, 'function _tmValidateUniqueStableIds('),
       sliceFn(lifecycle, 'function _tmValidateFiniteWorldNumbers('),
       sliceFn(lifecycle, 'function _tmValidateLoadedWorld(')
@@ -669,6 +681,7 @@ async function runDynamicLeaseSmokes() {
         data.__tmDesktopSaveGeneration = data.__tmDesktopSaveGeneration || 'payload-generation-test-0001';
         return { data, generation: data.__tmDesktopSaveGeneration, text: JSON.stringify(data) };
       },
+      async readJsonFileOffMainThread(file) { return JSON.parse(fakeFs.readFileSync(file, 'utf8')); },
       desktopSaveGenerationFromData(data) { return data && data.__tmDesktopSaveGeneration || ''; },
       invalidateDesktopSaveGeneration() {},
       writeDesktopSaveMetadata() {}

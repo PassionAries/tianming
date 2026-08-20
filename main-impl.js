@@ -18,6 +18,7 @@ const yauzl = require('yauzl');
 const { pipeline } = require('stream');
 const { autoUpdater } = require('electron-updater');
 const { createTurnDataCommitter } = require('./main-turn-data-commit.js');
+const { readJsonFileOffMainThread } = require('./main-json-file.js');
 
 // ============================================================
 //  基本配置
@@ -2973,7 +2974,7 @@ ipcMain.handle('load-project', async (event, filename) => {
   try {
     const ref = saveFileRef(filename);
     if (!fs.existsSync(ref.path)) return { success: false, error: '文件不存在' };
-    const data = JSON.parse(fs.readFileSync(ref.path, 'utf-8'));
+    const data = await readJsonFileOffMainThread(ref.path);
     // 读取必须保持只读：旧 payload 没有 generation 时仍立即允许加载，绝不能
     // 因目录只读、磁盘已满或同步软件锁文件而把合法存档判成加载失败。generation
     // 与 sidecar 在下一次真正保存时升级；列表此前保持 metadataPending。
@@ -3175,7 +3176,7 @@ ipcMain.handle('load-auto-save', async () => {
   try {
     await autoSaveWriteQueue;
     if (!fs.existsSync(AUTO_SAVE_FILE)) return { success: false };
-    const parsed = JSON.parse(fs.readFileSync(AUTO_SAVE_FILE, 'utf-8'));
+    const parsed = await readJsonFileOffMainThread(AUTO_SAVE_FILE);
     if (parsed && parsed.__tmAutoSaveEnvelope === 1) {
       const fileToken = normalizeAutoSaveSessionToken(parsed.sessionToken);
       let currentToken = getAutoSaveSessionToken();

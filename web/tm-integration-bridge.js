@@ -401,20 +401,24 @@
   }
 
   function _updateLegacyProxies(G) {
-    // 为旧代码兼容，把 byRegion 对象定义为 division 的代理
+    // 为旧代码兼容，把 byRegion 对象重建为当前 division 的代理。
+    // 必须每次构造新表并原子替换；在旧对象上增量写会让已删除、合并或改 ID
+    // 的区划继续作为“幽灵地区”参与后续户籍与财政结算。
     var topLevel = getTopLevelDivisions(G.adminHierarchy, 'player');
     if (!G.population) G.population = {};
-    if (!G.population.byRegion) G.population.byRegion = {};
     if (!G.minxin) G.minxin = {};
-    if (!G.minxin.byRegion) G.minxin.byRegion = {};
     if (!G.fiscal) G.fiscal = {};
-    if (!G.fiscal.regions) G.fiscal.regions = {};
     if (!G.environment) G.environment = {};
-    if (!G.environment.byRegion) G.environment.byRegion = {};
+    var nextPopulation = {};
+    var nextMinxin = {};
+    var nextFiscal = {};
+    var nextEnvironment = {};
+    var nextRegionMap = {};
 
     topLevel.forEach(function(div) {
+      var id = String(div.id);
       // byRegion.<id> 指向 division
-      G.population.byRegion[div.id] = div.population;
+      nextPopulation[id] = div.population;
       // minxin byRegion 必须包含 .index（热力图读此字段）
       if (div.minxinDetails) {
         if (div.minxinDetails.index === undefined) {
@@ -424,62 +428,22 @@
         var initialMx = _bridgeFiniteNumber(div.minxin, _bridgeFiniteNumber(div.minxinLocal, 60));
         div.minxinDetails = { index: initialMx, trueIndex: initialMx, perceivedIndex: initialMx, trend: 'stable' };
       }
-      G.minxin.byRegion[div.id] = div.minxinDetails;
-      G.fiscal.regions[div.id] = div.fiscal;
-      G.environment.byRegion[div.id] = div.environment;
+      nextMinxin[id] = div.minxinDetails;
+      nextFiscal[id] = div.fiscal;
+      nextEnvironment[id] = div.environment;
+      nextRegionMap[id] = div;
     });
 
-    // regionMap（公库绑定解析用）
-    if (!G.regionMap) G.regionMap = {};
-    topLevel.forEach(function(div) { G.regionMap[div.id] = div; });
+    G.population.byRegion = nextPopulation;
+    G.minxin.byRegion = nextMinxin;
+    G.fiscal.regions = nextFiscal;
+    G.environment.byRegion = nextEnvironment;
+    G.regionMap = nextRegionMap; // 公库绑定解析用
   }
 
   // ═══════════════════════════════════════════════════════════════════
   //  聚合：各区划 → 七变量
   // ═══════════════════════════════════════════════════════════════════
-
-  // NPC 腐败传导：按职位归部门，按私产/integrity 反推
-  function _accumulateCorruptionFromNpcs(G) {
-    if (!Array.isArray(G.chars)) return;
-    var buckets = { central:[], provincial:[], county:[], military:[], palace:[], technical:[] };
-    G.chars.forEach(function(c) {
-      if (!c || c.alive === false || !c.officialTitle) return;
-      var title = c.officialTitle;
-      var dept;
-      if (/节度|布政|巡抚|总督|观察/.test(title)) dept = 'provincial';
-      else if (/知府|知州|通判/.test(title)) dept = 'provincial';
-      else if (/知县|县令|县丞|主簿/.test(title)) dept = 'county';
-      else if (/将军|都督|提督|总兵|副将|参将|游击|守备/.test(title)) dept = 'military';
-      else if (/内.*(监|府|侍)|大内|奉宸|御前|掌印/.test(title)) dept = 'palace';
-      else if (/翰林|钦天|太医|司天|太史|学士/.test(title)) dept = 'technical';
-      else dept = 'central';
-      if (buckets[dept]) buckets[dept].push(c);
-    });
-    // 每部门根据成员 integrity 反推：低 integrity + 高私产 = 腐败 +
-    Object.keys(buckets).forEach(function(d) {
-      var arr = buckets[d];
-      if (arr.length === 0) return;
-      var sumDelta = 0;
-      arr.forEach(function(c) {
-        var integ = c.integrity != null ? c.integrity : 50;
-        var wealthScore = c.resources && c.resources.private ? ((c.resources.private.money||0) / 100000) : 0;
-        // integrity 50 为中位，+1 偏离 → +1 腐败
-        sumDelta += (50 - integ) * 0.02 + Math.min(5, wealthScore) * 0.4;
-      });
-      var avgDelta = sumDelta / arr.length;
-      var current = G.corruption.byDept[d];
-      current = typeof current === 'object'
-        ? (typeof current.true === 'number' ? current.true : (typeof current.overall === 'number' ? current.overall : 30))
-        : (typeof current === 'number' ? current : 30);
-      // 缓慢朝目标靠拢（0.05/tick）
-      var next = Math.max(0, Math.min(100, current + avgDelta * 0.05));
-      G.corruption.byDept[d] = next;
-      if (!G.corruption.subDepts) G.corruption.subDepts = {};
-      var subDept = { palace: 'imperial' }[d] || d;
-      if (!G.corruption.subDepts[subDept]) G.corruption.subDepts[subDept] = {};
-      G.corruption.subDepts[subDept].true = next;
-    });
-  }
 
   // 父节点数据 = 子叶之和（递归）——"父 >= 子之和"约束在实践中退化为等号
   function _reconcileParentToChildren(nodes) {
@@ -550,69 +514,14 @@
     });
   }
 
-  // 人口自然增长（每回合月度漂移；战争/瘟疫/灾荒由 AI 叠加）
-  // 2026-07-03 三重错位根治：旧版①只扫顶层一层不递归——嵌套树增的是省父节点，
-  // 随后 _reconcileParentToChildren 把父=Σ子(未增长)覆盖回去→增长被抹平；
-  // ②只写 div.population 而 aggregate 优先读 div.populationDetail→全国总数不动；
-  // ③households/ding 按 5/0.25 硬比率重算·抹掉剧本自设户丁结构。
-  // 修：递归到叶(无 children 才施增)·population 与 populationDetail 双账同写·
-  // 户/丁按本叶既有数等比缩放；顺带按人口/承载重算 environment.currentLoad(活承载·旧版恒静)。
-  function _naturalPopulationGrowth() {
-    var G = global.GM;
-    if (!G || !G.adminHierarchy) return;
-    function growLeaf(div) {
-      if (!div) return;
-      var kids = div.children || div.divisions;
-      if (kids && kids.length) { kids.forEach(growLeaf); return; }
-      var pop = (div.population && typeof div.population === 'object') ? div.population : null;
-      var pd = (div.populationDetail && typeof div.populationDetail === 'object') ? div.populationDetail : null;
-      var mouths = (pd && pd.mouths > 0) ? pd.mouths : (pop && pop.mouths > 0 ? pop.mouths : 0);
-      if (!(mouths > 0)) return;
-      var base = 0.0008;  // 0.08% / 月（年 ~1%）
-      var mx = _bridgeFiniteNumber(div.minxin, _bridgeFiniteNumber(div.minxinLocal, 60));
-      var cr = (typeof div.corruption === 'number') ? div.corruption : 30;
-      var load = div.environment && typeof div.environment.currentLoad === 'number' ? div.environment.currentLoad : 0.5;
-      // 民心高 +0.0004，腐败高 -0.0003，负载 >0.9 -0.0005
-      var adj = (mx - 50) / 100 * 0.0004 - (cr - 30) / 100 * 0.0003 - (load > 0.9 ? 0.0005 : 0);
-      var rate = Math.max(-0.003, Math.min(0.003, base + adj));
-      [pop, pd].forEach(function (acc) {
-        if (!acc || !(acc.mouths > 0)) return;
-        acc.mouths = Math.max(0, acc.mouths + Math.round(acc.mouths * rate));
-        if (acc.households > 0) acc.households = Math.max(0, acc.households + Math.round(acc.households * rate));
-        if (acc.ding > 0) acc.ding = Math.max(0, acc.ding + Math.round(acc.ding * rate));
-      });
-      // 活承载：负载随人口重算·容量以 environment.carrying / 历史上限为准·无账不动
-      var cc = (div.carryingCapacity && typeof div.carryingCapacity === 'object') ? div.carryingCapacity : null;
-      var cap = Number(div.environment && div.environment.carrying) || Number(cc && cc.historicalCap) || 0;
-      if (cap > 0 && div.environment && typeof div.environment === 'object') {
-        var mNow = (pd && pd.mouths > 0) ? pd.mouths : (pop ? pop.mouths : 0);
-        div.environment.currentLoad = Math.max(0, Math.min(1.5, mNow / cap));
-      }
-    }
-    Object.keys(G.adminHierarchy).forEach(function(fk) {
-      var divs = G.adminHierarchy[fk] && G.adminHierarchy[fk].divisions || [];
-      divs.forEach(growLeaf);
-    });
-  }
-
   function aggregateRegionsToVariables(options) {
     options = options || {};
     var strict = options.strict === true;
-    // 聚合/重绑定必须是幂等操作。只有每回合唯一的 tick() 才能推进人口与
-    // NPC 腐败；读档、首局初始化、UI 刷新和 AI 前后的派生汇总一律不得
-    // 偷走一个“时间步”。旧实现把 strict（错误传播）误当成了模拟开关，
-    // 导致每次读档都增长人口并改变腐败。
-    var advanceSimulation = options.advanceSimulation === true;
+    // 融合桥只做幂等 schema/代理/派生汇总。人口时间推进唯一归 HujiEngine，
+    // 腐败时间推进唯一归 CorruptionEngine；否则同一回合会出现双生产者，且
+    // 融合桥旧固定步长还会无视 daysPerTurn。
     var G = global.GM;
     if (!G) return;
-
-    // 0. 人口自然漂移（在汇总之前）
-    if (advanceSimulation) {
-      try { _naturalPopulationGrowth(); } catch(_e) {
-        (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_e, 'bridge] natPopGrowth') : console.warn('[bridge] natPopGrowth', _e);
-        if (strict) throw _e;
-      }
-    }
 
     var topLevel = getTopLevelDivisions(G.adminHierarchy, 'player');
     if (topLevel.length === 0) return;
@@ -717,11 +626,6 @@
         if (G.corruption.byDept.military === undefined)  G.corruption.byDept.military  = Math.round(avgProvCorr * 0.95);
         if (G.corruption.byDept.palace === undefined)    G.corruption.byDept.palace    = Math.round(avgProvCorr * 1.10);
         if (G.corruption.byDept.technical === undefined) G.corruption.byDept.technical = Math.round(avgProvCorr * 0.55);
-        // 按 NPC 派系/私产向上推高技术官外各部门（每周期）。派生汇总只读
-        // 现值；时间传导只允许 tick() 明确开启。
-        if (advanceSimulation) {
-          try { _accumulateCorruptionFromNpcs(G); } catch(_e) { if (strict) throw _e; }
-        }
         // overall = 6 部门平均
         var deptSum = 0, deptCnt = 0;
         Object.keys(G.corruption.byDept || {}).forEach(function(d) {
@@ -802,6 +706,7 @@
       (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_syncPhaseE, 'bridge] syncAuthorityPhases') : console.error('[bridge] syncAuthorityPhases', _syncPhaseE);
       if (strict) throw _syncPhaseE;
     }
+    _updateLegacyProxies(G);
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -839,7 +744,7 @@
     // 的兼容调用才允许记录后降级。
     var strict = options.strict !== false;
     try {
-      return aggregateRegionsToVariables({ strict: strict, advanceSimulation: true });
+      return aggregateRegionsToVariables({ strict: strict });
     } catch(e) {
       (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'bridge] aggregate:') : console.error('[bridge] aggregate:', e);
       if (strict) throw e;
@@ -851,12 +756,12 @@
     options = options || {};
     if (options.strict === true) {
       initializeFromLegacy();
-      aggregateRegionsToVariables({ strict: true, advanceSimulation: false });
+      aggregateRegionsToVariables({ strict: true });
       return true;
     }
     try { initializeFromLegacy(); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'bridge] init:') : console.error('[bridge] init:', e); }
     // 首次聚合/读档重绑定只对齐 schema、代理与派生汇总，不推进玩法时间。
-    try { aggregateRegionsToVariables({ advanceSimulation: false }); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-integration-bridge');}catch(_){}}
+    try { aggregateRegionsToVariables({ strict: false }); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-integration-bridge');}catch(_){}}
     return true;
   }
 

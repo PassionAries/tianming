@@ -74,9 +74,18 @@ console.log('=== save integrity audit ===');
   const blockEnd = lifecycle.indexOf('\ndoSaveGame=async function', blockStart);
   const snapshot = sliceFn(lifecycle, 'function _autoSaveSnapshotGM(');
   const builder = sliceFn(lifecycle, 'function _buildSaveState(');
+  const stableIdHelpers = [
+    'function _tmStableIdMissing(',
+    'function _tmStableIdHash(',
+    'function _tmCollectAdminDivisionEntries(',
+    'function _tmAssignMissingStableIds(',
+    'function _tmUniqueEntityIdByName(',
+    'function _tmBackfillStableForeignKeys(',
+    'function _tmMigrateCoreStableIds('
+  ].map(function(marker) { return sliceFn(lifecycle, marker); }).join('\n');
   ok(blockStart >= 0 && blockEnd > blockStart && snapshot && builder, '可抽取真实存档准备与 builder');
   const ctx = {
-    console, Date, Math, JSON, Object, Array,
+    console, Date, Math, JSON, Object, Array, Number, String, WeakSet,
     document: { getElementById: function() { return null; } },
     window: { addEventListener: function() {}, _tmNewCampaignId: function() { return 'tmc_test'; } },
     deepClone: function(v) { return JSON.parse(JSON.stringify(v)); },
@@ -97,7 +106,7 @@ console.log('=== save integrity audit ===');
   const gmBefore = JSON.stringify(ctx.GM);
   const pBefore = JSON.stringify(ctx.P);
   vm.createContext(ctx);
-  vm.runInContext(lifecycle.slice(blockStart, blockEnd) + '\n' + snapshot + '\n' + builder
+  vm.runInContext(stableIdHelpers + '\n' + lifecycle.slice(blockStart, blockEnd) + '\n' + snapshot + '\n' + builder
     + '\nthis.OUT=_buildSaveState({format:"idb"});', ctx);
   ok(JSON.stringify(ctx.GM) === gmBefore && JSON.stringify(ctx.P) === pBefore, '完整存档准备不修改 live GM/P');
   ok(!('_postTurnJobs' in ctx.OUT.GM) && ctx.GM._postTurnJobs.pending === true, '临时任务只从快照删除');

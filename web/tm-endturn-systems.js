@@ -78,7 +78,7 @@ async function _endTurn_updateSystems(timeRatio, zhengwen) {
   // 6.015 户口前移（方案联动总表推荐：腐败→户口→帑廪→内帑→民心→皇权→皇威）
   try {
     if (typeof HujiEngine !== 'undefined') {
-      HujiEngine.tick({ turn: GM.turn, monthRatio: monthRatio, _monthRatio: monthRatio });
+      HujiEngine.tick({ turn: GM.turn, monthRatio: monthRatio, _monthRatio: monthRatio, strict: true });
     }
   } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'endTurn] HujiEngine(early) 失败:') : console.error('[endTurn] HujiEngine(early) 失败:', e); throw e; }
   try {
@@ -190,7 +190,7 @@ async function _endTurn_updateSystems(timeRatio, zhengwen) {
   // 6.07 户口系统（已在 6.015 早跑，跳过）
   if (!GM._hujiEarlyTicked) try {
     if (typeof HujiEngine !== 'undefined') {
-      HujiEngine.tick({ turn: GM.turn, monthRatio: monthRatio, _monthRatio: monthRatio });
+      HujiEngine.tick({ turn: GM.turn, monthRatio: monthRatio, _monthRatio: monthRatio, strict: true });
     }
   } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'endTurn] HujiEngine.tick 失败:') : console.error('[endTurn] HujiEngine.tick 失败:', e); throw e; }
 

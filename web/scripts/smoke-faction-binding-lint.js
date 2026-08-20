@@ -81,6 +81,10 @@ const ALLOW_LINES = [
   // map-editor-to-game.js: division.factionId is scenario map ownership metadata inherited from autonomyHierarchy,
   // not character/army/province membership mutation.
   { file: 'map-editor-to-game.js', match: /nd\.factionId\s*=\s*facId/ },
+  // tm-save-lifecycle.js: one-time deterministic schema migration only backfills missing stable IDs.
+  // It must not emit membership-change events while an old world is still detached during load.
+  { file: 'tm-save-lifecycle.js', match: /ch\.factionId\s*=\s*id/ },
+  { file: 'tm-save-lifecycle.js', match: /region\.factionId\s*=\s*id/ },
   // tm-endturn-agent-mode.js·d 是维度标志对象(_activeDims)·d.faction=1 是「势力维度有活动」的开关位·非势力归属绑定
   { file: 'tm-endturn-agent-mode.js', match: /d\.faction\s*=\s*1/ },
   // tm-endturn-agent-write-tools.js·change 是工具 schema 透传对象·change.faction 传给 applyAIArmyChange·

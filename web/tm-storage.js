@@ -1028,6 +1028,70 @@ var TM_SaveDB = (function() {
     });
   }
 
+  function listQuarantinedChronicleRecords(campaignId) {
+    campaignId = String(campaignId || '');
+    if (!campaignId) return Promise.resolve([]);
+    return _ensureOpen().then(function() { return _listAll(CHRONICLE_RECORD_STORE); }).then(function(records) {
+      return (records || []).filter(function(record) {
+        return record && String(record.campaignId || '') === campaignId
+          && String(record.migrationState || '') === 'legacy-unassigned';
+      }).sort(function(a, b) {
+        return Number(a && a.year || 0) - Number(b && b.year || 0)
+          || Number(a && a.generatedAt || 0) - Number(b && b.generatedAt || 0);
+      });
+    });
+  }
+
+  function importQuarantinedChronicleRecord(input, options) {
+    input = input || {};
+    options = options || {};
+    if (input.confirmed !== true) return Promise.reject(new Error('导入隔离编年必须由玩家明确确认'));
+    var recordId = String(input.recordId || '');
+    var campaignId = String(input.campaignId || '');
+    var timelineId = String(input.timelineId || '');
+    var year = Number(input.year);
+    var sourceTurn = Number(input.sourceTurn);
+    var historyBasisHash = String(input.historyBasisHash || '');
+    if (!recordId || !campaignId || !_validTimelineId(timelineId)) return Promise.reject(new Error('隔离编年导入身份无效'));
+    if (!Number.isSafeInteger(year) || !Number.isSafeInteger(sourceTurn) || sourceTurn < 0 || !historyBasisHash) {
+      return Promise.reject(new Error('隔离编年导入缺少当前时间线历史基础'));
+    }
+    var targetId = _auxRecordId('chronicle', campaignId, timelineId + ':' + year);
+    return _ensureOpen().then(function() {
+      return Promise.all([_get(CHRONICLE_RECORD_STORE, recordId), _get(CHRONICLE_RECORD_STORE, targetId)]);
+    }).then(function(rows) {
+      var legacy = rows[0];
+      var existing = rows[1];
+      if (!legacy || String(legacy.campaignId || '') !== campaignId || String(legacy.migrationState || '') !== 'legacy-unassigned') {
+        throw new Error('隔离编年记录不存在或已失效');
+      }
+      if (Number(legacy.year) !== year) throw new Error('隔离编年年份不匹配');
+      if (existing) throw new Error('当前时间线已有该年度正史，未覆盖');
+      var chronicle;
+      try { chronicle = JSON.parse(JSON.stringify(legacy.chronicle)); }
+      catch (error) { throw new Error('隔离编年内容损坏：' + (error && error.message || error)); }
+      var claimed = {
+        id: targetId,
+        campaignId: campaignId,
+        timelineId: timelineId,
+        year: year,
+        sourceTurn: sourceTurn,
+        historyBasisHash: historyBasisHash,
+        requestId: 'legacy-import-' + Date.now(),
+        loadGeneration: Number(input.loadGeneration) || 0,
+        generatedAt: Number(legacy.generatedAt) || Date.now(),
+        chronicle: chronicle,
+        migrationState: 'legacy-confirmed',
+        legacySourceId: String(legacy.legacySourceId || legacy.id || ''),
+        importedAt: Date.now()
+      };
+      return _put(CHRONICLE_RECORD_STORE, claimed, 0, options.writeGuard).then(function(saved) {
+        if (saved !== true) return saved;
+        return claimed;
+      });
+    });
+  }
+
   function pruneChronicleRecords(campaignId, timelineId, maxYears) {
     maxYears = Math.max(1, Math.floor(Number(maxYears) || 20));
     return listChronicleRecords(campaignId, timelineId).then(function(records) {
@@ -1431,6 +1495,8 @@ var TM_SaveDB = (function() {
     clearPendingTurnDataPublishAtomic: clearPendingTurnDataPublishAtomic,
     saveChronicleRecord: saveChronicleRecord,
     listChronicleRecords: listChronicleRecords,
+    listQuarantinedChronicleRecords: listQuarantinedChronicleRecords,
+    importQuarantinedChronicleRecord: importQuarantinedChronicleRecord,
     pruneChronicleRecords: pruneChronicleRecords,
     saveTurnPublishReceipt: saveTurnPublishReceipt,
     listTurnPublishReceipts: listTurnPublishReceipts,

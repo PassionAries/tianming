@@ -176,6 +176,48 @@ var ChronicleSystem = {
   _inFlight: [],
   _requestSeq: 0,
 
+  capturePendingWorldJobs: function(targetGM) {
+    if (!targetGM) return [];
+    var seen = Object.create(null);
+    return ChronicleSystem._inFlight.filter(function(item) {
+      return item && item.gmRef === targetGM && Number.isSafeInteger(Number(item.year));
+    }).map(function(item) {
+      return { type: 'year-chronicle', year: Number(item.year), requestId: String(item.requestId || '') };
+    }).filter(function(job) {
+      var key = job.type + ':' + job.year;
+      if (seen[key]) return false;
+      seen[key] = true;
+      return true;
+    });
+  },
+
+  rearmWorldJobs: function(targetGM, targetP, jobs) {
+    jobs = Array.isArray(jobs) ? jobs : [];
+    if (!targetGM || !targetP || typeof GM === 'undefined' || typeof P === 'undefined' || GM !== targetGM || P !== targetP) {
+      return Promise.resolve({ ok: false, stale: true, rearmed: 0 });
+    }
+    var years = [];
+    var seen = Object.create(null);
+    jobs.forEach(function(job) {
+      var year = Number(job && job.year);
+      if (!job || job.type !== 'year-chronicle' || !Number.isSafeInteger(year) || seen[year]) return;
+      seen[year] = true;
+      years.push(year);
+    });
+    if (!years.length) return Promise.resolve({ ok: true, rearmed: 0 });
+
+    // 旧 Promise 的世界租约已经因 load generation 前移而失效；同时从去重表移除，
+    // 让恢复后的旧世界可以创建一份全新的请求，绝不复活旧 Promise。
+    ChronicleSystem._inFlight = ChronicleSystem._inFlight.filter(function(item) {
+      return !(item && item.gmRef === targetGM && seen[Number(item.year)]);
+    });
+    return Promise.all(years.map(function(year) {
+      return ChronicleSystem._tryGenerateYearChronicle(year);
+    })).then(function(results) {
+      return { ok: true, rearmed: years.length, results: results };
+    });
+  },
+
   // 兼容旧消费者的属性访问；真正数据始终落在当前 GM._chronicleSysState。
   get monthDrafts() { return _chronicleState(null, true).monthDrafts; },
   set monthDrafts(value) { _chronicleState(null, true).monthDrafts = (value && typeof value === 'object' && !Array.isArray(value)) ? value : {}; },
@@ -458,6 +500,155 @@ var ChronicleSystem = {
     return Object.keys(ChronicleSystem.yearChronicles).map(Number).filter(function(year) {
       return Number.isSafeInteger(year);
     }).sort(function(a, b) { return a - b; });
+  },
+
+  listQuarantinedLegacyRecords: function(targetGM) {
+    targetGM = targetGM || ((typeof GM !== 'undefined' && GM) ? GM : null);
+    if (!targetGM || !(typeof TM_SaveDB !== 'undefined' && TM_SaveDB &&
+      typeof TM_SaveDB.listQuarantinedChronicleRecords === 'function')) return Promise.resolve([]);
+    var campaignId = String(targetGM._campaignId || '');
+    return TM_SaveDB.listQuarantinedChronicleRecords(campaignId).then(function(records) {
+      return (records || []).map(function(record) {
+        var chronicle = record && record.chronicle && typeof record.chronicle === 'object' ? record.chronicle : {};
+        return {
+          id: String(record && record.id || ''),
+          campaignId: String(record && record.campaignId || ''),
+          timelineId: String(record && record.timelineId || ''),
+          year: Number(record && record.year),
+          generatedAt: Number(record && record.generatedAt) || 0,
+          migrationState: String(record && record.migrationState || ''),
+          content: String(chronicle.content || ''),
+          afterword: String(chronicle.afterword || '')
+        };
+      }).filter(function(record) {
+        return record.id && record.campaignId === campaignId && Number.isSafeInteger(record.year) && record.content;
+      });
+    });
+  },
+
+  exportQuarantinedLegacyRecord: function(record) {
+    record = record || {};
+    return JSON.stringify({
+      format: 'tianming-quarantined-chronicle-v1',
+      campaignId: String(record.campaignId || ''),
+      sourceTimelineId: String(record.timelineId || ''),
+      year: Number(record.year),
+      generatedAt: Number(record.generatedAt) || 0,
+      content: String(record.content || ''),
+      afterword: String(record.afterword || '')
+    }, null, 2);
+  },
+
+  importQuarantinedLegacyRecord: function(recordId, options) {
+    options = options || {};
+    if (options.confirmed !== true) return Promise.reject(new Error('必须由玩家明确确认后才能导入隔离编年'));
+    var targetGM = (typeof GM !== 'undefined') ? GM : null;
+    var targetP = (typeof P !== 'undefined') ? P : null;
+    if (!targetGM || !targetP || !(typeof TM_SaveDB !== 'undefined' && TM_SaveDB &&
+      typeof TM_SaveDB.importQuarantinedChronicleRecord === 'function')) return Promise.reject(new Error('隔离编年导入接口未就绪'));
+    var targetState = _chronicleState(targetGM, true);
+    var campaignId = String(targetGM._campaignId || '');
+    var timelineId = String(targetGM._timelineId || '');
+    var loadGen = (typeof window !== 'undefined' && window._tmLoadGen) || 0;
+    function leaseIsCurrent() {
+      return typeof GM !== 'undefined' && typeof P !== 'undefined' && GM === targetGM && P === targetP
+        && String((GM && GM._campaignId) || '') === campaignId && String((GM && GM._timelineId) || '') === timelineId
+        && (((typeof window !== 'undefined' && window._tmLoadGen) || 0) === loadGen)
+        && _chronicleState(targetGM, false) === targetState;
+    }
+    return ChronicleSystem.listQuarantinedLegacyRecords(targetGM).then(function(records) {
+      if (!leaseIsCurrent()) throw new Error('导入期间世界已切换');
+      var legacy = (records || []).find(function(record) { return record.id === String(recordId || ''); });
+      if (!legacy) throw new Error('隔离编年记录不存在');
+      if (targetState.yearChronicles[legacy.year]) throw new Error('当前时间线已有该年度正史，未覆盖');
+      var basis = targetState.yearBases[legacy.year] || _chronicleBuildYearBasis(targetGM, targetState, legacy.year);
+      if (!basis || !Number.isSafeInteger(Number(basis.sourceTurn)) || Number(basis.sourceTurn) <= 0
+        || Number(basis.sourceTurn) > Number(targetGM.turn || 0) || !String(basis.historyBasisHash || '')) {
+        throw new Error('当前时间线尚无该年度的完整历史基础，不能安全导入');
+      }
+      return TM_SaveDB.importQuarantinedChronicleRecord({
+        confirmed: true,
+        recordId: legacy.id,
+        campaignId: campaignId,
+        timelineId: timelineId,
+        year: legacy.year,
+        sourceTurn: basis.sourceTurn,
+        historyBasisHash: basis.historyBasisHash,
+        loadGeneration: loadGen
+      }, { writeGuard: leaseIsCurrent }).then(function(claimed) {
+        if (!claimed || !leaseIsCurrent()) throw new Error('隔离编年导入未提交');
+        var chronicle = JSON.parse(JSON.stringify(claimed.chronicle));
+        targetState.yearBases[legacy.year] = basis;
+        targetState.yearChronicles[legacy.year] = chronicle;
+        _chronicleTrimYears(targetState, targetP);
+        return { ok: true, year: legacy.year, record: claimed };
+      });
+    });
+  },
+
+  renderLegacyRecoveryNotice: function(parent) {
+    if (!parent || typeof document === 'undefined') return Promise.resolve(false);
+    ChronicleSystem._legacyRenderSeq = Number(ChronicleSystem._legacyRenderSeq || 0) + 1;
+    var seq = ChronicleSystem._legacyRenderSeq;
+    var targetGM = (typeof GM !== 'undefined') ? GM : null;
+    return ChronicleSystem.listQuarantinedLegacyRecords(targetGM).then(function(records) {
+      if (seq !== ChronicleSystem._legacyRenderSeq || !targetGM || typeof GM === 'undefined' || GM !== targetGM) return false;
+      var existing = parent.querySelector && parent.querySelector('.bn-legacy-chronicle-recovery');
+      if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+      if (!records.length) return false;
+      var box = document.createElement('section');
+      box.className = 'bn-legacy-chronicle-recovery';
+      box.style.cssText = 'margin:10px 0;padding:12px;border:1px solid rgba(201,160,69,.35);background:rgba(35,24,14,.72);';
+      var title = document.createElement('strong');
+      title.textContent = '发现 ' + records.length + ' 份升级隔离编年';
+      var help = document.createElement('p');
+      help.textContent = '这些旧记录无法自动证明分支归属。可先导出核对；只有当前时间线已有对应年度历史时，才允许确认导入。';
+      box.appendChild(title);
+      box.appendChild(help);
+      records.forEach(function(record) {
+        var row = document.createElement('div');
+        row.style.cssText = 'margin-top:8px;padding-top:8px;border-top:1px solid rgba(201,160,69,.18);';
+        var label = document.createElement('div');
+        label.textContent = record.year + ' 年 · ' + record.content.slice(0, 100);
+        var exportButton = document.createElement('button');
+        exportButton.type = 'button';
+        exportButton.textContent = '导出核对';
+        exportButton.addEventListener('click', function() {
+          var json = ChronicleSystem.exportQuarantinedLegacyRecord(record);
+          try {
+            var blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+            var url = URL.createObjectURL(blob);
+            var link = document.createElement('a');
+            link.href = url;
+            link.download = '隔离编年-' + record.year + '.json';
+            link.click();
+            setTimeout(function() { URL.revokeObjectURL(url); }, 0);
+          } catch (error) {
+            if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(json);
+          }
+        });
+        var importButton = document.createElement('button');
+        importButton.type = 'button';
+        importButton.textContent = '确认导入当前时间线';
+        importButton.addEventListener('click', function() {
+          if (typeof confirm === 'function' && !confirm('仅在你确认这份 ' + record.year + ' 年正史属于当前分支时导入。继续吗？')) return;
+          importButton.disabled = true;
+          ChronicleSystem.importQuarantinedLegacyRecord(record.id, { confirmed: true }).then(function(result) {
+            if (typeof toast === 'function') toast('已导入 ' + result.year + ' 年隔离编年');
+            if (typeof renderBiannian === 'function') renderBiannian(true);
+          }).catch(function(error) {
+            importButton.disabled = false;
+            if (typeof toast === 'function') toast('隔离编年未导入：' + (error && error.message || error));
+          });
+        });
+        row.appendChild(label);
+        row.appendChild(exportButton);
+        row.appendChild(importButton);
+        box.appendChild(row);
+      });
+      parent.appendChild(box);
+      return true;
+    });
   },
 
   /** 从独立轻量 store 合并当前战役已完成的年度正史。 */

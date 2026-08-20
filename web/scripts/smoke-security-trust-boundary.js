@@ -184,9 +184,10 @@ async function main() {
   const sidecar = T.desktopSaveMetadataFromData({
     _saveMeta: { name: hostileSaveName, scenario: '<script>owned()</script>', turn: 0 },
     gameState: { turn: 0, _campaignId: 'campaign-sidecar', _timelineId: 'tml_sidecar_12345678', privatePayload: 'must-not-leak' }
-  }, 'manual-save-key');
+  }, 'manual-save-key', { size: 123, mtimeMs: 456 });
   check(sidecar.name === hostileSaveName && sidecar.meta.turn === 0
     && sidecar.meta.campaignId === 'campaign-sidecar' && sidecar.meta.timelineId === 'tml_sidecar_12345678'
+    && sidecar.version === 2 && sidecar.payload.size === 123 && sidecar.payload.mtimeMs === 456
     && !Object.prototype.hasOwnProperty.call(sidecar, 'gameState') && !Object.prototype.hasOwnProperty.call(sidecar.meta, 'privatePayload'),
   'desktop save sidecar preserves display text and identity but never copies world payloads');
   const autoSidecar = T.desktopSaveMetadataFromData({ gameState: { turn: 3, saveName: '玩家档名' } }, '__autosave__');
@@ -241,7 +242,7 @@ async function main() {
   const listSavesEnd = mainSource.indexOf("ipcMain.handle('delete-save'", listSavesStart);
   const listSavesSource = mainSource.slice(listSavesStart, listSavesEnd);
   check(listSavesStart >= 0 && listSavesEnd > listSavesStart
-    && /readDesktopSaveMetadata\(storageKey\)/.test(listSavesSource)
+    && /readDesktopSaveMetadata\(storageKey, stats\)/.test(listSavesSource)
     && !/readFileSync\(fp|JSON\.parse\(raw/.test(listSavesSource),
   'desktop save listing reads lightweight sidecars without parsing every world payload');
   const desktopSaveDir = path.join(TMP, 'userData', 'saves');
@@ -249,12 +250,16 @@ async function main() {
   fs.mkdirSync(desktopMetadataDir, { recursive: true });
   for (let i = 0; i < 100; i++) {
     const storageKey = 'large-save-' + i;
-    fs.writeFileSync(path.join(desktopSaveDir, storageKey + '.json'), '<invalid-json>' + 'x'.repeat(64 * 1024));
+    const payloadPath = path.join(desktopSaveDir, storageKey + '.json');
+    fs.writeFileSync(payloadPath, '<invalid-json>' + 'x'.repeat(64 * 1024));
+    const payloadStats = fs.statSync(payloadPath);
     fs.writeFileSync(path.join(desktopMetadataDir, storageKey + '.json'), JSON.stringify({
-      version: 1,
+      version: 2,
       storageKey,
       name: '大型存档 ' + i,
       meta: { scenario: '测试剧本', turn: i, campaignId: 'campaign-sidecars', timelineId: 'tml_sidecars_12345678' },
+      payload: { size: payloadStats.size, mtimeMs: payloadStats.mtimeMs },
+      metadataGeneration: 'fixture-' + i,
       updatedAt: Date.now()
     }));
   }
@@ -274,6 +279,21 @@ async function main() {
   '100 desktop saves list successfully even when every full payload is deliberately unparsable');
   check(readPaths.length === 100 && readPaths.every(file => path.dirname(file) === path.resolve(desktopMetadataDir)),
     'desktop listing reads only 100 small sidecars and zero world payload files');
+  const refHandler = ipcHandlers.get('list-save-timeline-refs');
+  const refs = await refHandler({ senderFrame: mainFrame, sender: { mainFrame } });
+  check(refs && refs.success === true && refs.complete === true && refs.refs.length === 100
+    && refs.refs.every(ref => ref.campaignId === 'campaign-sidecars' && ref.timelineId === 'tml_sidecars_12345678'),
+  'desktop timeline reference registry is complete when every payload has a current v2 sidecar');
+
+  const stalePayloadPath = path.join(desktopSaveDir, 'large-save-0.json');
+  fs.appendFileSync(stalePayloadPath, 'new-generation');
+  const staleListed = await listHandler({ senderFrame: mainFrame, sender: { mainFrame } });
+  const staleRow = staleListed.files.find(file => file.storageKey === 'large-save-0');
+  const staleRefs = await refHandler({ senderFrame: mainFrame, sender: { mainFrame } });
+  check(staleRow && staleRow.metadataPending === true && staleRow.meta === null && staleRow.name === 'large-save-0',
+    'payload overwrite with a failed sidecar update is shown as metadataPending, never as trusted stale metadata');
+  check(staleRefs && staleRefs.success === true && staleRefs.complete === false,
+    'timeline GC reference registry fails closed while any desktop sidecar is missing or stale');
   check(mainSource.includes("redirect: 'manual'") && mainSource.includes('dns.lookup(hostname, { all: true')
     && mainSource.includes("credentials: 'omit'") && mainSource.includes("referrerPolicy: 'no-referrer'"), 'network proxy revalidates DNS/redirects and omits ambient credentials');
   check(mainSource.includes('WORKSHOP_CATALOG_AUTHORIZATIONS.get(packageUrl)')

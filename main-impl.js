@@ -258,7 +258,12 @@ function desktopSaveMetadataPath(storageKey) {
   return path.join(SAVE_METADATA_DIR, storageKey + '.json');
 }
 
-function desktopSaveMetadataFromData(data, storageKey) {
+function desktopSavePayloadStamp(stats) {
+  if (!stats || !Number.isFinite(Number(stats.size)) || !Number.isFinite(Number(stats.mtimeMs))) return null;
+  return { size: Number(stats.size), mtimeMs: Number(stats.mtimeMs) };
+}
+
+function desktopSaveMetadataFromData(data, storageKey, payloadStats) {
   const envelope = data && data.__tmAutoSaveEnvelope === 1 ? data.data : data;
   const meta = envelope && envelope._saveMeta && typeof envelope._saveMeta === 'object' ? envelope._saveMeta : {};
   const state = envelope && envelope.gameState;
@@ -270,7 +275,7 @@ function desktopSaveMetadataFromData(data, storageKey) {
     ? '__autosave__'
     : clean(meta.name || meta.saveName || (gm && gm.saveName) || storageKey, 200);
   return {
-    version: 1,
+    version: 2,
     storageKey: String(storageKey),
     name: canonicalName,
     meta: {
@@ -282,12 +287,15 @@ function desktopSaveMetadataFromData(data, storageKey) {
       campaignId: clean(gm && gm._campaignId, 128),
       timelineId: clean(gm && gm._timelineId, 128)
     },
+    payload: desktopSavePayloadStamp(payloadStats),
+    metadataGeneration: crypto.randomUUID(),
     updatedAt: Date.now()
   };
 }
 
-function writeDesktopSaveMetadata(storageKey, data) {
-  const record = desktopSaveMetadataFromData(data, storageKey);
+function writeDesktopSaveMetadata(storageKey, data, payloadStats) {
+  const record = desktopSaveMetadataFromData(data, storageKey, payloadStats);
+  if (!record.payload) throw new Error('存档 sidecar 缺少正文版本戳');
   writeJsonAtomic(desktopSaveMetadataPath(storageKey), record);
   return record;
 }
@@ -296,11 +304,15 @@ function fallbackDesktopSaveName(storageKey) {
   return String(storageKey || '').replace(/--[0-9a-f]{16}$/i, '') || '未命名存档';
 }
 
-async function readDesktopSaveMetadata(storageKey) {
+async function readDesktopSaveMetadata(storageKey, payloadStats) {
   try {
     const raw = await fs.promises.readFile(desktopSaveMetadataPath(storageKey), 'utf-8');
     const parsed = JSON.parse(raw);
-    if (!parsed || parsed.version !== 1 || String(parsed.storageKey || '') !== String(storageKey)) return null;
+    if (!parsed || (parsed.version !== 1 && parsed.version !== 2) || String(parsed.storageKey || '') !== String(storageKey)) return null;
+    const current = desktopSavePayloadStamp(payloadStats);
+    const recorded = desktopSavePayloadStamp(parsed.payload);
+    parsed._payloadCurrent = !!(parsed.version === 2 && current && recorded
+      && recorded.size === current.size && recorded.mtimeMs === current.mtimeMs);
     return parsed;
   } catch (error) {
     if (error && error.code === 'ENOENT') return null;
@@ -2847,7 +2859,7 @@ ipcMain.handle('save-project', async (event, { filename, data }) => {
     // 2026-06-10·紧凑写盘:同 auto-save·缩进占体积 55%·手动存档同步砍半
     writeFileAtomic(filepath, JSON.stringify(data), 'utf-8');
     let metadataWarning = '';
-    try { writeDesktopSaveMetadata(key, data); }
+    try { writeDesktopSaveMetadata(key, data, fs.statSync(filepath)); }
     catch (metadataError) {
       metadataWarning = String(metadataError && metadataError.message || metadataError);
       console.warn('[save-project] 正文已保存，sidecar 写入失败:', metadataWarning);
@@ -2864,7 +2876,7 @@ ipcMain.handle('load-project', async (event, filename) => {
     const ref = saveFileRef(filename);
     if (!fs.existsSync(ref.path)) return { success: false, error: '文件不存在' };
     const data = JSON.parse(fs.readFileSync(ref.path, 'utf-8'));
-    try { writeDesktopSaveMetadata(ref.key, data); } catch (metadataError) {
+    try { writeDesktopSaveMetadata(ref.key, data, fs.statSync(ref.path)); } catch (metadataError) {
       console.warn('[load-project] sidecar 回填失败:', metadataError && metadataError.message || metadataError);
     }
     return { success: true, data, storageKey: ref.key };
@@ -2885,17 +2897,18 @@ ipcMain.handle('list-saves', async () => {
         const fp = path.join(SAVE_DIR, f);
         const stats = await fs.promises.stat(fp);
         const storageKey = f.replace(/\.json$/i, '');
-        const sidecar = await readDesktopSaveMetadata(storageKey);
-        const _saveMeta = sidecar && sidecar.meta || null;
+        const sidecar = await readDesktopSaveMetadata(storageKey, stats);
+        const sidecarCurrent = !!(sidecar && sidecar._payloadCurrent === true);
+        const _saveMeta = sidecarCurrent && sidecar.meta || null;
         return {
-          name: (sidecar && typeof sidecar.name === 'string' && sidecar.name) || fallbackDesktopSaveName(storageKey),
+          name: (sidecarCurrent && typeof sidecar.name === 'string' && sidecar.name) || fallbackDesktopSaveName(storageKey),
           storageKey,
           size: stats.size,
           modified: stats.mtimeMs,
           modifiedStr: new Date(stats.mtimeMs).toLocaleString('zh-CN'),
           _saveMeta,
           meta: _saveMeta,
-          metadataPending: !sidecar,
+          metadataPending: !sidecarCurrent,
           corrupt: false,
           error: ''
         };
@@ -2904,6 +2917,38 @@ ipcMain.handle('list-saves', async () => {
     return { success: true, files };
   } catch (e) {
     return { success: false, error: e.message };
+  }
+});
+
+// renderer 的 IndexedDB GC 必须同时计算桌面文件存档引用。任何 sidecar 缺失/陈旧时
+// 返回 complete=false，让 renderer fail closed，绝不因看不见桌面引用而误删编年或 receipt。
+ipcMain.handle('list-save-timeline-refs', async () => {
+  try {
+    ensureSaveDir();
+    const entries = await fs.promises.readdir(SAVE_DIR, { withFileTypes: true });
+    const refs = [];
+    let complete = true;
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      const storageKey = entry.name.replace(/\.json$/i, '');
+      const payloadPath = path.join(SAVE_DIR, entry.name);
+      const stats = await fs.promises.stat(payloadPath);
+      const sidecar = await readDesktopSaveMetadata(storageKey, stats);
+      if (!(sidecar && sidecar._payloadCurrent === true && sidecar.meta)) {
+        complete = false;
+        continue;
+      }
+      const campaignId = String(sidecar.meta.campaignId || '');
+      const timelineId = String(sidecar.meta.timelineId || '');
+      if (!campaignId || !timelineId) {
+        complete = false;
+        continue;
+      }
+      refs.push({ storageKey, campaignId, timelineId });
+    }
+    return { success: true, complete, refs };
+  } catch (e) {
+    return { success: false, complete: false, refs: [], error: e.message };
   }
 });
 
@@ -3010,7 +3055,7 @@ ipcMain.handle('auto-save', (event, payload) => {
       if (requestToken && !autoSaveSessionMatches(requestToken)) {
         return { success: false, stale: true, error: '自动存档提交期间已跨档失效', sessionToken: getAutoSaveSessionToken() };
       }
-      try { writeDesktopSaveMetadata('__autosave__', diskPayload); }
+      try { writeDesktopSaveMetadata('__autosave__', diskPayload, await fs.promises.stat(AUTO_SAVE_FILE)); }
       catch (metadataError) { console.warn('[auto-save] sidecar 写入失败:', metadataError && metadataError.message || metadataError); }
       return { success: true, sessionToken: requestToken || '' };
     } catch (e) {
@@ -3033,10 +3078,14 @@ ipcMain.handle('load-auto-save', async () => {
       if (!fileToken || fileToken !== currentToken) {
         return { success: false, stale: true, error: '自动存档属于已失效的旧局' };
       }
+      try { writeDesktopSaveMetadata('__autosave__', parsed, fs.statSync(AUTO_SAVE_FILE)); }
+      catch (metadataError) { console.warn('[load-auto-save] sidecar 回填失败:', metadataError && metadataError.message || metadataError); }
       return { success: true, data: parsed.data, sessionToken: fileToken };
     }
     // 首次升级前的无 envelope 旧档仅在 sidecar 尚不存在时兼容读取。
     if (getAutoSaveSessionToken()) return { success: false, stale: true, error: '旧自动存档已被新局失效' };
+    try { writeDesktopSaveMetadata('__autosave__', parsed, fs.statSync(AUTO_SAVE_FILE)); }
+    catch (metadataError) { console.warn('[load-auto-save] legacy sidecar 回填失败:', metadataError && metadataError.message || metadataError); }
     return { success: true, data: parsed, sessionToken: '' };
   } catch (e) {
     return { success: false, error: e.message };

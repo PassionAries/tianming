@@ -13,7 +13,7 @@
   var LEGACY_STORE = 'snapshots';
   var STORE = 'snapshots_v2';
   var LINEAGE_STORE = 'timeline_graph';
-  var DB_VERSION = 5;
+  var DB_VERSION = 6;
   var MAX_SNAPSHOTS = 200;
   var _dbPromise = null;
 
@@ -120,11 +120,23 @@
         if (!db.objectStoreNames.contains(LINEAGE_STORE)) {
           lineageStore = db.createObjectStore(LINEAGE_STORE, { keyPath: 'id' });
           lineageStore.createIndex('campaignId', 'campaignId', { unique: false });
+          lineageStore.createIndex('campaignTimeline', ['campaignId', 'timelineId'], { unique: true });
+          lineageStore.createIndex('campaignParent', ['campaignId', 'parentTimelineId'], { unique: false });
         } else {
           lineageStore = e.target.transaction.objectStore(LINEAGE_STORE);
           try {
             if (!lineageStore.indexNames || !lineageStore.indexNames.contains('campaignId')) {
               lineageStore.createIndex('campaignId', 'campaignId', { unique: false });
+            }
+          } catch (_) {}
+          try {
+            if (!lineageStore.indexNames || !lineageStore.indexNames.contains('campaignTimeline')) {
+              lineageStore.createIndex('campaignTimeline', ['campaignId', 'timelineId'], { unique: true });
+            }
+          } catch (_) {}
+          try {
+            if (!lineageStore.indexNames || !lineageStore.indexNames.contains('campaignParent')) {
+              lineageStore.createIndex('campaignParent', ['campaignId', 'parentTimelineId'], { unique: false });
             }
           } catch (_) {}
         }
@@ -219,31 +231,47 @@
     });
   }
 
-  function _getAllRecords() {
+  function _getTimelineRecords(campaignId, timelineId) {
     return _openDB().then(function(db) {
       return new Promise(function(resolve, reject) {
         var tx;
         try {
           tx = db.transaction(STORE, 'readonly');
-          var req = tx.objectStore(STORE).getAll();
+          var req = tx.objectStore(STORE).index('campaignTimeline').getAll([campaignId, timelineId]);
           req.onsuccess = function(e) { resolve(e.target.result || []); };
-          req.onerror = function(e) { reject(e.target.error || new Error('快照列表读取失败')); };
+          req.onerror = function(e) { reject(e.target.error || new Error('时间线快照读取失败')); };
           tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('快照读取事务已中止')); };
         } catch (e) { reject(e); }
       });
     });
   }
 
-  function _getAllLineageRecords() {
+  function _getLineageRecord(campaignId, timelineId) {
     return _openDB().then(function(db) {
       return new Promise(function(resolve, reject) {
         var tx;
         try {
           tx = db.transaction(LINEAGE_STORE, 'readonly');
-          var req = tx.objectStore(LINEAGE_STORE).getAll();
-          req.onsuccess = function(e) { resolve(e.target.result || []); };
-          req.onerror = function(e) { reject(e.target.error || new Error('时间线图读取失败')); };
+          var req = tx.objectStore(LINEAGE_STORE).get(_lineageId(campaignId, timelineId));
+          req.onsuccess = function(e) { resolve(e.target.result || null); };
+          req.onerror = function(e) { reject(e.target.error || new Error('时间线谱系读取失败')); };
           tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('时间线图读取事务已中止')); };
+        } catch (e) { reject(e); }
+      });
+    });
+  }
+
+  function _getExactRecord(campaignId, timelineId, turn) {
+    var id = _recordId(campaignId, timelineId, turn);
+    return _openDB().then(function(db) {
+      return new Promise(function(resolve, reject) {
+        var tx;
+        try {
+          tx = db.transaction(STORE, 'readonly');
+          var req = tx.objectStore(STORE).get(id);
+          req.onsuccess = function(e) { resolve(e.target.result || null); };
+          req.onerror = function(e) { reject(e.target.error || new Error('快照读取失败')); };
+          tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('快照读取事务已中止')); };
         } catch (e) { reject(e); }
       });
     });
@@ -278,47 +306,58 @@
     return candidates.length ? candidates[0].state.GM : null;
   }
 
-  // 子时间线可只读继承 forkTurn 以前的祖先快照。当前线记录优先；祖先 payload 不复制，
-  // 因而长局分叉不会造成成倍存储，同时不会让一次正常读档把 T1..Tn 历史列表清空。
-  function _accessibleSnapshotRecords(records, lineageRecords, campaignId, timelineId, currentGM) {
-    var chain = [];
+  // 子时间线可只读继承 forkTurn 以前的祖先快照。每层只按 compound index
+  // 读取该 timeline 的记录，再按独立 lineage key 向父链走；禁止 getAll 全库扫描。
+  function _collectAccessibleSnapshotRecords(campaignId, timelineId, currentGM) {
     var seen = Object.create(null);
-    var lineageByTimeline = Object.create(null);
-    (lineageRecords || []).forEach(function(record) {
-      if (record && record.campaignId === campaignId && record.timelineId) lineageByTimeline[record.timelineId] = record;
-    });
+    var byTurn = Object.create(null);
     var cursorTimeline = timelineId;
     var cursorOwner = currentGM && currentGM._campaignId === campaignId && currentGM._timelineId === timelineId ? currentGM : null;
     var maxTurn = Infinity;
-    while (cursorTimeline && !seen[cursorTimeline]) {
+    var depth = 0;
+
+    function visitNext() {
+      if (!cursorTimeline || seen[cursorTimeline]) return Promise.resolve();
       seen[cursorTimeline] = true;
-      chain.push({ timelineId: cursorTimeline, maxTurn: maxTurn });
-      var lineage = lineageByTimeline[cursorTimeline];
-      if (!cursorOwner && !lineage) cursorOwner = _timelineOwnerFromRecords(records, campaignId, cursorTimeline, maxTurn);
-      var parentTimeline = lineage ? String(lineage.parentTimelineId || '') : (cursorOwner && String(cursorOwner._parentTimelineId || ''));
-      var forkTurn = lineage ? Number(lineage.forkTurn) : (cursorOwner && Number(cursorOwner._forkTurn));
-      if (!parentTimeline || !Number.isSafeInteger(forkTurn) || forkTurn < 0) break;
-      maxTurn = Math.min(maxTurn, forkTurn);
-      cursorTimeline = parentTimeline;
-      cursorOwner = null;
-    }
-    var byTurn = Object.create(null);
-    chain.forEach(function(access, depth) {
-      (records || []).forEach(function(record) {
-        if (!record || record.campaignId !== campaignId || record.timelineId !== access.timelineId) return;
-        var turn = Number(record.turn);
-        if (!Number.isSafeInteger(turn) || turn > access.maxTurn || byTurn[turn]) return;
-        byTurn[turn] = { record: record, inherited: depth > 0, sourceTimelineId: access.timelineId };
+      var visitingTimeline = cursorTimeline;
+      var visitingMaxTurn = maxTurn;
+      var visitingDepth = depth;
+      return Promise.all([
+        _getTimelineRecords(campaignId, visitingTimeline),
+        _getLineageRecord(campaignId, visitingTimeline)
+      ]).then(function(parts) {
+        var records = parts[0] || [];
+        var lineage = parts[1];
+        records.forEach(function(record) {
+          if (!record || record.campaignId !== campaignId || record.timelineId !== visitingTimeline) return;
+          var turn = Number(record.turn);
+          if (!Number.isSafeInteger(turn) || turn > visitingMaxTurn || byTurn[turn]) return;
+          byTurn[turn] = { record: record, inherited: visitingDepth > 0, sourceTimelineId: visitingTimeline };
+        });
+        if (!cursorOwner && !lineage) cursorOwner = _timelineOwnerFromRecords(records, campaignId, visitingTimeline, visitingMaxTurn);
+        var parentTimeline = lineage ? String(lineage.parentTimelineId || '') : (cursorOwner && String(cursorOwner._parentTimelineId || ''));
+        var forkTurn = lineage ? Number(lineage.forkTurn) : (cursorOwner && Number(cursorOwner._forkTurn));
+        if (!parentTimeline || !Number.isSafeInteger(forkTurn) || forkTurn < 0) {
+          cursorTimeline = '';
+          return;
+        }
+        maxTurn = Math.min(visitingMaxTurn, forkTurn);
+        cursorTimeline = parentTimeline;
+        cursorOwner = null;
+        depth = visitingDepth + 1;
+        return visitNext();
       });
-    });
-    return Object.keys(byTurn).map(function(turn) { return byTurn[turn]; }).sort(function(a, b) {
-      return Number(a.record.turn) - Number(b.record.turn);
+    }
+
+    return visitNext().then(function() {
+      return Object.keys(byTurn).map(function(turn) { return byTurn[turn]; }).sort(function(a, b) {
+        return Number(a.record.turn) - Number(b.record.turn);
+      });
     });
   }
 
   function _enforceLRU(campaignId, timelineId, max) {
-    return _getAllRecords().then(function(records) {
-      var own = records.filter(function(r) { return r && r.campaignId === campaignId && r.timelineId === timelineId; });
+    return _getTimelineRecords(campaignId, timelineId).then(function(own) {
       own.sort(function(a, b) { return (a.turn - b.turn) || (a.ts - b.ts); });
       var remove = own.slice(0, Math.max(0, own.length - max));
       if (!remove.length) return;
@@ -383,25 +422,10 @@
       campaignId = campaignId || (gm ? _ensureCampaignId(gm) : '');
       timelineId = timelineId || (gm ? _ensureTimelineId(gm) : '');
       if (!campaignId || !timelineId) return Promise.resolve(null);
-      var id = _recordId(campaignId, timelineId, turn);
-      return _openDB().then(function(db) {
-        return new Promise(function(resolve, reject) {
-          var tx;
-          try {
-            tx = db.transaction(STORE, 'readonly');
-            var req = tx.objectStore(STORE).get(id);
-            req.onsuccess = function(e) { resolve(e.target.result || null); };
-            req.onerror = function(e) { reject(e.target.error || new Error('快照读取失败')); };
-            tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('快照读取事务已中止')); };
-          } catch (e) { reject(e); }
-        });
-      }).then(function(exact) {
+      return _getExactRecord(campaignId, timelineId, turn).then(function(exact) {
         if (exact) return exact;
-        return Promise.all([_getAllRecords(), _getAllLineageRecords()]).then(function(parts) {
-          var records = parts[0];
-          var lineageRecords = parts[1];
-          var currentGM = global.GM || (typeof GM !== 'undefined' ? GM : null);
-          var accessible = _accessibleSnapshotRecords(records, lineageRecords, campaignId, timelineId, currentGM);
+        var currentGM = global.GM || (typeof GM !== 'undefined' ? GM : null);
+        return _collectAccessibleSnapshotRecords(campaignId, timelineId, currentGM).then(function(accessible) {
           var match = accessible.find(function(item) { return Number(item.record.turn) === _strictTurn(turn); });
           if (!match) return null;
           var inherited = _deepClone(match.record);
@@ -418,8 +442,8 @@
     campaignId = campaignId || (gm ? _ensureCampaignId(gm) : '');
     timelineId = timelineId || (gm ? _ensureTimelineId(gm) : '');
     if (!campaignId || !timelineId) return Promise.resolve([]);
-    return Promise.all([_getAllRecords(), _getAllLineageRecords()]).then(function(parts) {
-      return _accessibleSnapshotRecords(parts[0], parts[1], campaignId, timelineId, gm).map(function(item) {
+    return _collectAccessibleSnapshotRecords(campaignId, timelineId, gm).then(function(accessible) {
+      return accessible.map(function(item) {
         var r = item.record;
         return {
           turn: r.turn,
@@ -439,17 +463,28 @@
       campaignId = campaignId || (gm ? _ensureCampaignId(gm) : '');
       timelineId = timelineId || (gm ? _ensureTimelineId(gm) : '');
       if (!campaignId || !timelineId) return Promise.resolve({ ok: false, reason: 'no world identity' });
+      turn = _strictTurn(turn);
       var id = _recordId(campaignId, timelineId, turn);
-      return _openDB().then(function(db) {
+      return _getExactRecord(campaignId, timelineId, turn).then(function(exact) {
+        if (!exact) {
+          return _collectAccessibleSnapshotRecords(campaignId, timelineId, gm).then(function(accessible) {
+            var inherited = accessible.some(function(item) {
+              return item.inherited === true && Number(item.record && item.record.turn) === turn;
+            });
+            return { ok: false, reason: inherited ? 'inherited-readonly' : 'not-found' };
+          });
+        }
+        return _openDB().then(function(db) {
         return new Promise(function(resolve, reject) {
           var tx;
           try {
             tx = db.transaction(STORE, 'readwrite');
             tx.objectStore(STORE).delete(id);
-            tx.oncomplete = function() { resolve({ ok: true }); };
+            tx.oncomplete = function() { resolve({ ok: true, turn: turn }); };
             tx.onerror = function(e) { reject((e.target && e.target.error) || tx.error || new Error('快照删除失败')); };
             tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('快照删除事务已中止')); };
           } catch (e) { reject(e); }
+        });
         });
       });
     } catch (e) { return Promise.reject(e); }

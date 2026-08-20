@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// StateSnapshot v4：旧快照迁移、祖先只读继承、完整状态恢复、异步身份租约与 awaited hook。
+// StateSnapshot v6：旧快照迁移、索引化祖先只读继承、完整状态恢复、异步身份租约与 awaited hook。
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
@@ -16,6 +16,7 @@ function fakeIndexedDB(options) {
   options = options || {};
   const stores = new Map();
   const deletedIndexes = [];
+  const stats = { fullStoreGetAll: 0, indexGetAll: 0 };
   if (Array.isArray(options.records)) {
     stores.set('snapshots_v2', {
       keyPath: 'id',
@@ -37,9 +38,30 @@ function fakeIndexedDB(options) {
         return req;
       },
       getAll() {
+        stats.fullStoreGetAll++;
         const req = {};
         setTimeout(function() { if (req.onsuccess) req.onsuccess({ target: { result: Array.from(def.rows.values()).map(clone) } }); }, 0);
         return req;
+      },
+      index(name) {
+        if (!def.indexes.has(name)) throw new Error('missing index ' + name);
+        return {
+          getAll(query) {
+            stats.indexGetAll++;
+            const req = {};
+            function indexKey(record) {
+              if (name === 'campaignTimeline') return [record.campaignId, record.timelineId];
+              if (name === 'timelineTurn') return [record.campaignId, record.timelineId, record.turn];
+              if (name === 'campaignParent') return [record.campaignId, record.parentTimelineId];
+              if (name === 'campaignId') return record.campaignId;
+              return undefined;
+            }
+            const wanted = JSON.stringify(query);
+            const values = Array.from(def.rows.values()).filter(record => JSON.stringify(indexKey(record)) === wanted).map(clone);
+            setTimeout(function() { if (req.onsuccess) req.onsuccess({ target: { result: values } }); }, 0);
+            return req;
+          }
+        };
       },
       delete(key) { def.rows.delete(String(key)); return {}; },
       openCursor() {
@@ -90,6 +112,7 @@ function fakeIndexedDB(options) {
   return {
     stores,
     deletedIndexes,
+    stats,
     open(_name, version) {
       const req = {};
       setTimeout(function() {
@@ -104,11 +127,12 @@ function fakeIndexedDB(options) {
 
 (async function() {
   let registeredHook = null;
+  const primaryDb = fakeIndexedDB();
   const ctx = {
     console, Promise, Date, Math, JSON, Object, Array, Number,
     setTimeout, clearTimeout, structuredClone,
     crypto: { randomUUID: function() { return 'fixed-id'; } },
-    indexedDB: fakeIndexedDB(),
+    indexedDB: primaryDb,
     EndTurnHooks: {
       register(phase, callback, name) {
         if (phase === 'after' && name === 'StateSnapshot.autoSave') registeredHook = callback;
@@ -137,8 +161,8 @@ function fakeIndexedDB(options) {
   vm.createContext(ctx);
   vm.runInContext(src, ctx);
 
-  ok(/DB_VERSION = 5/.test(src) && /LINEAGE_STORE = 'timeline_graph'/.test(src) && /keyPath: 'id'/.test(src),
-    'v5 使用 compound snapshot id 与独立 timeline graph');
+  ok(/DB_VERSION = 6/.test(src) && /LINEAGE_STORE = 'timeline_graph'/.test(src) && /campaignParent/.test(src) && /keyPath: 'id'/.test(src),
+    'v6 使用 compound snapshot id、父链索引与独立 timeline graph');
   ok(/_buildSaveState/.test(src) && /format: 'idb', detach: true/.test(src), '快照复用完整纯存档 builder');
   ok(registeredHook && typeof registeredHook === 'function', 'after hook 已注册');
 
@@ -182,6 +206,14 @@ function fakeIndexedDB(options) {
   ctx.P = { conf: { campaign: 'A' }, mapData: { a: 1 } };
   let r = await ctx.StateSnapshot.save(1);
   ok(r.ok === true, 'campA/T1 完整快照写入');
+  // 注入 100 个无关战役；当前列表必须继续只走 campaign+timeline 复合索引。
+  const snapshotRows = primaryDb.stores.get('snapshots_v2').rows;
+  for (let i = 0; i < 100; i++) {
+    snapshotRows.set('noise-' + i, {
+      id: 'noise-' + i, campaignId: 'noise-campaign-' + i, timelineId: 'tml_noise_' + String(i).padStart(8, '0'),
+      turn: i, ts: i, state: { GM: { turn: i }, P: {} }
+    });
+  }
 
   ctx.GM.turn = 2; ctx.GM.marker = 'A2'; ctx.GM.customWorld.deep = 22;
   ctx.GM.shijiHistory.push({ turn: 2, a: 2 }); ctx.P.mapData.a = 2;
@@ -199,6 +231,10 @@ function fakeIndexedDB(options) {
     && inheritedList.every(item => item.inherited === true)
     && inheritedA1 && inheritedA1.inherited === true && inheritedA1.state.GM.marker === 'A1',
   '子时间线以父链只读继承 forkTurn 以前的完整快照列表');
+  const inheritedDelete = await ctx.StateSnapshot.delete(1);
+  ok(inheritedDelete.ok === false && inheritedDelete.reason === 'inherited-readonly'
+    && (await ctx.StateSnapshot.load(1)).state.GM.marker === 'A1',
+  '继承快照明确只读，删除请求不得伪装成功或影响祖先记录');
   r = await ctx.StateSnapshot.save(2);
   const childOverrideList = await ctx.StateSnapshot.list();
   ok(r.ok === true && childOverrideList[0].inherited === true && childOverrideList[1].inherited === false
@@ -270,6 +306,9 @@ function fakeIndexedDB(options) {
   ok(/_stillCurrent\(sourceGM, sourceP, sourceLoadGen, campaignId, timelineId\)/.test(src), 'timeTravel 在异步边界复验 GM/P/loadGen/campaign/timeline');
   ok(/failed to save return point/.test(src) && /time-travel-rollback/.test(src), '返航点失败不恢复，目标恢复失败会回滚');
   ok(/return saveSnapshot\(t\)\.then/.test(src), '自动 hook 显式返回保存链');
+  ok(primaryDb.stats.indexGetAll > 0 && primaryDb.stats.fullStoreGetAll === 0
+    && !/objectStore\(STORE\)\.getAll\(\)/.test(src) && !/objectStore\(LINEAGE_STORE\)\.getAll\(\)/.test(src),
+  '多战役快照列表按复合索引和谱系主键读取，不执行全库 getAll');
 
   console.log('\n[smoke-state-snapshot-integrity] pass=' + pass);
 })().catch(function(e) {

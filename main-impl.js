@@ -2974,17 +2974,11 @@ ipcMain.handle('load-project', async (event, filename) => {
     const ref = saveFileRef(filename);
     if (!fs.existsSync(ref.path)) return { success: false, error: '文件不存在' };
     const data = JSON.parse(fs.readFileSync(ref.path, 'utf-8'));
-    let payloadGeneration = desktopSaveGenerationFromData(data);
-    if (!payloadGeneration) {
-      const prepared = prepareDesktopSavePayload(data);
-      payloadGeneration = prepared.generation;
-      invalidateDesktopSaveGeneration(ref.key);
-      writeFileAtomic(ref.path, prepared.text, 'utf-8');
-    }
-    try { writeDesktopSaveMetadata(ref.key, data, fs.statSync(ref.path), payloadGeneration); } catch (metadataError) {
-      console.warn('[load-project] sidecar 回填失败:', metadataError && metadataError.message || metadataError);
-    }
-    return { success: true, data, storageKey: ref.key };
+    // 读取必须保持只读：旧 payload 没有 generation 时仍立即允许加载，绝不能
+    // 因目录只读、磁盘已满或同步软件锁文件而把合法存档判成加载失败。generation
+    // 与 sidecar 在下一次真正保存时升级；列表此前保持 metadataPending。
+    const payloadGeneration = desktopSaveGenerationFromData(data);
+    return { success: true, data, storageKey: ref.key, metadataPending: !payloadGeneration };
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -3185,34 +3179,24 @@ ipcMain.handle('load-auto-save', async () => {
     if (parsed && parsed.__tmAutoSaveEnvelope === 1) {
       const fileToken = normalizeAutoSaveSessionToken(parsed.sessionToken);
       let currentToken = getAutoSaveSessionToken();
-      // 兼容 sidecar 丢失但 canonical envelope 完整的安装：以文件 token 自愈 sidecar。
-      if (!currentToken && fileToken) currentToken = persistAutoSaveSessionToken(fileToken);
+      // 兼容 session sidecar 丢失但 canonical envelope 完整的安装：本次会话仅在
+      // 内存采用文件 token。读取路径不得因磁盘只读而失败，也不得改动任何文件；
+      // 下一次真正保存/轮换 session 时自然会写入新的 canonical sidecar。
+      if (!currentToken && fileToken) {
+        autoSaveSessionToken = fileToken;
+        autoSaveSessionLoaded = true;
+        currentToken = fileToken;
+      }
       if (!fileToken || fileToken !== currentToken) {
         return { success: false, stale: true, error: '自动存档属于已失效的旧局' };
       }
-      let payloadGeneration = desktopSaveGenerationFromData(parsed);
-      if (!payloadGeneration) {
-        const prepared = prepareDesktopSavePayload(parsed);
-        payloadGeneration = prepared.generation;
-        invalidateDesktopSaveGeneration('__autosave__');
-        writeFileAtomic(AUTO_SAVE_FILE, prepared.text, 'utf-8');
-      }
-      try { writeDesktopSaveMetadata('__autosave__', parsed, fs.statSync(AUTO_SAVE_FILE), payloadGeneration); }
-      catch (metadataError) { console.warn('[load-auto-save] sidecar 回填失败:', metadataError && metadataError.message || metadataError); }
-      return { success: true, data: parsed.data, sessionToken: fileToken };
+      const payloadGeneration = desktopSaveGenerationFromData(parsed);
+      return { success: true, data: parsed.data, sessionToken: fileToken, metadataPending: !payloadGeneration };
     }
     // 首次升级前的无 envelope 旧档仅在 sidecar 尚不存在时兼容读取。
     if (getAutoSaveSessionToken()) return { success: false, stale: true, error: '旧自动存档已被新局失效' };
-    let payloadGeneration = desktopSaveGenerationFromData(parsed);
-    if (!payloadGeneration) {
-      const prepared = prepareDesktopSavePayload(parsed);
-      payloadGeneration = prepared.generation;
-      invalidateDesktopSaveGeneration('__autosave__');
-      writeFileAtomic(AUTO_SAVE_FILE, prepared.text, 'utf-8');
-    }
-    try { writeDesktopSaveMetadata('__autosave__', parsed, fs.statSync(AUTO_SAVE_FILE), payloadGeneration); }
-    catch (metadataError) { console.warn('[load-auto-save] legacy sidecar 回填失败:', metadataError && metadataError.message || metadataError); }
-    return { success: true, data: parsed, sessionToken: '' };
+    const payloadGeneration = desktopSaveGenerationFromData(parsed);
+    return { success: true, data: parsed, sessionToken: '', metadataPending: !payloadGeneration };
   } catch (e) {
     return { success: false, error: e.message };
   }

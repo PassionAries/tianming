@@ -251,6 +251,17 @@ async function main() {
   const listSavesStart = mainSource.indexOf("ipcMain.handle('list-saves'");
   const listSavesEnd = mainSource.indexOf("ipcMain.handle('delete-save'", listSavesStart);
   const listSavesSource = mainSource.slice(listSavesStart, listSavesEnd);
+  const loadProjectStart = mainSource.indexOf("ipcMain.handle('load-project'");
+  const loadProjectEnd = mainSource.indexOf("ipcMain.handle('list-saves'", loadProjectStart);
+  const loadProjectSource = mainSource.slice(loadProjectStart, loadProjectEnd);
+  const loadAutoStart = mainSource.indexOf("ipcMain.handle('load-auto-save'");
+  const loadAutoEnd = mainSource.indexOf("ipcMain.handle('dialog-export'", loadAutoStart);
+  const loadAutoSource = mainSource.slice(loadAutoStart, loadAutoEnd);
+  check(loadProjectStart >= 0 && loadProjectEnd > loadProjectStart
+    && loadAutoStart >= 0 && loadAutoEnd > loadAutoStart
+    && !/prepareDesktopSavePayload|writeFileAtomic|writeDesktopSaveMetadata|invalidateDesktopSaveGeneration/.test(loadProjectSource)
+    && !/prepareDesktopSavePayload|writeFileAtomic|writeDesktopSaveMetadata|invalidateDesktopSaveGeneration|persistAutoSaveSessionToken/.test(loadAutoSource),
+  'desktop manual and autosave read handlers never rewrite payloads or sidecars during load');
   check(listSavesStart >= 0 && listSavesEnd > listSavesStart
     && /readDesktopSaveGeneration\(storageKey, fp\)/.test(listSavesSource)
     && /readDesktopSaveMetadata\(storageKey, stats, payloadGeneration\)/.test(listSavesSource)
@@ -323,6 +334,70 @@ async function main() {
   const sameStampRow = sameStampListed.files.find(file => file.storageKey === 'large-save-1');
   check(sameStampRow && sameStampRow.metadataPending === true && sameStampRow.meta === null,
     'same-size payload replacement with restored mtime is rejected by the embedded payload generation');
+
+  const legacyReadOnlyPath = path.join(desktopSaveDir, 'legacy-readonly.json');
+  const legacyReadOnlyData = {
+    _saveMeta: { name: '只读旧档', scenario: '兼容测试', turn: 7 },
+    gameState: { turn: 7, _campaignId: 'campaign-readonly', _timelineId: 'tml_readonly_12345678' }
+  };
+  fs.writeFileSync(legacyReadOnlyPath, JSON.stringify(legacyReadOnlyData));
+  const legacyBytesBefore = fs.readFileSync(legacyReadOnlyPath);
+  const legacyStatBefore = fs.statSync(legacyReadOnlyPath);
+  const loadHandler = ipcHandlers.get('load-project');
+  check(typeof loadHandler === 'function', 'desktop load-project IPC handler is registered through the trusted gate');
+  const originalOpenSync = fs.openSync;
+  fs.openSync = function(file, flags) {
+    if (/[wax+]/.test(String(flags || ''))) {
+      const error = new Error('simulated read-only storage');
+      error.code = 'ENOSPC';
+      throw error;
+    }
+    return originalOpenSync.apply(this, arguments);
+  };
+  let legacyLoaded;
+  try {
+    legacyLoaded = await loadHandler({ senderFrame: mainFrame, sender: { mainFrame } }, 'legacy-readonly');
+  } finally {
+    fs.openSync = originalOpenSync;
+  }
+  const legacyStatAfter = fs.statSync(legacyReadOnlyPath);
+  check(legacyLoaded && legacyLoaded.success === true && legacyLoaded.metadataPending === true
+    && legacyLoaded.data.gameState.turn === 7,
+  'legacy desktop payload without a generation still loads when every attempted write would fail');
+  check(fs.readFileSync(legacyReadOnlyPath).equals(legacyBytesBefore)
+    && legacyStatAfter.mtimeMs === legacyStatBefore.mtimeMs,
+  'loading a legacy desktop payload preserves its bytes and modification time');
+
+  const legacyAutoPath = path.join(desktopSaveDir, '__autosave__.json');
+  const legacyAutoData = {
+    __tmAutoSaveEnvelope: 1,
+    sessionToken: 'readonly-session-token-1234',
+    data: { gameState: { turn: 8, _campaignId: 'campaign-auto-readonly', _timelineId: 'tml_auto_readonly_12345678' } }
+  };
+  fs.writeFileSync(legacyAutoPath, JSON.stringify(legacyAutoData));
+  const legacyAutoBytes = fs.readFileSync(legacyAutoPath);
+  const legacyAutoStat = fs.statSync(legacyAutoPath);
+  const loadAutoHandler = ipcHandlers.get('load-auto-save');
+  check(typeof loadAutoHandler === 'function', 'desktop load-auto-save IPC handler is registered through the trusted gate');
+  const originalWriteFileSync = fs.writeFileSync;
+  fs.writeFileSync = function() {
+    const error = new Error('simulated read-only autosave storage');
+    error.code = 'EACCES';
+    throw error;
+  };
+  let legacyAutoLoaded;
+  try {
+    legacyAutoLoaded = await loadAutoHandler({ senderFrame: mainFrame, sender: { mainFrame } });
+  } finally {
+    fs.writeFileSync = originalWriteFileSync;
+  }
+  const legacyAutoStatAfter = fs.statSync(legacyAutoPath);
+  check(legacyAutoLoaded && legacyAutoLoaded.success === true && legacyAutoLoaded.metadataPending === true
+    && legacyAutoLoaded.data.gameState.turn === 8,
+  'legacy autosave adopts a missing session sidecar in memory and still loads on read-only storage');
+  check(fs.readFileSync(legacyAutoPath).equals(legacyAutoBytes)
+    && legacyAutoStatAfter.mtimeMs === legacyAutoStat.mtimeMs,
+  'loading a legacy autosave preserves its payload bytes and modification time');
   check(mainSource.includes("redirect: 'manual'") && mainSource.includes('dns.lookup(hostname, { all: true')
     && mainSource.includes("credentials: 'omit'") && mainSource.includes("referrerPolicy: 'no-referrer'"), 'network proxy revalidates DNS/redirects and omits ambient credentials');
   check(mainSource.includes('WORKSHOP_CATALOG_AUTHORIZATIONS.get(packageUrl)')

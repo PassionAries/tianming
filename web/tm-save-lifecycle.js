@@ -120,6 +120,7 @@ function _ensureGMDefaults(GM, P) {
   if (!GM) return;
   _tmEnsureCampaignId(GM);
   _tmEnsureTimelineIdentity(GM);
+  _tmMigrateCoreStableIds(GM);
   if (!GM.shijiHistory) GM.shijiHistory = [];
   if (!GM.allCharacters) GM.allCharacters = [];
   if (!GM.classes) GM.classes = [];
@@ -1115,12 +1116,153 @@ function _tmRebindRuntimeWorld(options) {
   return true;
 }
 
+function _tmStableIdMissing(value) {
+  return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+}
+
+function _tmStableIdHash(text) {
+  var hash = 2166136261;
+  text = String(text || '');
+  for (var i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = typeof Math.imul === 'function' ? Math.imul(hash, 16777619) : hash * 16777619;
+  }
+  return ('00000000' + (hash >>> 0).toString(16)).slice(-8);
+}
+
+function _tmCollectAdminDivisionEntries(targetGM) {
+  var out = [];
+  var hierarchy = targetGM && targetGM.adminHierarchy;
+  if (!hierarchy || typeof hierarchy !== 'object') return out;
+  var visited = typeof WeakSet === 'function' ? new WeakSet() : null;
+  function walk(nodes, path) {
+    (Array.isArray(nodes) ? nodes : []).forEach(function(node, index) {
+      if (!node || typeof node !== 'object') return;
+      if (visited) {
+        if (visited.has(node)) return;
+        visited.add(node);
+      }
+      var nodePath = path + '/' + index;
+      out.push({ item: node, path: nodePath });
+      walk(node.children || node.divisions || node.subdivisions || [], nodePath);
+    });
+  }
+  Object.keys(hierarchy).sort().forEach(function(factionKey) {
+    var branch = hierarchy[factionKey];
+    walk(branch && branch.divisions, 'admin/' + factionKey);
+  });
+  return out;
+}
+
+function _tmAssignMissingStableIds(targetGM, kind, entries) {
+  entries = Array.isArray(entries) ? entries : [];
+  var used = Object.create(null);
+  entries.forEach(function(entry) {
+    var item = entry && entry.item;
+    if (!item || _tmStableIdMissing(item.id)) return;
+    used[String(item.id).trim()] = true;
+  });
+  var assigned = 0;
+  entries.forEach(function(entry, index) {
+    var item = entry && entry.item;
+    if (!item || !_tmStableIdMissing(item.id)) return;
+    var path = String(entry.path || index);
+    var seed = [
+      targetGM && (targetGM.sid || targetGM._campaignId) || '', kind, path,
+      item.sid || '', item.sourceId || '', item.key || '', item.name || '',
+      item.title || '', item.faction || '', item.owner || '', item.type || ''
+    ].join('|');
+    var base = 'tmlegacy_' + kind + '_' + _tmStableIdHash(seed) + _tmStableIdHash(seed.split('').reverse().join(''));
+    var candidate = base;
+    var suffix = 2;
+    while (used[candidate]) candidate = base + '_' + suffix++;
+    item.id = candidate; // arch-ok: 旧存档核心实体稳定 ID 的确定性 schema 迁移
+    used[candidate] = true;
+    assigned++;
+  });
+  return assigned;
+}
+
+function _tmUniqueEntityIdByName(list) {
+  var map = Object.create(null);
+  (Array.isArray(list) ? list : []).forEach(function(item) {
+    if (!item || _tmStableIdMissing(item.id) || !String(item.name || '').trim()) return;
+    var name = String(item.name).trim();
+    if (_tmHasOwn(map, name)) map[name] = null;
+    else map[name] = item.id;
+  });
+  return map;
+}
+
+function _tmBackfillStableForeignKeys(targetGM) {
+  var factionByName = _tmUniqueEntityIdByName(targetGM.facs);
+  var charByName = _tmUniqueEntityIdByName(targetGM.chars);
+  (targetGM.chars || []).forEach(function(ch) {
+    if (!ch || !_tmStableIdMissing(ch.factionId)) return;
+    var id = factionByName[String(ch.faction || '').trim()];
+    if (id != null) ch.factionId = id; // arch-ok: 旧名称外键迁移到稳定势力 ID
+  });
+  (targetGM.facs || []).forEach(function(fac) {
+    if (!fac || !_tmStableIdMissing(fac.leaderId)) return;
+    var id = charByName[String(fac.leader || '').trim()];
+    if (id != null) fac.leaderId = id; // arch-ok: 旧名称外键迁移到稳定人物 ID
+  });
+  (targetGM.armies || []).forEach(function(army) {
+    if (!army || !_tmStableIdMissing(army.commanderId)) return;
+    var commanderName = typeof army.commander === 'string' ? army.commander : (army.commanderName || army.general || army.leader || '');
+    var id = charByName[String(commanderName).trim()];
+    if (id != null) army.commanderId = id; // arch-ok: 旧主将名称迁移到稳定人物 ID
+  });
+  var regions = targetGM.mapData && targetGM.mapData.regions;
+  (Array.isArray(regions) ? regions : []).forEach(function(region) {
+    if (!region || !_tmStableIdMissing(region.factionId)) return;
+    var ownerName = region.currentOwner || region.owner || region.controller || region.factionName || region.ownerName || '';
+    var id = factionByName[String(ownerName).trim()];
+    if (id != null) region.factionId = id; // arch-ok: 旧地图归属名称迁移到稳定势力 ID
+  });
+}
+
+function _tmMigrateCoreStableIds(targetGM) {
+  if (!targetGM || typeof targetGM !== 'object') return { total: 0, byType: {} };
+  var groups = {
+    char: (targetGM.chars || []).map(function(item, index) { return { item: item, path: 'chars/' + index }; }),
+    faction: (targetGM.facs || []).map(function(item, index) { return { item: item, path: 'facs/' + index }; }),
+    army: (targetGM.armies || []).map(function(item, index) { return { item: item, path: 'armies/' + index }; }),
+    region: ((targetGM.mapData && targetGM.mapData.regions) || []).map(function(item, index) { return { item: item, path: 'mapData/regions/' + index }; }),
+    division: _tmCollectAdminDivisionEntries(targetGM)
+  };
+  var result = { total: 0, byType: {} };
+  Object.keys(groups).forEach(function(kind) {
+    var count = _tmAssignMissingStableIds(targetGM, kind, groups[kind]);
+    result.byType[kind] = count;
+    result.total += count;
+  });
+  _tmBackfillStableForeignKeys(targetGM);
+  if (result.total > 0) {
+    if (!targetGM._stableIdMigration || typeof targetGM._stableIdMigration !== 'object') {
+      targetGM._stableIdMigration = { version: 1, totalAssigned: 0, byType: {} }; // arch-ok: schema 迁移收据
+    }
+    targetGM._stableIdMigration.version = 1;
+    targetGM._stableIdMigration.totalAssigned = Number(targetGM._stableIdMigration.totalAssigned || 0) + result.total;
+    Object.keys(result.byType).forEach(function(kind) {
+      targetGM._stableIdMigration.byType[kind] = Number(targetGM._stableIdMigration.byType[kind] || 0) + result.byType[kind];
+    });
+  }
+  return result;
+}
+
 function _tmValidateUniqueStableIds(label, list) {
   if (!Array.isArray(list)) return;
   var seen = Object.create(null);
   list.forEach(function(item, index) {
-    if (!item || item.id === undefined || item.id === null || item.id === '') return;
-    var id = String(item.id);
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error(label + ' 第 ' + index + ' 项不是合法对象');
+    if (_tmStableIdMissing(item.id)) throw new Error(label + ' 缺少稳定 id（索引 ' + index + '）');
+    var raw = item.id;
+    if (typeof raw !== 'string' && !(typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0)) {
+      throw new Error(label + ' id 类型非法（索引 ' + index + '）');
+    }
+    var id = String(raw).trim();
+    if (!id || id.length > 256 || /[\u0000-\u001f\u007f]/.test(id)) throw new Error(label + ' id 格式非法（索引 ' + index + '）');
     if (seen[id] !== undefined) throw new Error(label + ' 存在重复 id: ' + id + '（索引 ' + seen[id] + ' / ' + index + '）');
     seen[id] = index;
   });
@@ -1171,6 +1313,7 @@ function _tmValidateLoadedWorld(targetP, targetGM) {
   _tmValidateUniqueStableIds('势力', targetGM.facs);
   _tmValidateUniqueStableIds('军队', targetGM.armies);
   _tmValidateUniqueStableIds('地图地区', targetGM.mapData && targetGM.mapData.regions);
+  _tmValidateUniqueStableIds('行政区划', _tmCollectAdminDivisionEntries(targetGM).map(function(entry) { return entry.item; }));
   _tmValidateFiniteWorldNumbers(targetP, 'P');
   _tmValidateFiniteWorldNumbers(targetGM, 'GM');
   return true;

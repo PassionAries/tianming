@@ -595,12 +595,17 @@
     });
   }
 
-  function aggregateRegionsToVariables() {
+  function aggregateRegionsToVariables(options) {
+    options = options || {};
+    var strict = options.strict === true;
     var G = global.GM;
     if (!G) return;
 
     // 0. 人口自然漂移（在汇总之前）
-    try { _naturalPopulationGrowth(); } catch(_e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_e, 'bridge] natPopGrowth') : console.warn('[bridge] natPopGrowth', _e); }
+    try { _naturalPopulationGrowth(); } catch(_e) {
+      (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_e, 'bridge] natPopGrowth') : console.warn('[bridge] natPopGrowth', _e);
+      if (strict) throw _e;
+    }
 
     var topLevel = getTopLevelDivisions(G.adminHierarchy, 'player');
     if (topLevel.length === 0) return;
@@ -706,7 +711,7 @@
         if (G.corruption.byDept.palace === undefined)    G.corruption.byDept.palace    = Math.round(avgProvCorr * 1.10);
         if (G.corruption.byDept.technical === undefined) G.corruption.byDept.technical = Math.round(avgProvCorr * 0.55);
         // 按 NPC 派系/私产向上推高技术官外各部门（每周期）
-        try { _accumulateCorruptionFromNpcs(G); } catch(_e) {}
+        try { _accumulateCorruptionFromNpcs(G); } catch(_e) { if (strict) throw _e; }
         // overall = 6 部门平均
         var deptSum = 0, deptCnt = 0;
         Object.keys(G.corruption.byDept || {}).forEach(function(d) {
@@ -775,12 +780,18 @@
         prov.minxinDetails.index = _v;
         prov.minxinDetails.trueIndex = _v;
       });
-    } catch (_uiMxSyncE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_uiMxSyncE, 'bridge] uiMinxinSync') : console.error('[bridge] uiMinxinSync', _uiMxSyncE); }
+    } catch (_uiMxSyncE) {
+      (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_uiMxSyncE, 'bridge] uiMinxinSync') : console.error('[bridge] uiMinxinSync', _uiMxSyncE);
+      if (strict) throw _uiMxSyncE;
+    }
 
     // P-DZ·回合末数值定型后，统一把 minxin/huangwei/huangquan 的 phase 段位 + 皇威 tyrant/失威状态
     //   重算对齐当前数值（minxin.trueIndex 此处刚由聚合写定、huangwei.index 由 _tickHuangwei 衰减写定）——
     //   修「数值变了但段位/暴君标记滞留」：面板段位错位 + authority-complete 等按 phase 触发的后果被带偏。
-    try { if (global.AuthorityEngines && typeof global.AuthorityEngines.syncAuthorityPhases === 'function') global.AuthorityEngines.syncAuthorityPhases(); } catch (_syncPhaseE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_syncPhaseE, 'bridge] syncAuthorityPhases') : console.error('[bridge] syncAuthorityPhases', _syncPhaseE); }
+    try { if (global.AuthorityEngines && typeof global.AuthorityEngines.syncAuthorityPhases === 'function') global.AuthorityEngines.syncAuthorityPhases(); } catch (_syncPhaseE) {
+      (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_syncPhaseE, 'bridge] syncAuthorityPhases') : console.error('[bridge] syncAuthorityPhases', _syncPhaseE);
+      if (strict) throw _syncPhaseE;
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -816,7 +827,13 @@
     try { aggregateRegionsToVariables(); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'bridge] aggregate:') : console.error('[bridge] aggregate:', e); }
   }
 
-  function init() {
+  function init(options) {
+    options = options || {};
+    if (options.strict === true) {
+      initializeFromLegacy();
+      aggregateRegionsToVariables({ strict: true });
+      return;
+    }
     try { initializeFromLegacy(); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'bridge] init:') : console.error('[bridge] init:', e); }
     // 首次聚合
     try { aggregateRegionsToVariables(); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-integration-bridge');}catch(_){}}

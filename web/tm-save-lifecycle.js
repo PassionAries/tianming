@@ -57,7 +57,12 @@ function _tmEnsureTimelineIdentity(gm) {
   } catch (_) {}
   var id = typeof gm._timelineId === 'string' ? gm._timelineId.trim() : '';
   if (!id || id.length > 128 || !/^tml_[A-Za-z0-9_-]+$/.test(id)) {
-    id = 'tml_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 14);
+    try {
+      if (gm._campaignId && typeof window !== 'undefined' && typeof window._tmLegacyTimelineId === 'function') {
+        id = window._tmLegacyTimelineId(gm._campaignId);
+      }
+    } catch (_) {}
+    if (!id) id = 'tml_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 14);
   }
   gm._timelineId = id;
   return id;
@@ -81,7 +86,10 @@ function _tmForkLoadedTimeline(gm, reason) {
 
 function _tmAwaitLoadBarrier() {
   var barrier = (typeof window !== 'undefined') ? window._tmLoadBarrier : null;
-  return barrier && typeof barrier.then === 'function' ? barrier : Promise.resolve(true);
+  return (barrier && typeof barrier.then === 'function' ? barrier : Promise.resolve(true)).then(function(result) {
+    if (result !== true) throw new Error('读档尚未完整完成，保存与过回合已阻止');
+    return true;
+  });
 }
 
 // 确保 GM 所有字段存在默认值（存档前/读档后统一调用）
@@ -1066,15 +1074,93 @@ function _recoverPendingTurnDataPublish() {
   });
 }
 
+function _tmCaptureLoadTransaction() {
+  var oldP = (typeof P !== 'undefined') ? P : null;
+  var oldGM = (typeof GM !== 'undefined') ? GM : null;
+  var presets = null;
+  try {
+    presets = window.scriptData && window.scriptData.customPresets;
+  } catch (_) {}
+  return {
+    id: 'load-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12),
+    P: oldP,
+    GM: oldGM,
+    gmBusy: oldGM && oldGM.busy,
+    hydrationPending: oldGM && oldGM._loadHydrationPending,
+    autoSaveSessionToken: (typeof _tmGetDesktopAutoSaveSessionToken === 'function') ? _tmGetDesktopAutoSaveSessionToken() : '',
+    customPresets: presets
+  };
+}
+
+function _tmRestoreLoadTransaction(txn) {
+  if (!txn) throw new Error('读档回滚缺少事务快照');
+  P = txn.P;
+  GM = txn.GM;
+  if (typeof window !== 'undefined') {
+    window.P = P;
+    window.GM = GM;
+    // load generation 必须单调增加；倒退会让旧 AI/存储租约重新变成有效。
+    window._tmLoadGen = Number(window._tmLoadGen || 0) + 1;
+  }
+  if (GM) {
+    GM.busy = txn.gmBusy;
+    if (txn.hydrationPending === undefined) delete GM._loadHydrationPending;
+    else GM._loadHydrationPending = txn.hydrationPending;
+  }
+  if (typeof _tmInstallScenarioGetter === 'function') _tmInstallScenarioGetter();
+  if (typeof ChronicleSystem !== 'undefined' && ChronicleSystem && typeof ChronicleSystem.deserialize === 'function') {
+    ChronicleSystem.deserialize(GM && GM._chronicleSysState || null, GM);
+  }
+  if (GM && GM._warTruces && typeof WarWeightSystem !== 'undefined' && WarWeightSystem && typeof WarWeightSystem.deserialize === 'function') {
+    WarWeightSystem.deserialize(GM._warTruces);
+  }
+  if (GM && GM._rngState && typeof restoreRng === 'function') restoreRng(GM._rngState);
+  if (typeof _tmRotateDesktopAutoSaveSession === 'function') {
+    var rollbackSessionToken = txn.autoSaveSessionToken;
+    if (!rollbackSessionToken && typeof _tmNewDesktopAutoSaveSessionToken === 'function') {
+      rollbackSessionToken = _tmNewDesktopAutoSaveSessionToken();
+    }
+    if (rollbackSessionToken) _tmRotateDesktopAutoSaveSession('load-rollback', rollbackSessionToken);
+  }
+  try {
+    if (window.scriptData) window.scriptData.customPresets = txn.customPresets;
+  } catch (_) {}
+  if (typeof buildIndices === 'function') buildIndices();
+  try {
+    if (window.TM && TM.FactionIndex && typeof TM.FactionIndex.rebuild === 'function') TM.FactionIndex.rebuild();
+  } catch (_) {}
+  try {
+    if (window.TMPhase8FormalBridge && typeof window.TMPhase8FormalBridge.restoreDraftsFromGM === 'function') {
+      window.TMPhase8FormalBridge.restoreDraftsFromGM(true);
+    }
+  } catch (_) {}
+  if (GM && GM.running) {
+    ['renderGameState', 'renderOfficeTree', 'renderBiannian', 'renderMemorials', 'renderJishi',
+      'renderShijiList', 'renderGameTech', 'renderGameCivic', 'renderRenwu', 'renderSidePanels'].forEach(function(name) {
+      try { if (typeof window[name] === 'function') window[name](); } catch (_) {}
+    });
+  }
+  return true;
+}
+
 function fullLoadGame(data, loadOptions) {
+  if (typeof window !== 'undefined' && window._tmActiveLoadTransaction) {
+    return Promise.reject(new Error('已有读档正在完成，请稍候再切换存档'));
+  }
   var promise = _fullLoadGameImpl(data, loadOptions);
+  var barrier = promise.then(function() { return true; });
+  barrier.catch(function() {}); // barrier 本身保持 rejected；这里只防止无人等待时产生 unhandled rejection。
   try {
     if (typeof window !== 'undefined') {
-      window._tmLoadBarrier = promise;
+      window._tmLoadBarrier = barrier;
       promise.then(function() {
-        if (window._tmLoadBarrier === promise) window._tmLoadBarrier = Promise.resolve(true);
-      }, function() {
-        if (window._tmLoadBarrier === promise) window._tmLoadBarrier = Promise.resolve(false);
+        if (window._tmLoadBarrier === barrier) window._tmLoadBarrier = Promise.resolve(true);
+      }, function(error) {
+        // 成功恢复旧世界后允许继续保存旧局；回滚失败则保留 rejected barrier，绝不把
+        // 半载入世界伪装成 Promise.resolve(false) 后交给忽略返回值的调用方。
+        if (window._tmLoadBarrier === barrier && error && error._tmLoadRollbackComplete === true) {
+          window._tmLoadBarrier = Promise.resolve(true);
+        }
       });
     }
   } catch (_) {}
@@ -1082,6 +1168,29 @@ function fullLoadGame(data, loadOptions) {
 }
 
 async function _fullLoadGameImpl(data, loadOptions){
+  var _loadTxn = _tmCaptureLoadTransaction();
+  if (typeof window !== 'undefined') window._tmActiveLoadTransaction = _loadTxn;
+  try {
+    await _fullLoadGameApplyImpl(data, loadOptions, _loadTxn);
+    if (typeof window !== 'undefined' && window._tmActiveLoadTransaction === _loadTxn) {
+      window._tmActiveLoadTransaction = null;
+    }
+  } catch (error) {
+    if (!error || (typeof error !== 'object' && typeof error !== 'function')) error = new Error(String(error));
+    if (typeof window !== 'undefined' && window._tmActiveLoadTransaction === _loadTxn) {
+      try {
+        _tmRestoreLoadTransaction(_loadTxn);
+        error._tmLoadRollbackComplete = true;
+      } catch (rollbackError) {
+        error._tmLoadRollbackError = rollbackError;
+      }
+      window._tmActiveLoadTransaction = null;
+    }
+    throw error;
+  }
+}
+
+async function _fullLoadGameApplyImpl(data, loadOptions, _loadTxn){
   loadOptions = loadOptions || {};
   // 跨档保留 API 设置：localStorage 的 tm_api 是用户的"机器"配置·不应被存档覆盖
   var _preservedAi = null;
@@ -1120,6 +1229,14 @@ async function _fullLoadGameImpl(data, loadOptions){
   if (GM) GM._isFreshNewGame = false;
   if (typeof _tmInstallScenarioGetter === 'function') _tmInstallScenarioGetter(); // P 整体重赋值后重装 P.scenario 派生 getter
   try { if (typeof window !== 'undefined') window._tmLoadGen = (window._tmLoadGen || 0) + 1; } catch (_lg) {} // 读档代际++·按GM.turn失效的模块级缓存(officeIndex/memCache)读同turn档曾泄漏旧局数据(2026-07-04 审查定罪)
+  var _loadLeaseP = P;
+  var _loadLeaseGM = GM;
+  var _loadLeaseGen = (typeof window !== 'undefined') ? Number(window._tmLoadGen || 0) : 0;
+  function _assertLoadLeaseCurrent() {
+    var current = (typeof window === 'undefined') || (window._tmActiveLoadTransaction === _loadTxn
+      && window.P === _loadLeaseP && window.GM === _loadLeaseGM && Number(window._tmLoadGen || 0) === _loadLeaseGen);
+    if (!current) throw new Error('读档请求已被更新的世界切换取代');
+  }
   // 同步通知主进程切换 canonical auto-save session。旧 IPC 即使正在 writeFile，rename 前也会因 token 失效被拒；
   // 从 canonical 自动档恢复时沿用其 token，普通案卷/残局读档则创建新 token。
   try {
@@ -1394,8 +1511,10 @@ async function _fullLoadGameImpl(data, loadOptions){
     // 读档完成屏障：先合并当前父时间线的有效辅助记录和可恢复分卷，再开放任何玩法操作。
     if (typeof ChronicleSystem !== 'undefined' && typeof ChronicleSystem.hydrateDurableRecords === 'function') {
       await ChronicleSystem.hydrateDurableRecords(GM, P);
+      _assertLoadLeaseCurrent();
     }
     await _recoverPendingTurnDataPublish();
+    _assertLoadLeaseCurrent();
     // 每次从快照继续都建立子时间线；失败回滚可显式 preserveTimeline 复原原身份。
     if (!loadOptions.preserveTimeline) _tmForkLoadedTimeline(GM, loadOptions.source || 'load');
     GM._loadHydrationPending = false;

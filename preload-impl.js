@@ -93,6 +93,9 @@ contextBridge.exposeInMainWorld('tianming', {
   listSaves: () =>
     ipcRenderer.invoke('list-saves'),
 
+  listSaveTimelineRefs: () =>
+    ipcRenderer.invoke('list-save-timeline-refs'),
+
   deleteSave: (filename) =>
     ipcRenderer.invoke('delete-save', filename),
 

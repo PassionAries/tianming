@@ -30,10 +30,26 @@
     return _newId('tml_');
   }
 
+  // v8 以前的存档、编年 checkpoint 与时间快照只有 campaignId。升级时必须
+  // 将它们稳定地汇入同一条 legacy 时间线；若每次读档随机补 timelineId，
+  // 物理上仍在 IndexedDB 的旧记录会永远无法重新关联。
+  function legacyTimelineId(campaignId) {
+    var source = String(campaignId || '').trim();
+    var hash = 2166136261;
+    for (var i = 0; i < source.length; i++) {
+      hash ^= source.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    var tail = source.replace(/[^A-Za-z0-9_-]/g, '_').slice(-40) || 'campaign';
+    return 'tml_legacy_' + (hash >>> 0).toString(16).padStart(8, '0') + '_' + tail;
+  }
+
   function ensureTimelineId(gm) {
     if (!gm || typeof gm !== 'object') return '';
     var id = gm._timelineId;
-    if (!_validId(id, 'tml_')) id = newTimelineId();
+    if (!_validId(id, 'tml_')) {
+      id = gm._campaignId ? legacyTimelineId(gm._campaignId) : newTimelineId();
+    }
     gm._timelineId = id;
     return id;
   }
@@ -51,11 +67,13 @@
 
   global.TMWorldIdentity = {
     newTimelineId: newTimelineId,
+    legacyTimelineId: legacyTimelineId,
     ensureTimelineId: ensureTimelineId,
     forkTimeline: forkTimeline,
     isValidTimelineId: function(value) { return _validId(value, 'tml_'); }
   };
   global._tmNewTimelineId = newTimelineId;
+  global._tmLegacyTimelineId = legacyTimelineId;
   global._tmEnsureTimelineId = ensureTimelineId;
   global._tmForkTimeline = forkTimeline;
 })(typeof window !== 'undefined' ? window : this);

@@ -275,6 +275,36 @@ function makeContext(indexedDB, localStorage) {
   check(gcIdb.stores.get('chronicleRecords').size === 0 && gcIdb.stores.get('turnPublishReceipts').size === 0,
     'deleting the final timeline save garbage-collects its chronicle and receipt records');
 
+  const desktopGcIdb = makeIndexedDB();
+  const desktopGcCtx = makeContext(desktopGcIdb, makeLocalStorage());
+  let desktopRefs = [{ storageKey: 'manual-desktop', campaignId: 'campaign-desktop-gc', timelineId: 'tml_desktop_gc_12345678' }];
+  let desktopRefsComplete = true;
+  desktopGcCtx.tianming = {
+    isDesktop: true,
+    async listSaveTimelineRefs() { return { success: true, complete: desktopRefsComplete, refs: desktopRefs }; }
+  };
+  await desktopGcCtx.TM_SaveDB.open();
+  const desktopGcState = { GM: { turn: 8, _campaignId: 'campaign-desktop-gc', _timelineId: 'tml_desktop_gc_12345678' }, P: {} };
+  await desktopGcCtx.TM_SaveDB.save('slot_desktop_gc', desktopGcState, { type: 'manual', turn: 8 });
+  await desktopGcCtx.TM_SaveDB.saveChronicleRecord({
+    campaignId: 'campaign-desktop-gc', timelineId: 'tml_desktop_gc_12345678', year: 2024, sourceTurn: 8,
+    historyBasisHash: 'chb_desktop_gc_12345678', chronicle: { content: '桌面分支正史' }
+  });
+  await desktopGcCtx.TM_SaveDB.delete('slot_desktop_gc');
+  check(desktopGcIdb.stores.get('chronicleRecords').size === 1,
+    'desktop sidecar reference keeps auxiliary records after the final IndexedDB slot is removed');
+  desktopRefs = [];
+  desktopRefsComplete = false;
+  await desktopGcCtx.TM_SaveDB.save('slot_desktop_gc_retry', desktopGcState, { type: 'manual', turn: 8 });
+  await desktopGcCtx.TM_SaveDB.delete('slot_desktop_gc_retry');
+  check(desktopGcIdb.stores.get('chronicleRecords').size === 1,
+    'incomplete desktop reference registry makes auxiliary GC fail closed');
+  desktopRefsComplete = true;
+  await desktopGcCtx.TM_SaveDB.save('slot_desktop_gc_final', desktopGcState, { type: 'manual', turn: 8 });
+  await desktopGcCtx.TM_SaveDB.delete('slot_desktop_gc_final');
+  check(desktopGcIdb.stores.get('chronicleRecords').size === 0,
+    'auxiliary records are collected only after both IndexedDB and complete desktop registries have no references');
+
   const oldBranchState = { GM: { turn: 20, _campaignId: 'campaign-overwrite', _timelineId: 'tml_overwrite_old_12345678' }, P: {} };
   await gcCtx.TM_SaveDB.save('slot_overwrite', oldBranchState, { type: 'manual', turn: 20 });
   await gcCtx.TM_SaveDB.saveChronicleRecord({

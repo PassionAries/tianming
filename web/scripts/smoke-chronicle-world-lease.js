@@ -175,6 +175,22 @@ function setWorld(id, time, timelineId) {
   check(branchHydrated.merged === 0 && !ctx.ChronicleSystem.yearChronicles[2025],
     'same-campaign durable chronicle never crosses into a different timeline');
 
+  const legacyChronicleTimeline = 'tml_legacy_claim_12345678';
+  setWorld('legacy-chronicle', { year: 2024, startYear: 2024, startMonth: 1, startDay: 1 }, legacyChronicleTimeline);
+  ctx.GM.turn = 1;
+  ctx.ChronicleSystem.addMonthDraft(1, '旧版年度素材', '旧版月稿');
+  durableChronicles.set('legacy-chronicle:' + legacyChronicleTimeline + ':2024', {
+    id: 'chronicle:legacy-chronicle:' + legacyChronicleTimeline + ':2024',
+    campaignId: 'legacy-chronicle', timelineId: legacyChronicleTimeline, year: 2024,
+    sourceTurn: -1, historyBasisHash: '', migrationState: 'legacy-unassigned', generatedAt: 10,
+    chronicle: { content: '迁移后的旧版正史', afterword: '旧史评', generatedAt: 10 }
+  });
+  const legacyHydrated = await ctx.ChronicleSystem.hydrateDurableRecords(ctx.GM, ctx.P);
+  const preservedLegacy = durableChronicles.get('legacy-chronicle:' + legacyChronicleTimeline + ':2024');
+  check(legacyHydrated.merged === 0 && !ctx.ChronicleSystem.yearChronicles[2024]
+    && preservedLegacy.migrationState === 'legacy-unassigned' && preservedLegacy.chronicle.content === '迁移后的旧版正史',
+  'ambiguous v4 chronicle stays durable but is never silently attached to the first loaded legacy branch');
+
   setWorld('annual-filter', { year: 2024, startYear: 2024, startMonth: 1, startDay: 1 }, annualTimeline);
   ctx.GM.turn = first2025Turn + 1;
   ctx.ChronicleSystem.deserialize(canonicalBeforeBackgroundResult, ctx.GM);

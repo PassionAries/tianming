@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// StateSnapshot v3：同回合跨战役/时间线隔离、完整状态恢复、异步身份租约与 awaited hook。
+// StateSnapshot v4：旧快照迁移、祖先只读继承、完整状态恢复、异步身份租约与 awaited hook。
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
@@ -12,13 +12,57 @@ let pass = 0;
 function ok(cond, msg) { if (!cond) throw new Error('FAIL: ' + msg); pass++; console.log('  ok - ' + msg); }
 function clone(v) { return JSON.parse(JSON.stringify(v)); }
 
-function fakeIndexedDB() {
+function fakeIndexedDB(options) {
+  options = options || {};
   const stores = new Map();
+  const deletedIndexes = [];
+  if (Array.isArray(options.records)) {
+    stores.set('snapshots_v2', {
+      keyPath: 'id',
+      rows: new Map(options.records.map(record => [String(record.id), clone(record)])),
+      indexes: new Set(options.indexes || ['campaignId', 'campaignTurn'])
+    });
+    stores.set('snapshots', { keyPath: 'turn', rows: new Map(), indexes: new Set() });
+  }
+  function storeFacade(def) {
+    function completeLater(tx) { setTimeout(function() { if (tx && tx.oncomplete) tx.oncomplete(); }, 0); }
+    return {
+      indexNames: { contains(name) { return def.indexes.has(name); } },
+      createIndex(name) { def.indexes.add(name); },
+      deleteIndex(name) { def.indexes.delete(name); deletedIndexes.push(name); },
+      put(record) { def.rows.set(String(record[def.keyPath]), clone(record)); return {}; },
+      get(key) {
+        const req = {};
+        setTimeout(function() { if (req.onsuccess) req.onsuccess({ target: { result: def.rows.has(String(key)) ? clone(def.rows.get(String(key))) : undefined } }); }, 0);
+        return req;
+      },
+      getAll() {
+        const req = {};
+        setTimeout(function() { if (req.onsuccess) req.onsuccess({ target: { result: Array.from(def.rows.values()).map(clone) } }); }, 0);
+        return req;
+      },
+      delete(key) { def.rows.delete(String(key)); return {}; },
+      openCursor() {
+        const req = {};
+        const values = Array.from(def.rows.values()).map(clone);
+        let cursorIndex = 0;
+        function advance() {
+          setTimeout(function() {
+            req.result = cursorIndex < values.length ? { value: values[cursorIndex++], continue: advance } : null;
+            if (req.onsuccess) req.onsuccess({ target: req });
+          }, 0);
+        }
+        advance();
+        return req;
+      },
+      _completeLater: completeLater
+    };
+  }
   const db = {
     objectStoreNames: { contains(name) { return stores.has(name); } },
     createObjectStore(name, options) {
-      if (!stores.has(name)) stores.set(name, { keyPath: options.keyPath, rows: new Map() });
-      return { createIndex() {} };
+      if (!stores.has(name)) stores.set(name, { keyPath: options.keyPath, rows: new Map(), indexes: new Set() });
+      return storeFacade(stores.get(name));
     },
     close() {},
     transaction(name) {
@@ -27,30 +71,24 @@ function fakeIndexedDB() {
       const tx = { error: null, oncomplete: null, onerror: null, onabort: null };
       function completeLater() { setTimeout(function() { if (tx.oncomplete) tx.oncomplete(); }, 0); }
       tx.objectStore = function() {
-        return {
-          put(record) { def.rows.set(record[def.keyPath], clone(record)); completeLater(); return {}; },
-          get(key) {
-            const req = {};
-            setTimeout(function() { if (req.onsuccess) req.onsuccess({ target: { result: def.rows.has(key) ? clone(def.rows.get(key)) : undefined } }); }, 0);
-            return req;
-          },
-          getAll() {
-            const req = {};
-            setTimeout(function() { if (req.onsuccess) req.onsuccess({ target: { result: Array.from(def.rows.values()).map(clone) } }); }, 0);
-            return req;
-          },
-          delete(key) { def.rows.delete(key); completeLater(); return {}; }
-        };
+        const facade = storeFacade(def);
+        const put = facade.put;
+        const del = facade.delete;
+        facade.put = function(record) { const result = put(record); completeLater(); return result; };
+        facade.delete = function(key) { const result = del(key); completeLater(); return result; };
+        return facade;
       };
       return tx;
     }
   };
   return {
     stores,
-    open() {
+    deletedIndexes,
+    open(_name, version) {
       const req = {};
       setTimeout(function() {
-        if (req.onupgradeneeded) req.onupgradeneeded({ target: { result: db } });
+        const upgradeTx = { objectStore(name) { return storeFacade(stores.get(name)); } };
+        if (req.onupgradeneeded) req.onupgradeneeded({ oldVersion: Number(options.oldVersion) || 0, target: { result: db, transaction: upgradeTx } });
         if (req.onsuccess) req.onsuccess({ target: { result: db } });
       }, 0);
       return req;
@@ -93,9 +131,45 @@ function fakeIndexedDB() {
   vm.createContext(ctx);
   vm.runInContext(src, ctx);
 
-  ok(/DB_VERSION = 3/.test(src) && /keyPath: 'id'/.test(src), 'v3 使用 campaign/timeline/turn compound record id');
+  ok(/DB_VERSION = 4/.test(src) && /keyPath: 'id'/.test(src), 'v4 使用 campaign/timeline/turn compound record id');
   ok(/_buildSaveState/.test(src) && /format: 'idb', detach: true/.test(src), '快照复用完整纯存档 builder');
   ok(registeredHook && typeof registeredHook === 'function', 'after hook 已注册');
+
+  function expectedLegacyTimeline(campaignId) {
+    let hash = 2166136261;
+    for (let i = 0; i < campaignId.length; i++) {
+      hash ^= campaignId.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return 'tml_legacy_' + (hash >>> 0).toString(16).padStart(8, '0') + '_' + campaignId;
+  }
+  const legacyCampaign = 'campaignLegacy';
+  const legacyTimeline = expectedLegacyTimeline(legacyCampaign);
+  const legacyDb = fakeIndexedDB({
+    oldVersion: 2,
+    records: [{
+      id: legacyCampaign + ':4', campaignId: legacyCampaign, turn: 4, ts: 4, schema: 2,
+      state: { GM: { _campaignId: legacyCampaign, turn: 4, marker: 'legacy-v2' }, P: { conf: { legacy: true } } }
+    }]
+  });
+  const legacyCtx = {
+    console, Promise, Date, Math, JSON, Object, Array, Number,
+    setTimeout, clearTimeout, structuredClone,
+    indexedDB: legacyDb,
+    EndTurnHooks: { register() {} }, addEventListener() {},
+    _buildSaveState(options) { return { GM: clone(options.gm), P: clone(options.p || {}) }; }
+  };
+  legacyCtx.window = legacyCtx;
+  vm.createContext(legacyCtx);
+  vm.runInContext(src, legacyCtx);
+  await legacyCtx.StateSnapshot.list(legacyCampaign, legacyTimeline);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const migratedLegacy = await legacyCtx.StateSnapshot.load(4, legacyCampaign, legacyTimeline);
+  ok(migratedLegacy && migratedLegacy.state.GM.marker === 'legacy-v2'
+    && migratedLegacy.state.GM._timelineId === legacyTimeline
+    && migratedLegacy.migrationState === 'legacy-v2',
+  'v2 campaign-only snapshot migrates atomically into deterministic legacy timeline');
+  ok(legacyDb.deletedIndexes.includes('campaignTurn'), 'v4 upgrade removes obsolete unique campaignTurn index');
 
   ctx.GM = { _campaignId: 'campA', _timelineId: 'tml_campA_12345678', turn: 1, marker: 'A1', customWorld: { deep: 11 }, shijiHistory: [{ turn: 1, a: 1 }], evtLog: [{ turn: 1 }] };
   ctx.P = { conf: { campaign: 'A' }, mapData: { a: 1 } };
@@ -106,6 +180,23 @@ function fakeIndexedDB() {
   ctx.GM.shijiHistory.push({ turn: 2, a: 2 }); ctx.P.mapData.a = 2;
   r = await ctx.StateSnapshot.save(2);
   ok(r.ok === true && (await ctx.StateSnapshot.list()).length === 2, '同局多回合可列出');
+
+  ctx.GM = {
+    _campaignId: 'campA', _timelineId: 'tml_childA_12345678', _parentTimelineId: 'tml_campA_12345678',
+    _forkTurn: 2, turn: 2, marker: 'A2-child', customWorld: { deep: 23 }, shijiHistory: [], evtLog: []
+  };
+  ctx.P = { conf: { campaign: 'A-child' }, mapData: { a: 23 } };
+  const inheritedList = await ctx.StateSnapshot.list();
+  const inheritedA1 = await ctx.StateSnapshot.load(1);
+  ok(inheritedList.map(item => item.turn).join(',') === '1,2'
+    && inheritedList.every(item => item.inherited === true)
+    && inheritedA1 && inheritedA1.inherited === true && inheritedA1.state.GM.marker === 'A1',
+  '子时间线以父链只读继承 forkTurn 以前的完整快照列表');
+  r = await ctx.StateSnapshot.save(2);
+  const childOverrideList = await ctx.StateSnapshot.list();
+  ok(r.ok === true && childOverrideList[0].inherited === true && childOverrideList[1].inherited === false
+    && (await ctx.StateSnapshot.load(2)).state.GM.marker === 'A2-child',
+  '子时间线同回合快照覆盖父线视图但不复制其他祖先 payload');
 
   ctx.GM = { _campaignId: 'campB', _timelineId: 'tml_campB_12345678', turn: 1, marker: 'B1', customWorld: { deep: 99 }, shijiHistory: [], evtLog: [] };
   ctx.P = { conf: { campaign: 'B' } };

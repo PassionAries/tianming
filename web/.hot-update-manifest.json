@@ -2,7 +2,7 @@
   "type": "tianming-hot-update",
   "version": "1.3.4.11",
   "entry": "index.html",
-  "generatedAt": "2026-08-19T18:38:20.892Z",
+  "generatedAt": "2026-08-20T02:08:49.075Z",
   "files": [
     {
       "path": "_preview_map.json",
@@ -2161,8 +2161,8 @@
     },
     {
       "path": "index.html",
-      "sha256": "e3a2baff35fdd0ad14923d0a40965ef9aeb13d306073ee43fbccb36ee064ba4e",
-      "size": 68582
+      "sha256": "4d6cee867ed96d514ca6b47c4cb3900148fce95ad740ae4c14a2b0944c0dc982",
+      "size": 68606
     },
     {
       "path": "INDEX.md",
@@ -3691,8 +3691,8 @@
     },
     {
       "path": "tm-chronicle-system.js",
-      "sha256": "36052327b81fa3cddf3928a2ba7d313a4d230589b6595a7ea96252743c1192a6",
-      "size": 27104
+      "sha256": "11d211ccd52e0f4313d62ef42413a59523faf9f718ae2cdb392a1968264dc1bf",
+      "size": 27657
     },
     {
       "path": "tm-chronicle-tracker.js",
@@ -5096,8 +5096,8 @@
     },
     {
       "path": "tm-save-lifecycle.js",
-      "sha256": "ec8c206dec82d3d3552b2fbd72b6ea9a23b403b49b2fbbf2288c51fb4aebbe52",
-      "size": 114559
+      "sha256": "651c8146813e0f704cb2a28a8a8e19a1d0d225d4b83b4608330805b9856a6a0e",
+      "size": 120027
     },
     {
       "path": "tm-save-manager.js",
@@ -5146,8 +5146,8 @@
     },
     {
       "path": "tm-state-snapshot.js",
-      "sha256": "9be9918575e045a7ad1e525f3e61033581e4884c0ccd23f88088c1600452b6b3",
-      "size": 19785
+      "sha256": "c31cca7a535b650e39ceb7abdb2d38662c8624692256edde28b704b89036520f",
+      "size": 25261
     },
     {
       "path": "tm-state.js",
@@ -5156,8 +5156,8 @@
     },
     {
       "path": "tm-storage.js",
-      "sha256": "0b30aad1ae7e809d66a60094c8f2b70cf1813c1ed37dac5faa910d9873820d5b",
-      "size": 63398
+      "sha256": "80b5b08a10f2cecabb8c589337ca930ca1972621d577b035effd90ea0e4104db",
+      "size": 68691
     },
     {
       "path": "tm-talent-backlash.js",
@@ -5311,8 +5311,8 @@
     },
     {
       "path": "tm-world-identity.js",
-      "sha256": "d6d3076b81a64703c251424dd58bfd015e69015dce6b51c8480e96cf1d21f9b3",
-      "size": 2122
+      "sha256": "399479d213b0fa4677ba9b545811f0faf6cbe8f321013a32b7554bbe7dc1ed70",
+      "size": 2959
     },
     {
       "path": "tm-world-reactors.js",

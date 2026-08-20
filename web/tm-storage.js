@@ -52,7 +52,7 @@ var TM_SaveDB = (function() {
   'use strict';
 
   var DB_NAME = 'tianming_db'; // 统一数据库名
-  var DB_VERSION = 5; // v5: 辅助记录按 campaign + timeline 建索引并参与存档生命周期回收
+  var DB_VERSION = 6; // v6: 将 v4/v5 的无 timeline 辅助记录原子迁入确定性 legacy 时间线
   var SAVE_STORE = 'saves';
   var SAVE_META_STORE = 'saveMetadata';
   var PROJECT_STORE = 'projects';
@@ -68,6 +68,58 @@ var TM_SaveDB = (function() {
     slot_0: true,
     pre_endturn: true
   });
+
+  function _legacyTimelineId(campaignId) {
+    try {
+      if (typeof window !== 'undefined' && typeof window._tmLegacyTimelineId === 'function') {
+        return window._tmLegacyTimelineId(campaignId);
+      }
+    } catch (_) {}
+    var source = String(campaignId || '').trim();
+    var hash = 2166136261;
+    for (var i = 0; i < source.length; i++) {
+      hash ^= source.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    var tail = source.replace(/[^A-Za-z0-9_-]/g, '_').slice(-40) || 'campaign';
+    return 'tml_legacy_' + (hash >>> 0).toString(16).padStart(8, '0') + '_' + tail;
+  }
+
+  function _migrateLocalAuxiliaryRecords() {
+    [CHRONICLE_RECORD_STORE, TURN_PUBLISH_RECEIPT_STORE].forEach(function(storeName) {
+      var prefix = 'tm_idb_' + storeName + '_';
+      var keys = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var key = localStorage.key(i);
+        if (key && key.indexOf(prefix) === 0) keys.push(key);
+      }
+      keys.forEach(function(oldKey) {
+        var raw = localStorage.getItem(oldKey);
+        if (!raw) return;
+        var record;
+        try { record = JSON.parse(raw); } catch (_) { return; }
+        if (!record || _validTimelineId(record.timelineId) || !record.campaignId) return;
+        var oldId = String(record.id || oldKey.slice(prefix.length));
+        var timelineId = _legacyTimelineId(record.campaignId);
+        record.timelineId = timelineId;
+        record.legacySourceId = oldId;
+        if (storeName === CHRONICLE_RECORD_STORE) {
+          if (!Number.isSafeInteger(Number(record.year))) return;
+          record.id = _auxRecordId('chronicle', record.campaignId, timelineId + ':' + Number(record.year));
+          record.sourceTurn = -1;
+          record.historyBasisHash = '';
+          record.migrationState = 'legacy-unassigned';
+        } else {
+          if (!String(record.transactionId || '')) return;
+          record.id = _auxRecordId('turn-publish', record.campaignId, timelineId + ':' + String(record.transactionId || ''));
+          record.migrationState = 'legacy-v4';
+        }
+        var newKey = prefix + record.id;
+        localStorage.setItem(newKey, JSON.stringify(record));
+        if (newKey !== oldKey) localStorage.removeItem(oldKey);
+      });
+    });
+  }
 
   function _restoreLocalSaveBatchItems(items) {
     items = Array.isArray(items) ? items : [];
@@ -99,6 +151,8 @@ var TM_SaveDB = (function() {
   function open() {
     try { _recoverLocalSaveBatchJournal(); }
     catch (journalError) { return Promise.reject(new Error('localStorage 批量存档恢复失败：' + (journalError && journalError.message || journalError))); }
+    try { _migrateLocalAuxiliaryRecords(); }
+    catch (migrationError) { console.warn('[SaveDB] localStorage 辅助记录迁移延后重试:', migrationError); }
     if (_db) return Promise.resolve(_db);
     if (_openPromise) return _openPromise;
 
@@ -143,6 +197,41 @@ var TM_SaveDB = (function() {
         ensureIndex(chronicleStore, 'campaignTimeline', ['campaignId', 'timelineId']);
         ensureIndex(chronicleStore, 'campaignTimelineYear', ['campaignId', 'timelineId', 'year']);
         ensureIndex(receiptStore, 'campaignTimelineStatus', ['campaignId', 'timelineId', 'status']);
+        // v4 的 key 只有 campaign/year 或 campaign/transactionId；v5 只补了索引，旧行仍不进入
+        // compound index。v6 在同一 upgrade transaction 中先 put 新键、再删旧键；任何异常都会
+        // 由 IndexedDB 原子回滚，旧记录可在下次启动继续迁移。
+        if (e.oldVersion > 0 && e.oldVersion < 6) {
+          function migrateAuxStore(store, kind) {
+            var cursorReq = store.openCursor();
+            cursorReq.onsuccess = function() {
+              var cursor = cursorReq.result;
+              if (!cursor) return;
+              var record = cursor.value;
+              if (record && record.campaignId && !_validTimelineId(record.timelineId)) {
+                var oldId = String(record.id || '');
+                var timelineId = _legacyTimelineId(record.campaignId);
+                record.timelineId = timelineId;
+                record.legacySourceId = oldId;
+                if (kind === 'chronicle') {
+                  if (!Number.isSafeInteger(Number(record.year))) { cursor.continue(); return; }
+                  record.id = _auxRecordId('chronicle', record.campaignId, timelineId + ':' + Number(record.year));
+                  record.sourceTurn = -1;
+                  record.historyBasisHash = '';
+                  record.migrationState = 'legacy-unassigned';
+                } else {
+                  if (!String(record.transactionId || '')) { cursor.continue(); return; }
+                  record.id = _auxRecordId('turn-publish', record.campaignId, timelineId + ':' + String(record.transactionId || ''));
+                  record.migrationState = 'legacy-v4';
+                }
+                store.put(record);
+                if (oldId && oldId !== record.id) store.delete(oldId);
+              }
+              cursor.continue();
+            };
+          }
+          migrateAuxStore(chronicleStore, 'chronicle');
+          migrateAuxStore(receiptStore, 'turn-publish');
+        }
         // v2→v3 只在升级事务中遍历一次旧 payload，之后列表永远只读轻量 metadata。
         if (e.oldVersion > 0 && e.oldVersion < 3 && saveStore && metadataStore) {
           var cursorReq = saveStore.openCursor();
@@ -1050,6 +1139,18 @@ var TM_SaveDB = (function() {
   }
 
   /** 删除游戏存档 */
+  function _desktopTimelineMayBeReferenced(campaignId, timelineId) {
+    var bridge = (typeof window !== 'undefined') ? window.tianming : null;
+    if (!(bridge && bridge.isDesktop)) return Promise.resolve(false);
+    if (typeof bridge.listSaveTimelineRefs !== 'function') return Promise.resolve(true);
+    return Promise.resolve(bridge.listSaveTimelineRefs()).then(function(result) {
+      if (!(result && result.success === true && result.complete === true && Array.isArray(result.refs))) return true;
+      return result.refs.some(function(ref) {
+        return ref && String(ref.campaignId || '') === campaignId && String(ref.timelineId || '') === timelineId;
+      });
+    }).catch(function() { return true; });
+  }
+
   function _gcAuxiliaryTimelineIfUnreferenced(metadata) {
     var campaignId = String(metadata && metadata.campaignId || '');
     var timelineId = String(metadata && metadata.timelineId || '');
@@ -1059,10 +1160,13 @@ var TM_SaveDB = (function() {
         return record && String(record.campaignId || '') === campaignId && String(record.timelineId || '') === timelineId;
       });
       if (referenced) return false;
-      return Promise.all([
-        listChronicleRecords(campaignId, timelineId).then(function(rows) { return _deleteMany(CHRONICLE_RECORD_STORE, rows); }),
-        listTurnPublishReceipts(campaignId, timelineId, '').then(function(rows) { return _deleteMany(TURN_PUBLISH_RECEIPT_STORE, rows); })
-      ]).then(function() { return true; });
+      return _desktopTimelineMayBeReferenced(campaignId, timelineId).then(function(desktopReferenced) {
+        if (desktopReferenced) return false;
+        return Promise.all([
+          listChronicleRecords(campaignId, timelineId).then(function(rows) { return _deleteMany(CHRONICLE_RECORD_STORE, rows); }),
+          listTurnPublishReceipts(campaignId, timelineId, '').then(function(rows) { return _deleteMany(TURN_PUBLISH_RECEIPT_STORE, rows); })
+        ]).then(function() { return true; });
+      });
     });
   }
 

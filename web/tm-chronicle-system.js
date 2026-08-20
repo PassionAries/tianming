@@ -483,26 +483,34 @@ var ChronicleSystem = {
     return TM_SaveDB.listChronicleRecords(campaignId, timelineId).then(function(records) {
       if (!leaseIsCurrent()) return { ok: false, stale: true };
       var merged = 0;
-      (records || []).sort(function(a, b) { return Number(a && a.generatedAt || 0) - Number(b && b.generatedAt || 0); }).forEach(function(record) {
-        if (!record || String(record.campaignId || '') !== campaignId || String(record.timelineId || '') !== timelineId) return;
+      records = (records || []).sort(function(a, b) { return Number(a && a.generatedAt || 0) - Number(b && b.generatedAt || 0); });
+      for (var recordIndex = 0; recordIndex < records.length; recordIndex++) {
+        var record = records[recordIndex];
+        if (!record || String(record.campaignId || '') !== campaignId || String(record.timelineId || '') !== timelineId) continue;
         var year = Number(record.year);
         var incoming = record.chronicle;
-        if (!Number.isSafeInteger(year) || !incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return;
-        if (typeof incoming.content !== 'string' || !incoming.content) return;
-        var sourceTurn = Number(record.sourceTurn);
-        if (!Number.isSafeInteger(sourceTurn) || sourceTurn < 0 || sourceTurn > Number(targetGM.turn || 0)) return;
+        if (!Number.isSafeInteger(year) || !incoming || typeof incoming !== 'object' || Array.isArray(incoming)) continue;
+        if (typeof incoming.content !== 'string' || !incoming.content) continue;
         var currentBasis = targetState.yearBases[year] || _chronicleBuildYearBasis(targetGM, targetState, year);
-        if (!currentBasis || currentBasis.sourceTurn !== sourceTurn || currentBasis.historyBasisHash !== String(record.historyBasisHash || '')) return;
+        if (String(record.migrationState || '') === 'legacy-unassigned') {
+          // v4 checkpoint 没有 sourceTurn/historyBasisHash，无法证明它属于哪个旧存档分支。
+          // 迁移器会完整保留这条记录供显式导入/诊断，但 hydration 绝不把它静默附着到
+          // “第一个被加载的世界”，否则一次升级就会重新制造跨分支串史。
+          continue;
+        }
+        var sourceTurn = Number(record.sourceTurn);
+        if (!Number.isSafeInteger(sourceTurn) || sourceTurn < 0 || sourceTurn > Number(targetGM.turn || 0)) continue;
+        if (!currentBasis || currentBasis.sourceTurn !== sourceTurn || currentBasis.historyBasisHash !== String(record.historyBasisHash || '')) continue;
         targetState.yearBases[year] = currentBasis;
         var current = targetState.yearChronicles[year];
-        if (current && Number(current.generatedAt || 0) >= Number(record.generatedAt || incoming.generatedAt || 0)) return;
+        if (current && Number(current.generatedAt || 0) >= Number(record.generatedAt || incoming.generatedAt || 0)) continue;
         var cloned = null;
         try { cloned = JSON.parse(JSON.stringify(incoming)); } catch (_) { cloned = null; }
-        if (!cloned) return;
+        if (!cloned) continue;
         if (current && current.read === true) cloned.read = true;
         targetState.yearChronicles[year] = cloned;
         merged++;
-      });
+      }
       _chronicleTrimYears(targetState, targetP);
       if (merged && leaseIsCurrent() && typeof renderBiannian === 'function') {
         try { renderBiannian(); } catch (_) {}

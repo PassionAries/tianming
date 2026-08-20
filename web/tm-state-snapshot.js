@@ -12,9 +12,23 @@
   var DB_NAME = 'tianming_snapshots';
   var LEGACY_STORE = 'snapshots';
   var STORE = 'snapshots_v2';
-  var DB_VERSION = 3;
+  var DB_VERSION = 4;
   var MAX_SNAPSHOTS = 200;
   var _dbPromise = null;
+
+  function _legacyTimelineId(campaignId) {
+    try {
+      if (typeof global._tmLegacyTimelineId === 'function') return global._tmLegacyTimelineId(campaignId);
+    } catch (_) {}
+    var source = String(campaignId || '').trim();
+    var hash = 2166136261;
+    for (var i = 0; i < source.length; i++) {
+      hash ^= source.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    var tail = source.replace(/[^A-Za-z0-9_-]/g, '_').slice(-40) || 'campaign';
+    return 'tml_legacy_' + (hash >>> 0).toString(16).padStart(8, '0') + '_' + tail;
+  }
 
   function _newCampaignId() {
     try {
@@ -40,7 +54,9 @@
       if (typeof global._tmEnsureTimelineId === 'function') return global._tmEnsureTimelineId(gm);
     } catch (_) {}
     var id = typeof gm._timelineId === 'string' ? gm._timelineId.trim() : '';
-    if (!/^tml_[A-Za-z0-9_-]{8,124}$/.test(id)) id = 'tml_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 14);
+    if (!/^tml_[A-Za-z0-9_-]{8,124}$/.test(id)) {
+      id = gm._campaignId ? _legacyTimelineId(gm._campaignId) : 'tml_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 14);
+    }
     gm._timelineId = id;
     return id;
   }
@@ -75,10 +91,42 @@
           store.createIndex('campaignId', 'campaignId', { unique: false });
           store.createIndex('campaignTimeline', ['campaignId', 'timelineId'], { unique: false });
           store.createIndex('timelineTurn', ['campaignId', 'timelineId', 'turn'], { unique: true });
-        } else if (e.oldVersion < 3) {
+        } else {
           var existingStore = e.target.transaction.objectStore(STORE);
-          try { existingStore.createIndex('campaignTimeline', ['campaignId', 'timelineId'], { unique: false }); } catch (_) {}
-          try { existingStore.createIndex('timelineTurn', ['campaignId', 'timelineId', 'turn'], { unique: true }); } catch (_) {}
+          try {
+            if (existingStore.indexNames && existingStore.indexNames.contains('campaignTurn')) existingStore.deleteIndex('campaignTurn');
+          } catch (_) {}
+          try {
+            if (!existingStore.indexNames || !existingStore.indexNames.contains('campaignTimeline')) {
+              existingStore.createIndex('campaignTimeline', ['campaignId', 'timelineId'], { unique: false });
+            }
+          } catch (_) {}
+          try {
+            if (!existingStore.indexNames || !existingStore.indexNames.contains('timelineTurn')) {
+              existingStore.createIndex('timelineTurn', ['campaignId', 'timelineId', 'turn'], { unique: true });
+            }
+          } catch (_) {}
+          if (e.oldVersion > 0 && e.oldVersion < 4) {
+            var cursorReq = existingStore.openCursor();
+            cursorReq.onsuccess = function() {
+              var cursor = cursorReq.result;
+              if (!cursor) return;
+              var record = cursor.value;
+              if (record && record.campaignId && !/^tml_[A-Za-z0-9_-]{8,124}$/.test(String(record.timelineId || ''))) {
+                var oldId = String(record.id || '');
+                var timelineId = _legacyTimelineId(record.campaignId);
+                record.timelineId = timelineId;
+                record.id = _recordId(record.campaignId, timelineId, record.turn);
+                record.schema = Math.max(3, Number(record.schema) || 0);
+                record.migrationState = 'legacy-v2';
+                record.legacySourceId = oldId;
+                if (record.state && record.state.GM) record.state.GM._timelineId = timelineId;
+                existingStore.put(record);
+                if (oldId && oldId !== record.id) existingStore.delete(oldId);
+              }
+              cursor.continue();
+            };
+          }
         }
         // v1 的 partial GM 快照不能安全升级成完整 {GM,P}，保留旧 store 只读，
         // 但绝不混入 v2 列表或恢复路径。
@@ -135,6 +183,47 @@
           tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('快照读取事务已中止')); };
         } catch (e) { reject(e); }
       });
+    });
+  }
+
+  function _timelineOwnerFromRecords(records, campaignId, timelineId, maxTurn) {
+    var candidates = (records || []).filter(function(record) {
+      return record && record.campaignId === campaignId && record.timelineId === timelineId
+        && (!Number.isFinite(maxTurn) || Number(record.turn) <= maxTurn) && record.state && record.state.GM;
+    }).sort(function(a, b) { return Number(b.turn) - Number(a.turn) || Number(b.ts) - Number(a.ts); });
+    return candidates.length ? candidates[0].state.GM : null;
+  }
+
+  // 子时间线可只读继承 forkTurn 以前的祖先快照。当前线记录优先；祖先 payload 不复制，
+  // 因而长局分叉不会造成成倍存储，同时不会让一次正常读档把 T1..Tn 历史列表清空。
+  function _accessibleSnapshotRecords(records, campaignId, timelineId, currentGM) {
+    var chain = [];
+    var seen = Object.create(null);
+    var cursorTimeline = timelineId;
+    var cursorOwner = currentGM && currentGM._campaignId === campaignId && currentGM._timelineId === timelineId ? currentGM : null;
+    var maxTurn = Infinity;
+    while (cursorTimeline && !seen[cursorTimeline]) {
+      seen[cursorTimeline] = true;
+      chain.push({ timelineId: cursorTimeline, maxTurn: maxTurn });
+      if (!cursorOwner) cursorOwner = _timelineOwnerFromRecords(records, campaignId, cursorTimeline, maxTurn);
+      var parentTimeline = cursorOwner && String(cursorOwner._parentTimelineId || '');
+      var forkTurn = cursorOwner && Number(cursorOwner._forkTurn);
+      if (!parentTimeline || !Number.isSafeInteger(forkTurn) || forkTurn < 0) break;
+      maxTurn = Math.min(maxTurn, forkTurn);
+      cursorTimeline = parentTimeline;
+      cursorOwner = _timelineOwnerFromRecords(records, campaignId, cursorTimeline, maxTurn);
+    }
+    var byTurn = Object.create(null);
+    chain.forEach(function(access, depth) {
+      (records || []).forEach(function(record) {
+        if (!record || record.campaignId !== campaignId || record.timelineId !== access.timelineId) return;
+        var turn = Number(record.turn);
+        if (!Number.isSafeInteger(turn) || turn > access.maxTurn || byTurn[turn]) return;
+        byTurn[turn] = { record: record, inherited: depth > 0, sourceTimelineId: access.timelineId };
+      });
+    });
+    return Object.keys(byTurn).map(function(turn) { return byTurn[turn]; }).sort(function(a, b) {
+      return Number(a.record.turn) - Number(b.record.turn);
     });
   }
 
@@ -217,6 +306,18 @@
             tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('快照读取事务已中止')); };
           } catch (e) { reject(e); }
         });
+      }).then(function(exact) {
+        if (exact) return exact;
+        return _getAllRecords().then(function(records) {
+          var currentGM = global.GM || (typeof GM !== 'undefined' ? GM : null);
+          var accessible = _accessibleSnapshotRecords(records, campaignId, timelineId, currentGM);
+          var match = accessible.find(function(item) { return Number(item.record.turn) === _strictTurn(turn); });
+          if (!match) return null;
+          var inherited = _deepClone(match.record);
+          inherited.inherited = true;
+          inherited.sourceTimelineId = match.sourceTimelineId;
+          return inherited;
+        });
       });
     } catch (e) { return Promise.reject(e); }
   }
@@ -227,9 +328,17 @@
     timelineId = timelineId || (gm ? _ensureTimelineId(gm) : '');
     if (!campaignId || !timelineId) return Promise.resolve([]);
     return _getAllRecords().then(function(records) {
-      return records.filter(function(r) { return r && r.campaignId === campaignId && r.timelineId === timelineId; })
-        .sort(function(a, b) { return a.turn - b.turn; })
-        .map(function(r) { return { turn: r.turn, ts: r.ts, campaignId: r.campaignId, timelineId: r.timelineId }; });
+      return _accessibleSnapshotRecords(records, campaignId, timelineId, gm).map(function(item) {
+        var r = item.record;
+        return {
+          turn: r.turn,
+          ts: r.ts,
+          campaignId: r.campaignId,
+          timelineId: timelineId,
+          sourceTimelineId: item.sourceTimelineId,
+          inherited: item.inherited
+        };
+      });
     });
   }
 
@@ -297,7 +406,8 @@
 
     return loadSnapshot(target, campaignId, timelineId).then(function(targetRecord) {
       if (!targetRecord) return { ok: false, reason: 'no snapshot for turn ' + target };
-      if (!targetRecord.state || targetRecord.campaignId !== campaignId || targetRecord.timelineId !== timelineId || targetRecord.turn !== target) {
+      if (!targetRecord.state || targetRecord.campaignId !== campaignId || targetRecord.turn !== target
+          || (!targetRecord.inherited && targetRecord.timelineId !== timelineId)) {
         return { ok: false, reason: 'snapshot identity mismatch' };
       }
       if (!_stillCurrent(sourceGM, sourceP, sourceLoadGen, campaignId, timelineId)) {

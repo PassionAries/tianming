@@ -14,13 +14,25 @@ function check(condition, message) {
   assertions += 1;
 }
 
-function makeFakeIndexedDB(legacySaves) {
+function makeFakeIndexedDB(legacySaves, options) {
+  options = options || {};
   const stores = new Map();
   if (Array.isArray(legacySaves)) {
     stores.set('saves', new Map(legacySaves.map((record) => [String(record.id), JSON.parse(JSON.stringify(record))])));
     stores.set('projects', new Map());
   }
-  const oldVersion = Array.isArray(legacySaves) ? 2 : 0;
+  if (options.oldVersion > 0 && !stores.has('saves')) {
+    stores.set('saves', new Map());
+    stores.set('saveMetadata', new Map());
+    stores.set('projects', new Map());
+  }
+  if (Array.isArray(options.chronicles)) {
+    stores.set('chronicleRecords', new Map(options.chronicles.map((record) => [String(record.id), clone(record)])));
+  }
+  if (Array.isArray(options.receipts)) {
+    stores.set('turnPublishReceipts', new Map(options.receipts.map((record) => [String(record.id), clone(record)])));
+  }
+  const oldVersion = Number(options.oldVersion) || (Array.isArray(legacySaves) ? 2 : 0);
   const counters = { openedVersion: 0, openCalls: 0, closed: 0, getAll: Object.create(null), get: Object.create(null) };
 
   function clone(value) {
@@ -31,6 +43,7 @@ function makeFakeIndexedDB(legacySaves) {
     if (!stores.has(name)) throw new Error('missing store ' + name);
     const rows = stores.get(name);
     return {
+      indexNames: { contains() { return false; } },
       createIndex() {},
       put(value) { rows.set(String(value.id), clone(value)); },
       delete(id) { rows.delete(String(id)); },
@@ -144,12 +157,12 @@ function makeLocalStorage() {
   context.SaveCompression.compress = (text) => Promise.resolve(text);
 
   await context.TM_SaveDB.open();
-  check(indexedDB.counters.openedVersion === 5, 'storage schema must open IndexedDB version 5');
+  check(indexedDB.counters.openedVersion === 6, 'storage schema must open IndexedDB version 6');
   check(indexedDB.stores.has('chronicleRecords') && indexedDB.stores.has('turnPublishReceipts'),
-    'v5 upgrade creates lightweight chronicle and turn receipt stores');
+    'v6 upgrade creates lightweight chronicle and turn receipt stores');
   check(source.includes("ensureIndex(chronicleStore, 'campaignTimeline'")
     && source.includes("ensureIndex(receiptStore, 'campaignTimelineStatus'"),
-  'v5 upgrade indexes auxiliary records by campaign and timeline');
+  'v6 upgrade indexes auxiliary records by campaign and timeline');
 
   const payload = 'x'.repeat(64 * 1024);
   await Promise.all(Array.from({ length: 100 }, (_, index) => context.TM_SaveDB.save(
@@ -203,6 +216,52 @@ function makeLocalStorage() {
   check(migratedList.length === 2 && migratedList[0].id === 'legacy-b', 'v2 upgrade must backfill and sort metadata for existing saves');
   check(Array.from(legacyIndexedDB.stores.get('saveMetadata').values()).every((row) => !Object.prototype.hasOwnProperty.call(row, 'gameState')),
     'v2 metadata backfill must not duplicate legacy payloads');
+
+  const oldChronicleId = 'chronicle:campaign-v4:2025';
+  const oldReceiptId = 'turn-publish:campaign-v4:txn-v4';
+  const auxiliaryIndexedDB = makeFakeIndexedDB(null, {
+    oldVersion: 5,
+    chronicles: [{
+      id: oldChronicleId,
+      campaignId: 'campaign-v4',
+      year: 2025,
+      generatedAt: 10,
+      chronicle: { content: '旧版正史', afterword: '旧评' }
+    }],
+    receipts: [{
+      id: oldReceiptId,
+      campaignId: 'campaign-v4',
+      transactionId: 'txn-v4',
+      turn: 12,
+      stateChecksum: 'a'.repeat(64),
+      status: 'world-committed'
+    }]
+  });
+  const auxiliaryContext = {
+    console: { log() {}, warn() {}, error() {}, info() {} },
+    Promise, Math, Date, JSON, Object, Array, Number, String, Boolean, Error,
+    Blob, Response, CompressionStream, DecompressionStream, TextDecoder,
+    setTimeout, clearTimeout,
+    localStorage: makeLocalStorage(), navigator: { storage: null }, indexedDB: auxiliaryIndexedDB
+  };
+  auxiliaryContext.window = auxiliaryContext;
+  auxiliaryContext.globalThis = auxiliaryContext;
+  vm.createContext(auxiliaryContext);
+  vm.runInContext(bootAt > 0 ? source.slice(0, bootAt) : source, auxiliaryContext, { filename: 'tm-storage-v5-aux.js' });
+  await auxiliaryContext.TM_SaveDB.open();
+  await new Promise(resolve => setTimeout(resolve, 30));
+  const migratedChronicles = Array.from(auxiliaryIndexedDB.stores.get('chronicleRecords').values());
+  const migratedReceipts = Array.from(auxiliaryIndexedDB.stores.get('turnPublishReceipts').values());
+  check(migratedChronicles.length === 1 && migratedChronicles[0].id !== oldChronicleId
+    && /^tml_legacy_/.test(migratedChronicles[0].timelineId)
+    && migratedChronicles[0].migrationState === 'legacy-unassigned',
+  'v4/v5 chronicle rows migrate atomically to deterministic legacy timeline keys');
+  check(migratedReceipts.length === 1 && migratedReceipts[0].id !== oldReceiptId
+    && migratedReceipts[0].timelineId === migratedChronicles[0].timelineId
+    && migratedReceipts[0].migrationState === 'legacy-v4',
+  'v4/v5 turn receipts remain recoverable on the same deterministic legacy timeline');
+  check((await auxiliaryContext.TM_SaveDB.listChronicleRecords('campaign-v4', migratedChronicles[0].timelineId)).length === 1,
+    'migrated chronicle is visible through the timeline-scoped query');
 
   console.log('[smoke-storage-metadata-index] PASS assertions=' + assertions);
 })().catch((error) => {

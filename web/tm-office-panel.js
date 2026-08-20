@@ -1437,6 +1437,11 @@ function renderBiannian(force){
     }
 
     activeEl.innerHTML = aHtml;
+    if (typeof ChronicleSystem !== 'undefined' && ChronicleSystem && typeof ChronicleSystem.renderLegacyRecoveryNotice === 'function') {
+      ChronicleSystem.renderLegacyRecoveryNotice(activeEl).catch(function(error) {
+        try { if (window.TM && TM.errors && TM.errors.captureSilent) TM.errors.captureSilent(error, 'Biannian·legacy recovery'); } catch (_) {}
+      });
+    }
   }
 
   // ═══ Section 3：永久编年·史册 ═══

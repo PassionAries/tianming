@@ -69,6 +69,24 @@ const ctx = {
     },
     async listChronicleRecords(campaignId, timelineId) {
       return Array.from(durableChronicles.values()).filter(record => record.campaignId === campaignId && record.timelineId === timelineId).map(clone);
+    },
+    async listQuarantinedChronicleRecords(campaignId) {
+      return Array.from(durableChronicles.values()).filter(record => record.campaignId === campaignId && record.migrationState === 'legacy-unassigned').map(clone);
+    },
+    async importQuarantinedChronicleRecord(input, options) {
+      if (!input.confirmed) throw new Error('confirmation required');
+      if (options && options.writeGuard && options.writeGuard() !== true) return false;
+      const legacy = Array.from(durableChronicles.values()).find(record => record.id === input.recordId && record.migrationState === 'legacy-unassigned');
+      if (!legacy) throw new Error('legacy record missing');
+      const key = input.campaignId + ':' + input.timelineId + ':' + input.year;
+      if (durableChronicles.has(key)) throw new Error('target exists');
+      const claimed = Object.assign({}, clone(legacy), {
+        id: 'chronicle:' + key, campaignId: input.campaignId, timelineId: input.timelineId,
+        year: input.year, sourceTurn: input.sourceTurn, historyBasisHash: input.historyBasisHash,
+        migrationState: 'legacy-confirmed', importedAt: Date.now()
+      });
+      durableChronicles.set(key, claimed);
+      return clone(claimed);
     }
   },
   _dbg() {},
@@ -176,20 +194,34 @@ function setWorld(id, time, timelineId) {
     'same-campaign durable chronicle never crosses into a different timeline');
 
   const legacyChronicleTimeline = 'tml_legacy_claim_12345678';
+  const legacyStorageTimeline = 'tml_legacy_storage_12345678';
   setWorld('legacy-chronicle', { year: 2024, startYear: 2024, startMonth: 1, startDay: 1 }, legacyChronicleTimeline);
   ctx.GM.turn = 1;
   ctx.ChronicleSystem.addMonthDraft(1, '旧版年度素材', '旧版月稿');
-  durableChronicles.set('legacy-chronicle:' + legacyChronicleTimeline + ':2024', {
-    id: 'chronicle:legacy-chronicle:' + legacyChronicleTimeline + ':2024',
-    campaignId: 'legacy-chronicle', timelineId: legacyChronicleTimeline, year: 2024,
+  durableChronicles.set('legacy-chronicle:' + legacyStorageTimeline + ':2024', {
+    id: 'chronicle:legacy-chronicle:' + legacyStorageTimeline + ':2024',
+    campaignId: 'legacy-chronicle', timelineId: legacyStorageTimeline, year: 2024,
     sourceTurn: -1, historyBasisHash: '', migrationState: 'legacy-unassigned', generatedAt: 10,
     chronicle: { content: '迁移后的旧版正史', afterword: '旧史评', generatedAt: 10 }
   });
   const legacyHydrated = await ctx.ChronicleSystem.hydrateDurableRecords(ctx.GM, ctx.P);
-  const preservedLegacy = durableChronicles.get('legacy-chronicle:' + legacyChronicleTimeline + ':2024');
+  const preservedLegacy = durableChronicles.get('legacy-chronicle:' + legacyStorageTimeline + ':2024');
   check(legacyHydrated.merged === 0 && !ctx.ChronicleSystem.yearChronicles[2024]
     && preservedLegacy.migrationState === 'legacy-unassigned' && preservedLegacy.chronicle.content === '迁移后的旧版正史',
   'ambiguous v4 chronicle stays durable but is never silently attached to the first loaded legacy branch');
+  const quarantined = await ctx.ChronicleSystem.listQuarantinedLegacyRecords(ctx.GM);
+  check(quarantined.length === 1 && quarantined[0].content === '迁移后的旧版正史'
+    && ctx.ChronicleSystem.exportQuarantinedLegacyRecord(quarantined[0]).includes('迁移后的旧版正史'),
+  'quarantined legacy chronicle is explicitly viewable and exportable without automatic attachment');
+  let confirmationRejected = false;
+  try { await ctx.ChronicleSystem.importQuarantinedLegacyRecord(quarantined[0].id, { confirmed: false }); }
+  catch (_) { confirmationRejected = true; }
+  check(confirmationRejected && !ctx.ChronicleSystem.yearChronicles[2024], 'legacy import requires explicit player confirmation');
+  const importedLegacy = await ctx.ChronicleSystem.importQuarantinedLegacyRecord(quarantined[0].id, { confirmed: true });
+  check(importedLegacy.ok === true && ctx.ChronicleSystem.yearChronicles[2024].content === '迁移后的旧版正史'
+    && durableChronicles.get('legacy-chronicle:' + legacyChronicleTimeline + ':2024').migrationState === 'legacy-confirmed'
+    && durableChronicles.get('legacy-chronicle:' + legacyStorageTimeline + ':2024').migrationState === 'legacy-unassigned',
+  'confirmed legacy import claims a copy for the current timeline while preserving the quarantined source');
 
   setWorld('annual-filter', { year: 2024, startYear: 2024, startMonth: 1, startDay: 1 }, annualTimeline);
   ctx.GM.turn = first2025Turn + 1;
@@ -249,6 +281,24 @@ function setWorld(id, time, timelineId) {
   const generated = await first;
   check(generated && generated.ok === true && ctx.ChronicleSystem.yearChronicles[2024].content === '唯一年度正史',
     'current leased annual result commits exactly once');
+
+  setWorld('campaign-rearm', { year: 2024, startYear: 2024 });
+  ctx.ChronicleSystem.addMonthDraft(1, '失败读档前正在生成', '');
+  aiQueue = [];
+  const interrupted = ctx.ChronicleSystem._tryGenerateYearChronicle(2024);
+  const interruptedTask = aiQueue.shift();
+  const capturedJobs = ctx.ChronicleSystem.capturePendingWorldJobs(ctx.GM);
+  ctx._tmLoadGen++;
+  const rearmed = ctx.ChronicleSystem.rearmWorldJobs(ctx.GM, ctx.P, capturedJobs);
+  const rearmedTask = aiQueue.shift();
+  check(capturedJobs.length === 1 && rearmedTask, 'failed load rollback captures and creates a fresh annual job');
+  interruptedTask.resolve(JSON.stringify({ chronicle: '旧 Promise 不得复活', afterword: '' }));
+  rearmedTask.resolve(JSON.stringify({ chronicle: '回滚后重新生成', afterword: '' }));
+  const interruptedResult = await interrupted;
+  const rearmedResult = await rearmed;
+  check(interruptedResult.stale === true && rearmedResult.ok === true
+    && ctx.ChronicleSystem.yearChronicles[2024].content === '回滚后重新生成',
+  'load rollback invalidates the old Promise and rearms the missing annual chronicle exactly once');
 
   const detached = { _chronicleSysState: { monthDrafts: { 9: { turn: 9, year: 1999 } }, yearChronicles: {} } };
   check(ctx.ChronicleSystem.serialize(detached).monthDrafts['9'].year === 1999,

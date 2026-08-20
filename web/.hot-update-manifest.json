@@ -2,7 +2,7 @@
   "type": "tianming-hot-update",
   "version": "1.3.4.11",
   "entry": "index.html",
-  "generatedAt": "2026-08-20T02:08:49.075Z",
+  "generatedAt": "2026-08-20T04:07:48.052Z",
   "files": [
     {
       "path": "_preview_map.json",
@@ -3691,8 +3691,8 @@
     },
     {
       "path": "tm-chronicle-system.js",
-      "sha256": "11d211ccd52e0f4313d62ef42413a59523faf9f718ae2cdb392a1968264dc1bf",
-      "size": 27657
+      "sha256": "9cadf5a129eb2a7d40c8806e12e799525356a34d26e57d0c219cabd4427646b2",
+      "size": 37896
     },
     {
       "path": "tm-chronicle-tracker.js",
@@ -4341,8 +4341,8 @@
     },
     {
       "path": "tm-integration-bridge.js",
-      "sha256": "17a52a72bda3090b03eef032331cceb2028d4c849159a2d3306444a26d8672e1",
-      "size": 43535
+      "sha256": "ca282177375a7572023743b33a4aae5094c6764af7aedfc8d8195ad1f42e3846",
+      "size": 43960
     },
     {
       "path": "tm-invariants.js",
@@ -4841,8 +4841,8 @@
     },
     {
       "path": "tm-office-panel.js",
-      "sha256": "ee45d444a48a7be5c68173ff7a2f144c48474189e99a37ff5aa13e140d1ed0d2",
-      "size": 108486
+      "sha256": "9976d2e18addda99c35205f4b9d185ac2c5ac9b6b8088347ed882c04076157aa",
+      "size": 108872
     },
     {
       "path": "tm-office-powermap.js",
@@ -5096,8 +5096,8 @@
     },
     {
       "path": "tm-save-lifecycle.js",
-      "sha256": "651c8146813e0f704cb2a28a8a8e19a1d0d225d4b83b4608330805b9856a6a0e",
-      "size": 120027
+      "sha256": "df08bf6122f9532a96a3907c02cad8dfff8f92c46eed428cbdf830fa46dfa496",
+      "size": 122568
     },
     {
       "path": "tm-save-manager.js",
@@ -5146,8 +5146,8 @@
     },
     {
       "path": "tm-state-snapshot.js",
-      "sha256": "c31cca7a535b650e39ceb7abdb2d38662c8624692256edde28b704b89036520f",
-      "size": 25261
+      "sha256": "3f74c44840e17bb4b4641d9dfd1c3c78b6c8f06304eb3a32e73938cef1b4ac97",
+      "size": 29906
     },
     {
       "path": "tm-state.js",
@@ -5156,8 +5156,8 @@
     },
     {
       "path": "tm-storage.js",
-      "sha256": "80b5b08a10f2cecabb8c589337ca930ca1972621d577b035effd90ea0e4104db",
-      "size": 68691
+      "sha256": "6d819d209d7a0e807e64ff0ef93047ed6dc60549b42527dbc2b1568b9bee425b",
+      "size": 72041
     },
     {
       "path": "tm-talent-backlash.js",

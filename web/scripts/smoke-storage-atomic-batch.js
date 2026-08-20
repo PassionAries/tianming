@@ -135,6 +135,31 @@ function makeContext(indexedDB, localStorage) {
   check(receiptBatchDeleted === true && receiptBatchIdb.stats.puts === receiptBatchPuts
     && receiptBatchIdb.stores.get('saves').size === 2 && receiptBatchIdb.stores.get('turnPublishReceipts').size === 0,
   'publishing clears only the lightweight receipt and never rewrites either world payload');
+
+  const legacyChronicle = {
+    id: 'chronicle:campaign-legacy:tml_legacy_storage_12345678:2024',
+    campaignId: 'campaign-legacy', timelineId: 'tml_legacy_storage_12345678', year: 2024,
+    sourceTurn: -1, historyBasisHash: '', migrationState: 'legacy-unassigned', generatedAt: 10,
+    chronicle: { content: '隔离旧正史', afterword: '旧史评' }
+  };
+  const legacyIdb = makeIndexedDB({ chronicleRecords: { [legacyChronicle.id]: legacyChronicle } });
+  const legacyCtx = makeContext(legacyIdb, makeLocalStorage());
+  await legacyCtx.TM_SaveDB.open();
+  const quarantined = await legacyCtx.TM_SaveDB.listQuarantinedChronicleRecords('campaign-legacy');
+  let unconfirmedRejected = false;
+  try {
+    await legacyCtx.TM_SaveDB.importQuarantinedChronicleRecord({ recordId: legacyChronicle.id, confirmed: false });
+  } catch (_) { unconfirmedRejected = true; }
+  const claimed = await legacyCtx.TM_SaveDB.importQuarantinedChronicleRecord({
+    recordId: legacyChronicle.id, confirmed: true, campaignId: 'campaign-legacy', timelineId: 'tml_current_branch_12345678',
+    year: 2024, sourceTurn: 12, historyBasisHash: 'chb_current_basis', loadGeneration: 3
+  });
+  const legacyRows = Array.from(legacyIdb.stores.get('chronicleRecords').values());
+  check(quarantined.length === 1 && unconfirmedRejected && claimed.migrationState === 'legacy-confirmed'
+    && legacyRows.length === 2 && legacyRows.some(row => row.migrationState === 'legacy-unassigned')
+    && legacyRows.some(row => row.timelineId === 'tml_current_branch_12345678' && row.sourceTurn === 12),
+  'quarantined legacy chronicles require explicit confirmation and import as a copy bound to the current history basis');
+
   let duplicateRejected = false;
   try {
     await ctx.TM_SaveDB.saveManyAtomic([

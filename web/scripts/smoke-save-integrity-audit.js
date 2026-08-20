@@ -35,7 +35,9 @@ console.log('=== save integrity audit ===');
   const b = ctx.stableStorageKey('甲?乙');
   ok(a !== b && a.startsWith('甲_乙--') && b.startsWith('甲_乙--'), 'sanitize 碰撞名使用内容 hash 分离');
   ok(ctx.stableStorageKey('甲:乙') === a, 'storage key 对同一显示名稳定');
-  ok(/readDesktopSaveMetadata\(storageKey, stats\)/.test(main) && /name:\s*\(sidecarCurrent/.test(main)
+  ok(/readDesktopSaveGeneration\(storageKey,\s*(?:fp|payloadPath)\)/.test(main)
+    && /readDesktopSavePayloadGeneration\(payloadPath\)/.test(main)
+    && /readDesktopSaveMetadata\(storageKey, stats, payloadGeneration\)/.test(main) && /name:\s*\(sidecarCurrent/.test(main)
     && /name:\s*canonicalName/.test(main), '列表通过轻量 sidecar 返回 display name + canonical storageKey');
 }
 

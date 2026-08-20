@@ -1015,6 +1015,59 @@ var PREF_CONF_KEYS = [
   'insecureTlsRelay'
 ];
 
+function _tmCaptureLoadStepError(error, label, silent) {
+  if (!error || (typeof error !== 'object' && typeof error !== 'function')) error = new Error(String(error));
+  try { error._tmLoadStep = String(label || 'unknown'); } catch (_) {}
+  try {
+    if (window.TM && TM.errors) {
+      if (silent && typeof TM.errors.captureSilent === 'function') TM.errors.captureSilent(error, 'fullLoadGame·' + label);
+      else if (typeof TM.errors.capture === 'function') TM.errors.capture(error, 'fullLoadGame·' + label);
+    }
+  } catch (_) {}
+  return error;
+}
+
+function _tmRunCriticalLoadStep(label, fn) {
+  try { return fn(); }
+  catch (error) { throw _tmCaptureLoadStepError(error, label, false); }
+}
+
+function _tmRunDegradableLoadStep(label, fn) {
+  try { return fn(); }
+  catch (error) {
+    _tmCaptureLoadStepError(error, label, true);
+    return null;
+  }
+}
+
+function _tmRunDegradableLoadStepAsync(label, fn) {
+  return Promise.resolve().then(fn).catch(function(error) {
+    _tmCaptureLoadStepError(error, label, true);
+    return null;
+  });
+}
+
+function _tmValidateLoadedWorld(targetP, targetGM) {
+  if (!targetP || typeof targetP !== 'object' || Array.isArray(targetP)) throw new Error('存档 P 不是合法对象');
+  if (!targetGM || typeof targetGM !== 'object' || Array.isArray(targetGM)) throw new Error('存档 GM 不是合法对象');
+  var turn = Number(targetGM.turn);
+  if (!Number.isSafeInteger(turn) || turn < 0) throw new Error('存档回合号非法');
+  if (!String(targetGM._campaignId || '')) throw new Error('存档缺少 campaignId');
+  if (!_tmEnsureTimelineIdentity(targetGM)) throw new Error('存档缺少 timelineId');
+  [['chars', targetGM.chars], ['facs', targetGM.facs], ['armies', targetGM.armies], ['officeTree', targetGM.officeTree]].forEach(function(pair) {
+    if (pair[1] != null && !Array.isArray(pair[1])) throw new Error('存档字段 ' + pair[0] + ' 必须为数组');
+  });
+  if (targetGM.mapData != null) {
+    if (typeof targetGM.mapData !== 'object' || Array.isArray(targetGM.mapData)) throw new Error('运行地图结构非法');
+    if (targetGM.mapData.regions != null && !Array.isArray(targetGM.mapData.regions)) throw new Error('运行地图地区必须为数组');
+    if (targetP.map === targetGM.mapData || targetP.mapData === targetGM.mapData) throw new Error('运行地图与剧本模板仍共享引用');
+  }
+  if (targetGM._chronicleSysState != null && (typeof targetGM._chronicleSysState !== 'object' || Array.isArray(targetGM._chronicleSysState))) {
+    throw new Error('编年状态结构非法');
+  }
+  return true;
+}
+
 function _recoverPendingTurnDataPublish() {
   if (!(GM && window.tianming && typeof window.tianming.recoverTurnData === 'function')) return Promise.resolve({ ok: true, skipped: true });
   var targetGM = GM;
@@ -1069,7 +1122,7 @@ function _recoverPendingTurnDataPublish() {
   }).catch(function(error) {
     if (GM !== targetGM) return;
     try { if (window.TM && TM.errors && TM.errors.capture) TM.errors.capture(error, 'fullLoadGame] recover turn-data'); } catch (_) {}
-    try { if (typeof toast === 'function') toast('存档已载入；回合分卷仍待补发，将在下次读档重试。'); } catch (_) {}
+    try { if (typeof toast === 'function') toast('回合分卷恢复失败，正在恢复读档前世界；请排除磁盘问题后重试。'); } catch (_) {}
     return { ok: false, error: error };
   });
 }
@@ -1078,8 +1131,14 @@ function _tmCaptureLoadTransaction() {
   var oldP = (typeof P !== 'undefined') ? P : null;
   var oldGM = (typeof GM !== 'undefined') ? GM : null;
   var presets = null;
+  var backgroundJobs = [];
   try {
     presets = window.scriptData && window.scriptData.customPresets;
+  } catch (_) {}
+  try {
+    if (typeof ChronicleSystem !== 'undefined' && ChronicleSystem && typeof ChronicleSystem.capturePendingWorldJobs === 'function') {
+      backgroundJobs = ChronicleSystem.capturePendingWorldJobs(oldGM);
+    }
   } catch (_) {}
   return {
     id: 'load-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12),
@@ -1088,7 +1147,8 @@ function _tmCaptureLoadTransaction() {
     gmBusy: oldGM && oldGM.busy,
     hydrationPending: oldGM && oldGM._loadHydrationPending,
     autoSaveSessionToken: (typeof _tmGetDesktopAutoSaveSessionToken === 'function') ? _tmGetDesktopAutoSaveSessionToken() : '',
-    customPresets: presets
+    customPresets: presets,
+    backgroundJobs: backgroundJobs
   };
 }
 
@@ -1139,6 +1199,16 @@ function _tmRestoreLoadTransaction(txn) {
       'renderShijiList', 'renderGameTech', 'renderGameCivic', 'renderRenwu', 'renderSidePanels'].forEach(function(name) {
       try { if (typeof window[name] === 'function') window[name](); } catch (_) {}
     });
+  }
+  try {
+    if (GM && P && txn.backgroundJobs && txn.backgroundJobs.length && typeof ChronicleSystem !== 'undefined' &&
+      ChronicleSystem && typeof ChronicleSystem.rearmWorldJobs === 'function') {
+      Promise.resolve(ChronicleSystem.rearmWorldJobs(GM, P, txn.backgroundJobs)).catch(function(error) {
+        _tmCaptureLoadStepError(error, 'background rearm after rollback', true);
+      });
+    }
+  } catch (rearmError) {
+    _tmCaptureLoadStepError(rearmError, 'background rearm after rollback', true);
   }
   return true;
 }
@@ -1239,11 +1309,11 @@ async function _fullLoadGameApplyImpl(data, loadOptions, _loadTxn){
   }
   // 同步通知主进程切换 canonical auto-save session。旧 IPC 即使正在 writeFile，rename 前也会因 token 失效被拒；
   // 从 canonical 自动档恢复时沿用其 token，普通案卷/残局读档则创建新 token。
-  try {
+  _tmRunCriticalLoadStep('auto-save session rotate', function() {
     if (typeof _tmRotateDesktopAutoSaveSession === 'function') {
       _tmRotateDesktopAutoSaveSession('full-load', loadOptions.autoSaveSessionToken || '');
     }
-  } catch (_asRotateE) { try { console.warn('[autoSave] 读档 session 切换失败:', _asRotateE); } catch (_) {} }
+  });
   // 恢复被存档冲掉的 API 配置（key/url/model 等都从 localStorage 拉回）
   if (_preservedAi && typeof _preservedAi === 'object' && (_preservedAi.key || _preservedAi.url)) {
     if (!P.ai) P.ai = {};
@@ -1261,7 +1331,9 @@ async function _fullLoadGameApplyImpl(data, loadOptions, _loadTxn){
   if(GM){
     GM.running=true;
     // 旧档可能没有或带着陈旧 GM.year/month/day；读档后按 turn + P.time 重新派生。
-    try { if (typeof _tmSyncGMCalendar === 'function') _tmSyncGMCalendar(GM, GM.turn || 1); } catch (_calendarLoadE) {}
+    _tmRunCriticalLoadStep('calendar sync', function() {
+      if (typeof _tmSyncGMCalendar === 'function') _tmSyncGMCalendar(GM, GM.turn || 1);
+    });
     // 必需 hydration/receipt 恢复完成前保持 busy，旧界面残留按钮也不能提前过回合。
     GM.busy = true;
     GM._loadHydrationPending = true;
@@ -1282,22 +1354,18 @@ async function _fullLoadGameApplyImpl(data, loadOptions, _loadTxn){
     // 恢复所有_saved*字段
     _restoreSavedFields();
     // Stage 2·L1·KejuParadigm migrate·旧存档自动 init paradigm·version-aware
-    try {
+    _tmRunCriticalLoadStep('kjpMigrate', function() {
       if (typeof _kjpMigrate === 'function') _kjpMigrate();
-    } catch (_kjpME) {
-      try { window.TM && TM.errors && TM.errors.captureSilent(_kjpME, 'fullLoadGame·kjpMigrate'); } catch(_) {}
-    }
-    try {
+    });
+    _tmRunCriticalLoadStep('phase8 formal drafts', function() {
       if (window.TMPhase8FormalBridge && typeof window.TMPhase8FormalBridge.restoreDraftsFromGM === 'function') {
         window.TMPhase8FormalBridge.restoreDraftsFromGM(true);
       } else if (typeof window.restorePhase8FormalDraftsFromGM === 'function') {
         window.restorePhase8FormalDraftsFromGM(true);
       }
-    } catch(_phase8DraftLoadE) {
-      try { window.TM && TM.errors && TM.errors.captureSilent(_phase8DraftLoadE, 'fullLoadGame·phase8FormalDrafts'); } catch(_) {}
-    }
+    });
     // 存档载入后恢复独立地图 live state；P 保留剧本模板，禁止与 GM 共享引用。
-    try {
+    _tmRunCriticalLoadStep('runtime map bind', function() {
       var _liveMapSrc = (GM && GM.mapData && GM.mapData.regions && GM.mapData.regions.length > 0) ? GM.mapData :
         (P && P.map && P.map.regions && P.map.regions.length > 0) ? P.map :
         (P && P.mapData && P.mapData.regions && P.mapData.regions.length > 0) ? P.mapData : null;
@@ -1313,22 +1381,24 @@ async function _fullLoadGameApplyImpl(data, loadOptions, _loadTxn){
         GM.mapData = _safeClone(_liveMapSrc);
         GM._useAIGeo = false;
       }
-    } catch(_mapRestoreE) { try{ window.TM&&TM.errors&&TM.errors.captureSilent(_mapRestoreE,'fullLoadGame·mapLiveState'); }catch(_){} }
+    });
 
     // 一次性清理·扫除存档里历史误抓人物(强烈/连日/乌纱/平静等命中 NAME_BLACKLIST 词组)
-    try {
+    _tmRunCriticalLoadStep('blacklisted character purge', function() {
       if (typeof purgeBlacklistedCharacters === 'function') {
         var _purged = purgeBlacklistedCharacters();
         if (_purged && (_purged.chars.length || _purged.pending.length)) {
           if (typeof addEB === 'function') addEB('清理', '清扫历史误抓人物·chars: ' + _purged.chars.length + '·pending: ' + _purged.pending.length);
         }
       }
-    } catch(_purgeE) { try{ window.TM&&TM.errors&&TM.errors.captureSilent(_purgeE,'fullLoadGame·purge'); }catch(_){} }
+    });
 
     // 迁移官制树到双层模型
     if (typeof _offMigrateTree === 'function' && GM.officeTree) _offMigrateTree(GM.officeTree);
     // 单一真相源:读档时去重人物+从树回填officialTitle+派生任职者(治双源漂移/布衣/重复人物)
-    try { if (typeof _offSyncHoldersFromChars === 'function') _offSyncHoldersFromChars({ importSeats: true, dedupChars: true, force: true }); } catch (_e) {}
+    _tmRunCriticalLoadStep('office holder synchronization', function() {
+      if (typeof _offSyncHoldersFromChars === 'function') _offSyncHoldersFromChars({ importSeats: true, dedupChars: true, force: true });
+    });
     // 官制officialTitle同步——确保ch.officialTitle与GM.officeTree一致
     if (GM.officeTree && GM.chars) {
       (function _syncTitles(nodes) {
@@ -1336,7 +1406,7 @@ async function _fullLoadGameApplyImpl(data, loadOptions, _loadTxn){
           (n.positions||[]).forEach(function(p) {
             var _names = [];
             if (typeof _offAllHolders === 'function') {
-              try { _names = _offAllHolders(p) || []; } catch(_) { _names = []; }
+              _names = _tmRunCriticalLoadStep('office holder enumeration', function() { return _offAllHolders(p) || []; });
             }
             if (!_names.length && p.holder) _names = [p.holder];
             _names.forEach(function(_nm, _idx) {
@@ -1353,51 +1423,55 @@ async function _fullLoadGameApplyImpl(data, loadOptions, _loadTxn){
     // 确保所有字段有默认值
     _ensureGMDefaults();
     _ensurePDefaults();
-    try { if (typeof TMArmyUnits !== 'undefined') TMArmyUnits.ensureAllArmies(GM); } catch (e) {}   // 御驾亲征接入 Phase0:army.composition→units[] 编制地基(载入一次性·幂等·永不崩·不改 composition)
-    if (typeof buildCoreMetricLabels === 'function') buildCoreMetricLabels();
+    _tmRunCriticalLoadStep('army structure migration', function() {
+      if (typeof TMArmyUnits !== 'undefined') TMArmyUnits.ensureAllArmies(GM);
+    });   // 御驾亲征接入 Phase0:army.composition→units[] 编制地基(载入一次性·幂等·不改 composition)
+    _tmRunDegradableLoadStep('core metric labels', function() {
+      if (typeof buildCoreMetricLabels === 'function') buildCoreMetricLabels();
+    });
 
     // 角色完整字段补齐（兼容旧存档/手工导入的 JSON）
-    try {
+    _tmRunCriticalLoadStep('character schema migration', function() {
       if (typeof CharFullSchema !== 'undefined' && typeof CharFullSchema.ensureAll === 'function') {
         CharFullSchema.ensureAll(GM.chars);
       }
-    } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'fullLoadGame] CharFullSchema.ensureAll 失败:') : console.error('[fullLoadGame] CharFullSchema.ensureAll 失败:', e); }
+    });
 
-    try {
+    _tmRunCriticalLoadStep('engine migration', function() {
       if (typeof EngineMigration !== 'undefined' && typeof EngineMigration.run === 'function') {
         EngineMigration.run(GM);
       }
-    } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'fullLoadGame] EngineMigration.run 失败:') : console.error('[fullLoadGame] EngineMigration.run 失败:', e); }
+    });
 
-    try {
+    _tmRunCriticalLoadStep('relationship reference migration', function() {
       if (typeof RelGraph !== 'undefined' && typeof RelGraph.syncCharRefs === 'function' && Array.isArray(GM.chars)) {
         GM.chars.forEach(function(ch) {
-          try { RelGraph.syncCharRefs(ch, GM); } catch(_) {}
+          RelGraph.syncCharRefs(ch, GM);
         });
       }
-    } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'fullLoadGame] RelGraph.syncCharRefs 失败:') : console.error('[fullLoadGame] RelGraph.syncCharRefs 失败:', e); }
+    });
 
     // 影子条目存量清障(2026-07-04)：历史版本 AI 落建造在 BUILDING_TYPES 反查失败时铸的「未知建筑」
     // 死条目(无描述/无 status/无效果)随档累积·且按 territory|type 键位把营造志真记录挤出合并清单
     // (地块面板全显「未知建筑·完好」病根之一)。读档一次性清·随后 buildIndices 重建索引保持一致。
-    try {
+    _tmRunCriticalLoadStep('shadow building purge', function() {
       if (Array.isArray(GM.buildings) && typeof BUILDING_TYPES !== 'undefined') {
         var _shadowN = GM.buildings.length;
         GM.buildings = GM.buildings.filter(function(b){ return b && !(b.name === '未知建筑' && !BUILDING_TYPES[b.type]); });   // arch-ok:读档迁移·影子死账一次性清障(非游戏内业务直写)
         _shadowN -= GM.buildings.length;
         if (_shadowN > 0) console.log('[fullLoadGame] 清除「未知建筑」影子条目 ' + _shadowN + ' 条(历史AI落建造反查失败所铸)');
       }
-    } catch(_shadowPurgeE) {}
+    });
     // 重建索引
     if (typeof buildIndices === 'function') buildIndices();
     // 2026-06-10·_facIndex 已不入存档(autoSave SKIP·派生索引)·读档后在 chars/官衔/迁移全就绪处重建·
     // 兼顾旧存档:旧档里的 _facIndex 反序列化后本就是与 chars 脱钩的死拷贝·重建一并治
-    try {
+    _tmRunCriticalLoadStep('faction index rebuild', function() {
       if (window.TM && TM.FactionIndex && typeof TM.FactionIndex.rebuild === 'function') TM.FactionIndex.rebuild();
-    } catch(_fxRebuildE) { try{ window.TM&&TM.errors&&TM.errors.captureSilent(_fxRebuildE,'fullLoadGame·facIndexRebuild'); }catch(_){} }
+    });
 
     // P6.3 修：老存档加载后·若 _memTables 缺失或仅有空 schema·自动反向重建以保留历史
-    try {
+    _tmRunCriticalLoadStep('memory tables migration', function() {
       if (window.MemTables && MemTables.ensureInit) {
         MemTables.ensureInit();
         var _eh = MemTables.getSheet('eventHistory');
@@ -1413,16 +1487,16 @@ async function _fullLoadGameApplyImpl(data, loadOptions, _loadTxn){
           }
         }
       }
-    } catch(_mtRebuildE) { console.warn('[fullLoadGame] 12 表自动重建失败:', _mtRebuildE); }
+    });
 
-    try {
+    _tmRunCriticalLoadStep('memory turn backfill', function() {
       if (window.TM && TM.MemoryTurnBackfill && typeof TM.MemoryTurnBackfill.ensureBackfilled === 'function') {
         var _memSpine = TM.MemoryTurnBackfill.ensureBackfilled(GM, { turn: GM.turn, archiveCap: 80 });
         if (_memSpine && (_memSpine.rebuilt || _memSpine.reason === 'rollup_rebuilt_from_existing_archive')) {
           console.log('[fullLoadGame] memory spine backfill: ' + (_memSpine.legacyBundles || 0) + ' bundles');
         }
       }
-    } catch(_memSpineE) { console.warn('[fullLoadGame] memory spine backfill failed:', _memSpineE); }
+    });
 
     // ── 管辖层级/封建字段迁移（老存档兼容）──
     if (GM.facs && GM.facs.length > 0) {
@@ -1437,14 +1511,14 @@ async function _fullLoadGameApplyImpl(data, loadOptions, _loadTxn){
     }
     // 派生所有区划 autonomy（首次载入/老存档）
     if (typeof applyAutonomyToAllDivisions === 'function') {
-      try { applyAutonomyToAllDivisions(); } catch(_autE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_autE, 'autonomy] 派生失败') : console.warn('[autonomy] 派生失败', _autE); }
+      _tmRunCriticalLoadStep('division autonomy migration', function() { applyAutonomyToAllDivisions(); });
     }
     // 自动分配后妃居所
     if (typeof autoAssignHaremResidences === 'function') {
-      try { autoAssignHaremResidences(); } catch(_resE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_resE, 'residence] 分配失败') : console.warn('[residence] 分配失败', _resE); }
+      _tmRunCriticalLoadStep('harem residence migration', function() { autoAssignHaremResidences(); });
     }
     // 载入存档后：若 GM.adminHierarchy 缺失/为空（老存档），从剧本或 P 恢复
-    try {
+    _tmRunCriticalLoadStep('admin hierarchy migration', function() {
       var _ahEmpty = !GM.adminHierarchy ||
                      typeof GM.adminHierarchy !== 'object' ||
                      Object.keys(GM.adminHierarchy).length === 0;
@@ -1458,12 +1532,12 @@ async function _fullLoadGameApplyImpl(data, loadOptions, _loadTxn){
           console.log('[fullLoadGame] GM.adminHierarchy 从 P 恢复·keys=' + Object.keys(GM.adminHierarchy).join(','));
         }
       }
-    } catch(_ahLE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_ahLE, 'fullLoadGame] adminHierarchy 恢复失败') : console.warn('[fullLoadGame] adminHierarchy 恢复失败', _ahLE); }
+    });
 
     // 老存档兼容：GM.fiscal.{royalClanPressure,huangzhuangIncome,imperialBusinesses} 缺失时从 P.fiscalConfig.neicangRules 镜像
     // tm-fiscal-fixed-expense.js:_calcRoyalStipend 等读 G.fiscal.royalClanPressure·缺则宗禄岁出 = 0
     // Old-save compatibility: mirror explicit scenario constants/groups into GM and P.
-    try {
+    _tmRunCriticalLoadStep('engine constants migration', function() {
       var _scEC = (typeof findScenarioById === 'function' && GM.sid) ? findScenarioById(GM.sid) : null;
       if (_scEC) {
         if (!GM.engineConstants && _scEC.engineConstants) {
@@ -1481,9 +1555,9 @@ async function _fullLoadGameApplyImpl(data, loadOptions, _loadTxn){
           }
         }
       }
-    } catch(_ecLE) { try{window.TM&&TM.errors&&TM.errors.captureSilent(_ecLE,'fullLoadGame-engineConstants-GM-P');}catch(_){} }
+    });
 
-    try {
+    _tmRunCriticalLoadStep('fiscal configuration migration', function() {
       var _scFC = (typeof findScenarioById === 'function' && GM.sid) ? findScenarioById(GM.sid) : null;
       var _fcSrc = (P.fiscalConfig && P.fiscalConfig.neicangRules)
                 || (_scFC && _scFC.fiscalConfig && _scFC.fiscalConfig.neicangRules);
@@ -1493,30 +1567,41 @@ async function _fullLoadGameApplyImpl(data, loadOptions, _loadTxn){
         if (_fcSrc.huangzhuangIncome && !GM.fiscal.huangzhuangIncome) GM.fiscal.huangzhuangIncome = deepClone(_fcSrc.huangzhuangIncome);
         if (_fcSrc.imperialBusinesses && !GM.fiscal.imperialBusinesses) GM.fiscal.imperialBusinesses = deepClone(_fcSrc.imperialBusinesses);
       }
-    } catch(_fcLE) { try{window.TM&&TM.errors&&TM.errors.captureSilent(_fcLE,'fullLoadGame·fiscalConfig→GM.fiscal');}catch(_){} }
+    });
 
     // 集成桥梁：老存档可能缺 divisions 深化字段，init 会补齐并建立 legacy proxy
     if (typeof IntegrationBridge !== 'undefined' && typeof IntegrationBridge.init === 'function') {
-      try { IntegrationBridge.init(); } catch(_ibE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_ibE, 'bridge] init 失败') : console.warn('[bridge] init 失败', _ibE); }
+      _tmRunCriticalLoadStep('integration bridge migration', function() { IntegrationBridge.init({ strict: true }); });
     }
 
     // 同步剧本自定义预设（HistoricalPresets 动态 getter 读取 window.scriptData.customPresets）
-    try {
+    _tmRunCriticalLoadStep('custom presets synchronization', function() {
       if (P && P.customPresets) {
         if (!window.scriptData) window.scriptData = {};
         window.scriptData.customPresets = P.customPresets;
       }
-    } catch(_cpLE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_cpLE, 'load] customPresets sync 失败') : console.warn('[load] customPresets sync 失败', _cpLE); }
+    });
+
+    _tmRunCriticalLoadStep('loaded world validation', function() { return _tmValidateLoadedWorld(P, GM); });
 
     // 读档完成屏障：先合并当前父时间线的有效辅助记录和可恢复分卷，再开放任何玩法操作。
     if (typeof ChronicleSystem !== 'undefined' && typeof ChronicleSystem.hydrateDurableRecords === 'function') {
       await ChronicleSystem.hydrateDurableRecords(GM, P);
       _assertLoadLeaseCurrent();
     }
-    await _recoverPendingTurnDataPublish();
+    var _turnDataRecovery = await _recoverPendingTurnDataPublish();
+    if (_turnDataRecovery && _turnDataRecovery.ok === false) {
+      throw (_turnDataRecovery.error || new Error('回合分卷恢复失败'));
+    }
     _assertLoadLeaseCurrent();
     // 每次从快照继续都建立子时间线；失败回滚可显式 preserveTimeline 复原原身份。
     if (!loadOptions.preserveTimeline) _tmForkLoadedTimeline(GM, loadOptions.source || 'load');
+    if (typeof StateSnapshot !== 'undefined' && StateSnapshot && typeof StateSnapshot.recordTimeline === 'function') {
+      await _tmRunDegradableLoadStepAsync('timeline lineage persistence', function() {
+        return StateSnapshot.recordTimeline(GM);
+      });
+      _assertLoadLeaseCurrent();
+    }
     GM._loadHydrationPending = false;
     GM.busy = false;
 

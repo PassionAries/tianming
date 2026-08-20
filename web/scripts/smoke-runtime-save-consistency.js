@@ -29,6 +29,7 @@ const resume = fs.readFileSync(path.join(ROOT, 'tm-resume-point.js'), 'utf8');
 const mainImpl = fs.readFileSync(path.join(ROOT, '..', 'main-impl.js'), 'utf8');
 const preloadImpl = fs.readFileSync(path.join(ROOT, '..', 'preload-impl.js'), 'utf8');
 const startPatch = fs.readFileSync(path.join(ROOT, 'tm-patches-start.js'), 'utf8');
+const integrationBridge = fs.readFileSync(path.join(ROOT, 'tm-integration-bridge.js'), 'utf8');
 
 console.log('=== 1. unified save snapshot builder ===');
 const snapshotSrc = sliceFn(lifecycle, 'function _autoSaveSnapshotGM(');
@@ -101,6 +102,19 @@ ok(/auto-save-session-rotate/.test(mainImpl) && /autoSaveSessionMatches\(request
   && /writeFile[\s\S]*?autoSaveSessionMatches\(requestToken\)[\s\S]*?rename/.test(mainImpl), 'Electron canonical auto-save 在 write/rename 间按 session token 复验');
 ok(/rotateAutoSaveSession/.test(preloadImpl) && /_tmRotateDesktopAutoSaveSession\('full-load'/.test(lifecycle)
   && /_tmRotateDesktopAutoSaveSession\('new-game'/.test(startPatch), 'preload + 读档 + 新局共同切换 auto-save session');
+ok(/var _turnDataRecovery = await _recoverPendingTurnDataPublish\(\);[\s\S]*?_turnDataRecovery\.ok === false[\s\S]*?throw[\s\S]*?_tmForkLoadedTimeline/.test(lifecycle),
+  'receipt recovery failure aborts before the loaded world can fork its timeline');
+ok(/_tmRunCriticalLoadStep\('runtime map bind'/.test(lifecycle)
+  && /_tmRunCriticalLoadStep\('engine migration'/.test(lifecycle)
+  && /_tmRunCriticalLoadStep\('relationship reference migration'/.test(lifecycle)
+  && /_tmRunCriticalLoadStep\('fiscal configuration migration'/.test(lifecycle)
+  && /IntegrationBridge\.init\(\{ strict: true \}\)/.test(lifecycle)
+  && /_tmRunCriticalLoadStep\('loaded world validation'/.test(lifecycle),
+  'state-mutating load migrations propagate into the load transaction instead of failing open');
+ok(/function aggregateRegionsToVariables\(options\)[\s\S]*?var strict = options\.strict === true/.test(integrationBridge)
+  && /function init\(options\)[\s\S]*?aggregateRegionsToVariables\(\{ strict: true \}\)/.test(integrationBridge)
+  && /if \(strict\) throw _naturalPopulationGrowth|if \(strict\) throw _e/.test(integrationBridge),
+  'integration bridge exposes a strict load mode instead of swallowing partial migration failures');
 ok(/stageTurnData\([\s\S]*?result\.success === true[\s\S]*?回合分卷暂存失败/.test(render)
   && /turnPublishReceipt:\s*ctx\.meta\.stagedTurnData/.test(render)
   && /_tmCommitEndTurnTransaction[\s\S]*?await _endTurn_publishStagedTurnData/.test(core), '回合分卷先暂存·receipt 与世界同事务提交·仅在 commit 后发布');
@@ -220,6 +234,8 @@ async function runDynamicLeaseSmokes() {
   {
     const transactionFns = [
       sliceFn(lifecycle, 'function _tmAwaitLoadBarrier('),
+      sliceFn(lifecycle, 'function _tmCaptureLoadStepError('),
+      sliceFn(lifecycle, 'function _tmRunCriticalLoadStep('),
       sliceFn(lifecycle, 'function _tmCaptureLoadTransaction('),
       sliceFn(lifecycle, 'function _tmRestoreLoadTransaction('),
       sliceFn(lifecycle, 'function fullLoadGame('),
@@ -248,7 +264,10 @@ async function runDynamicLeaseSmokes() {
         context._tmLoadGen++;
         context._tmRotateDesktopAutoSaveSession('full-load', 'session-incoming-123456');
         await Promise.resolve();
-        throw new Error('hydrate-injected-failure');
+        context._tmRunCriticalLoadStep('engine migration', function() {
+          context.GM.enginePartiallyMigrated = true;
+          throw new Error('engine-migration-injected-failure');
+        });
       };
       vm.createContext(context);
       vm.runInContext(transactionFns, context);
@@ -258,10 +277,10 @@ async function runDynamicLeaseSmokes() {
     let loadError = null;
     try { await restored.context.fullLoadGame({}); } catch (error) { loadError = error; }
     await restored.context._tmAwaitLoadBarrier();
-    ok(loadError && loadError._tmLoadRollbackComplete === true
+    ok(loadError && loadError._tmLoadRollbackComplete === true && loadError._tmLoadStep === 'engine migration'
       && restored.context.P === restored.oldP && restored.context.GM === restored.oldGM
       && restored.context._tmLoadGen === 9 && restored.getSession() === 'session-old-1234567890',
-    'hydration 失败恢复原 P/GM 与自动存档 session，并以单调 load generation 失效旧租约');
+    'critical migration partial write rolls back original P/GM and auto-save session with monotonic load generation');
 
     const blocked = makeLoadContext(true);
     let blockedError = null;
@@ -383,6 +402,11 @@ async function runDynamicLeaseSmokes() {
     await ctx._recoverPendingTurnDataPublish();
     ok(recovered === 1 && deleted === 1 && !ctx.GM._pendingTurnDataPublish,
       'load recovery publishes only matching, non-future receipts and leaves other branches untouched');
+    ctx.window.tianming.recoverTurnData = async function() { return { success: false, error: 'disk unavailable' }; };
+    const failedRecovery = await ctx._recoverPendingTurnDataPublish();
+    ok(failedRecovery && failedRecovery.ok === false && /disk unavailable/.test(String(failedRecovery.error && failedRecovery.error.message))
+      && deleted === 1,
+    'receipt recovery failure is explicit and leaves the durable receipt available for a transactional retry');
   }
   {
     let staged = 0, discarded = 0;
@@ -558,7 +582,17 @@ async function runDynamicLeaseSmokes() {
       }
     };
     const ipcMain = { handle(name, fn) { handles[name] = fn; }, on(name, fn) { syncHandles[name] = fn; } };
-    const ctx = { ipcMain, fs: fakeFs, path: { join: (...parts) => parts.join('/') }, SAVE_DIR: 'mem', ensureSaveDir() {}, crypto: { randomUUID: () => 'generated-session-token-0001' }, Promise, JSON, String, Error };
+    const ctx = {
+      ipcMain, fs: fakeFs, path: { join: (...parts) => parts.join('/') }, SAVE_DIR: 'mem', ensureSaveDir() {},
+      crypto: { randomUUID: () => 'generated-session-token-0001' }, Promise, JSON, String, Error,
+      prepareDesktopSavePayload(data) {
+        data.__tmDesktopSaveGeneration = data.__tmDesktopSaveGeneration || 'payload-generation-test-0001';
+        return { data, generation: data.__tmDesktopSaveGeneration, text: JSON.stringify(data) };
+      },
+      desktopSaveGenerationFromData(data) { return data && data.__tmDesktopSaveGeneration || ''; },
+      invalidateDesktopSaveGeneration() {},
+      writeDesktopSaveMetadata() {}
+    };
     vm.createContext(ctx); vm.runInContext(src, ctx);
     const rotate = token => { const event = {}; syncHandles['auto-save-session-rotate'](event, token); return event.returnValue; };
     const current = () => { const event = {}; syncHandles['auto-save-session-current'](event); return event.returnValue; };

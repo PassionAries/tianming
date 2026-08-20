@@ -64,8 +64,11 @@ ok(purgeAt > 0, '刀3a: fullLoadGame 带影子条目存量清障段');
 const purgeSeg = saveSrc.slice(purgeAt, purgeAt + 900);
 ok(/GM\.buildings\.filter/.test(purgeSeg) && /未知建筑/.test(purgeSeg) && /!BUILDING_TYPES\[b\.type\]/.test(purgeSeg),
   '刀3a: 清障判据 = 名未知建筑 且 type 反查不到（与刀3b 同判据）');
-const buildIndicesAt = saveSrc.indexOf('buildIndices()', purgeAt);
-ok(buildIndicesAt > purgeAt, '刀3a: 清障先于 buildIndices 重建索引（buildingByTerritory 不残留死引用）');
+const rebindHelperAt = saveSrc.indexOf('function _tmRebindRuntimeWorld(');
+const rebindHelperSeg = saveSrc.slice(rebindHelperAt, rebindHelperAt + 3000);
+const finalRebindAt = saveSrc.indexOf('_tmRebindRuntimeWorld({ strict: true, map: false })', purgeAt);
+ok(rebindHelperAt > 0 && /buildIndices\(\)/.test(rebindHelperSeg) && finalRebindAt > purgeAt,
+  '刀3a: 清障先于统一 runtime rebind 内的 buildIndices 重建（buildingByTerritory 不残留死引用）');
 
 // ── C. 刀1/刀1b/刀2 源契约：AI落建造写口（tm-endturn-apply.js）──
 const applySrc = fs.readFileSync(path.join(ROOT, 'tm-endturn-apply.js'), 'utf8');

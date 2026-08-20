@@ -598,13 +598,20 @@
   function aggregateRegionsToVariables(options) {
     options = options || {};
     var strict = options.strict === true;
+    // 聚合/重绑定必须是幂等操作。只有每回合唯一的 tick() 才能推进人口与
+    // NPC 腐败；读档、首局初始化、UI 刷新和 AI 前后的派生汇总一律不得
+    // 偷走一个“时间步”。旧实现把 strict（错误传播）误当成了模拟开关，
+    // 导致每次读档都增长人口并改变腐败。
+    var advanceSimulation = options.advanceSimulation === true;
     var G = global.GM;
     if (!G) return;
 
     // 0. 人口自然漂移（在汇总之前）
-    try { _naturalPopulationGrowth(); } catch(_e) {
-      (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_e, 'bridge] natPopGrowth') : console.warn('[bridge] natPopGrowth', _e);
-      if (strict) throw _e;
+    if (advanceSimulation) {
+      try { _naturalPopulationGrowth(); } catch(_e) {
+        (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_e, 'bridge] natPopGrowth') : console.warn('[bridge] natPopGrowth', _e);
+        if (strict) throw _e;
+      }
     }
 
     var topLevel = getTopLevelDivisions(G.adminHierarchy, 'player');
@@ -710,8 +717,11 @@
         if (G.corruption.byDept.military === undefined)  G.corruption.byDept.military  = Math.round(avgProvCorr * 0.95);
         if (G.corruption.byDept.palace === undefined)    G.corruption.byDept.palace    = Math.round(avgProvCorr * 1.10);
         if (G.corruption.byDept.technical === undefined) G.corruption.byDept.technical = Math.round(avgProvCorr * 0.55);
-        // 按 NPC 派系/私产向上推高技术官外各部门（每周期）
-        try { _accumulateCorruptionFromNpcs(G); } catch(_e) { if (strict) throw _e; }
+        // 按 NPC 派系/私产向上推高技术官外各部门（每周期）。派生汇总只读
+        // 现值；时间传导只允许 tick() 明确开启。
+        if (advanceSimulation) {
+          try { _accumulateCorruptionFromNpcs(G); } catch(_e) { if (strict) throw _e; }
+        }
         // overall = 6 部门平均
         var deptSum = 0, deptCnt = 0;
         Object.keys(G.corruption.byDept || {}).forEach(function(d) {
@@ -823,24 +833,40 @@
   //  tick + init
   // ═══════════════════════════════════════════════════════════════════
 
-  function tick(ctx) {
-    try { aggregateRegionsToVariables(); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'bridge] aggregate:') : console.error('[bridge] aggregate:', e); }
+  function tick(options) {
+    options = options || {};
+    // tick 是关键账本步骤：默认向事务边界传播异常。只有显式 strict:false
+    // 的兼容调用才允许记录后降级。
+    var strict = options.strict !== false;
+    try {
+      return aggregateRegionsToVariables({ strict: strict, advanceSimulation: true });
+    } catch(e) {
+      (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'bridge] aggregate:') : console.error('[bridge] aggregate:', e);
+      if (strict) throw e;
+      return null;
+    }
   }
 
-  function init(options) {
+  function migrateAndRebind(options) {
     options = options || {};
     if (options.strict === true) {
       initializeFromLegacy();
-      aggregateRegionsToVariables({ strict: true });
-      return;
+      aggregateRegionsToVariables({ strict: true, advanceSimulation: false });
+      return true;
     }
     try { initializeFromLegacy(); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'bridge] init:') : console.error('[bridge] init:', e); }
-    // 首次聚合
-    try { aggregateRegionsToVariables(); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-integration-bridge');}catch(_){}}
+    // 首次聚合/读档重绑定只对齐 schema、代理与派生汇总，不推进玩法时间。
+    try { aggregateRegionsToVariables({ advanceSimulation: false }); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-integration-bridge');}catch(_){}}
+    return true;
+  }
+
+  function init(options) {
+    return migrateAndRebind(options);
   }
 
   global.IntegrationBridge = {
     init: init,
+    migrateAndRebind: migrateAndRebind,
     tick: tick,
     flattenDivisions: flattenDivisions,
     getTopLevelDivisions: getTopLevelDivisions,

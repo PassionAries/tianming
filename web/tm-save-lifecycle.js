@@ -1047,6 +1047,108 @@ function _tmRunDegradableLoadStepAsync(label, fn) {
   });
 }
 
+function _tmStripSaveTransportMetadata(target) {
+  if (!target || typeof target !== 'object' || Array.isArray(target)) return target;
+  Object.keys(target).forEach(function(key) {
+    // Electron 文件 envelope / auto-save envelope 只属于传输层，绝不能随 P/GM
+    // 进入玩法状态、快照或下一份导出档。
+    if (/^__tm(?:Desktop|AutoSave)/.test(key)) delete target[key];
+  });
+  return target;
+}
+
+function _tmRuntimeMapSourceForWorld(targetP, targetGM) {
+  var source = (targetGM && targetGM.mapData && targetGM.mapData.regions && targetGM.mapData.regions.length > 0) ? targetGM.mapData :
+    (targetP && targetP.map && targetP.map.regions && targetP.map.regions.length > 0) ? targetP.map :
+    (targetP && targetP.mapData && targetP.mapData.regions && targetP.mapData.regions.length > 0) ? targetP.mapData : null;
+  if (!source && typeof findScenarioById === 'function' && targetGM && targetGM.sid) {
+    var scenario = findScenarioById(targetGM.sid);
+    var scenarioMap = scenario && ((scenario.mapData && scenario.mapData.regions && scenario.mapData.regions.length > 0) ? scenario.mapData : scenario.map);
+    if (scenarioMap && scenarioMap.regions && scenarioMap.regions.length > 0) source = scenarioMap;
+  }
+  return source;
+}
+
+// 成功读档与失败回滚共用同一条“纯重绑定”路径。它可以补 schema、代理和
+// 派生索引，但不得推进人口、腐败、财政、战争或任何其他玩法时间。
+function _tmRebindRuntimeWorld(options) {
+  options = options || {};
+  var strict = options.strict === true;
+  var targetP = options.p || P;
+  var targetGM = options.gm || GM;
+  if (!targetP || !targetGM || targetP !== P || targetGM !== GM) throw new Error('运行世界重绑定目标不是当前 P/GM');
+
+  function run(label, fn) {
+    if (strict) return _tmRunCriticalLoadStep(label, fn);
+    return _tmRunDegradableLoadStep(label, fn);
+  }
+
+  if (options.map !== false) {
+    run('runtime map rebind', function() {
+      var liveMapSource = _tmRuntimeMapSourceForWorld(targetP, targetGM);
+      if (liveMapSource && typeof bindRuntimeMapState === 'function') {
+        bindRuntimeMapState(liveMapSource);
+        targetGM._useAIGeo = false;
+      } else if (liveMapSource) {
+        targetGM.mapData = _safeClone(liveMapSource);
+        targetGM._useAIGeo = false;
+      }
+    });
+  }
+
+  if (options.integration !== false && typeof IntegrationBridge !== 'undefined' && IntegrationBridge) {
+    run('integration bridge pure rebind', function() {
+      var rebind = typeof IntegrationBridge.migrateAndRebind === 'function'
+        ? IntegrationBridge.migrateAndRebind : IntegrationBridge.init;
+      if (typeof rebind === 'function') rebind.call(IntegrationBridge, { strict: strict, advanceSimulation: false });
+    });
+  }
+  if (options.indices !== false && typeof buildIndices === 'function') {
+    run('runtime indices rebind', function() { buildIndices(); });
+  }
+  if (options.faction !== false && window.TM && TM.FactionIndex && typeof TM.FactionIndex.rebuild === 'function') {
+    run('faction index rebind', function() { TM.FactionIndex.rebuild(); });
+  }
+  if (options.memory !== false && window.MemTables && typeof MemTables.ensureInit === 'function') {
+    run('memory tables rebind', function() { MemTables.ensureInit(); });
+  }
+  return true;
+}
+
+function _tmValidateUniqueStableIds(label, list) {
+  if (!Array.isArray(list)) return;
+  var seen = Object.create(null);
+  list.forEach(function(item, index) {
+    if (!item || item.id === undefined || item.id === null || item.id === '') return;
+    var id = String(item.id);
+    if (seen[id] !== undefined) throw new Error(label + ' 存在重复 id: ' + id + '（索引 ' + seen[id] + ' / ' + index + '）');
+    seen[id] = index;
+  });
+}
+
+function _tmValidateFiniteWorldNumbers(root, label) {
+  var stack = [{ value: root, path: label }];
+  var seen = typeof WeakSet === 'function' ? new WeakSet() : null;
+  while (stack.length) {
+    var current = stack.pop();
+    var value = current.value;
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) throw new Error('存档数值非法: ' + current.path);
+      continue;
+    }
+    if (!value || typeof value !== 'object') continue;
+    if (seen) {
+      if (seen.has(value)) continue;
+      seen.add(value);
+    }
+    // Map/Set/Blob 等运行时派生容器不属于 JSON 世界正文；其内部由各自重建器负责。
+    var keys = Object.keys(value);
+    for (var i = 0; i < keys.length; i++) {
+      stack.push({ value: value[keys[i]], path: current.path + '.' + keys[i] });
+    }
+  }
+}
+
 function _tmValidateLoadedWorld(targetP, targetGM) {
   if (!targetP || typeof targetP !== 'object' || Array.isArray(targetP)) throw new Error('存档 P 不是合法对象');
   if (!targetGM || typeof targetGM !== 'object' || Array.isArray(targetGM)) throw new Error('存档 GM 不是合法对象');
@@ -1065,6 +1167,12 @@ function _tmValidateLoadedWorld(targetP, targetGM) {
   if (targetGM._chronicleSysState != null && (typeof targetGM._chronicleSysState !== 'object' || Array.isArray(targetGM._chronicleSysState))) {
     throw new Error('编年状态结构非法');
   }
+  _tmValidateUniqueStableIds('人物', targetGM.chars);
+  _tmValidateUniqueStableIds('势力', targetGM.facs);
+  _tmValidateUniqueStableIds('军队', targetGM.armies);
+  _tmValidateUniqueStableIds('地图地区', targetGM.mapData && targetGM.mapData.regions);
+  _tmValidateFiniteWorldNumbers(targetP, 'P');
+  _tmValidateFiniteWorldNumbers(targetGM, 'GM');
   return true;
 }
 
@@ -1185,10 +1293,9 @@ function _tmRestoreLoadTransaction(txn) {
   try {
     if (window.scriptData) window.scriptData.customPresets = txn.customPresets;
   } catch (_) {}
-  if (typeof buildIndices === 'function') buildIndices();
-  try {
-    if (window.TM && TM.FactionIndex && typeof TM.FactionIndex.rebuild === 'function') TM.FactionIndex.rebuild();
-  } catch (_) {}
+  // 首屏尚无旧世界时，失败读档只能恢复到启动态；不要把“没有可重绑的世界”
+  // 误判成回滚自身失败。已有世界则必须完整重绑所有 singleton/索引。
+  if (P && GM) _tmRebindRuntimeWorld({ strict: true });
   try {
     if (window.TMPhase8FormalBridge && typeof window.TMPhase8FormalBridge.restoreDraftsFromGM === 'function') {
       window.TMPhase8FormalBridge.restoreDraftsFromGM(true);
@@ -1285,10 +1392,13 @@ async function _fullLoadGameApplyImpl(data, loadOptions, _loadTxn){
     _incomingGM = data.gameState.GM;
   } else {
     // 格式A：标准格式
-    _incomingP = data;
+    _incomingP = Object.assign({}, data);
     _incomingGM = data.gameState;
   }
   if (!_incomingP || !_incomingGM) throw new Error('存档结构不完整：缺少 P/GM');
+  if (_incomingP && _incomingP.gameState) delete _incomingP.gameState;
+  _tmStripSaveTransportMetadata(_incomingP);
+  _tmStripSaveTransportMetadata(_incomingGM);
   // 迁移和默认值先在尚未发布的 incoming 对象上完成；失败时 live P/GM 保持原局，
   // 且版本戳不会前移，下一次仍可安全重试。
   _ensurePDefaults(_incomingP, _incomingGM);
@@ -1364,24 +1474,8 @@ async function _fullLoadGameApplyImpl(data, loadOptions, _loadTxn){
         window.restorePhase8FormalDraftsFromGM(true);
       }
     });
-    // 存档载入后恢复独立地图 live state；P 保留剧本模板，禁止与 GM 共享引用。
-    _tmRunCriticalLoadStep('runtime map bind', function() {
-      var _liveMapSrc = (GM && GM.mapData && GM.mapData.regions && GM.mapData.regions.length > 0) ? GM.mapData :
-        (P && P.map && P.map.regions && P.map.regions.length > 0) ? P.map :
-        (P && P.mapData && P.mapData.regions && P.mapData.regions.length > 0) ? P.mapData : null;
-      if (!_liveMapSrc && typeof findScenarioById === 'function' && GM && GM.sid) {
-        var _scMapOwner = findScenarioById(GM.sid);
-        var _scMapSrc = _scMapOwner && ((_scMapOwner.mapData && _scMapOwner.mapData.regions && _scMapOwner.mapData.regions.length > 0) ? _scMapOwner.mapData : _scMapOwner.map);
-        if (_scMapSrc && _scMapSrc.regions && _scMapSrc.regions.length > 0) _liveMapSrc = _scMapSrc;
-      }
-      if (_liveMapSrc && typeof bindRuntimeMapState === 'function') {
-        bindRuntimeMapState(_liveMapSrc);
-        GM._useAIGeo = false;
-      } else if (_liveMapSrc) {
-        GM.mapData = _safeClone(_liveMapSrc);
-        GM._useAIGeo = false;
-      }
-    });
+    // 部分旧迁移读取 GM.mapData；先走统一纯重绑定入口中的 map-only 阶段。
+    _tmRebindRuntimeWorld({ strict: true, integration: false, indices: false, faction: false, memory: false });
 
     // 一次性清理·扫除存档里历史误抓人物(强烈/连日/乌纱/平静等命中 NAME_BLACKLIST 词组)
     _tmRunCriticalLoadStep('blacklisted character purge', function() {
@@ -1462,14 +1556,6 @@ async function _fullLoadGameApplyImpl(data, loadOptions, _loadTxn){
         if (_shadowN > 0) console.log('[fullLoadGame] 清除「未知建筑」影子条目 ' + _shadowN + ' 条(历史AI落建造反查失败所铸)');
       }
     });
-    // 重建索引
-    if (typeof buildIndices === 'function') buildIndices();
-    // 2026-06-10·_facIndex 已不入存档(autoSave SKIP·派生索引)·读档后在 chars/官衔/迁移全就绪处重建·
-    // 兼顾旧存档:旧档里的 _facIndex 反序列化后本就是与 chars 脱钩的死拷贝·重建一并治
-    _tmRunCriticalLoadStep('faction index rebuild', function() {
-      if (window.TM && TM.FactionIndex && typeof TM.FactionIndex.rebuild === 'function') TM.FactionIndex.rebuild();
-    });
-
     // P6.3 修：老存档加载后·若 _memTables 缺失或仅有空 schema·自动反向重建以保留历史
     _tmRunCriticalLoadStep('memory tables migration', function() {
       if (window.MemTables && MemTables.ensureInit) {
@@ -1569,10 +1655,8 @@ async function _fullLoadGameApplyImpl(data, loadOptions, _loadTxn){
       }
     });
 
-    // 集成桥梁：老存档可能缺 divisions 深化字段，init 会补齐并建立 legacy proxy
-    if (typeof IntegrationBridge !== 'undefined' && typeof IntegrationBridge.init === 'function') {
-      _tmRunCriticalLoadStep('integration bridge migration', function() { IntegrationBridge.init({ strict: true }); });
-    }
+    // 全部 schema 迁移完成后，用成功/回滚共享的纯入口重建代理和派生索引。
+    _tmRebindRuntimeWorld({ strict: true, map: false });
 
     // 同步剧本自定义预设（HistoricalPresets 动态 getter 读取 window.scriptData.customPresets）
     _tmRunCriticalLoadStep('custom presets synchronization', function() {

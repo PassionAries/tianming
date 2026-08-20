@@ -104,17 +104,22 @@ ok(/rotateAutoSaveSession/.test(preloadImpl) && /_tmRotateDesktopAutoSaveSession
   && /_tmRotateDesktopAutoSaveSession\('new-game'/.test(startPatch), 'preload + 读档 + 新局共同切换 auto-save session');
 ok(/var _turnDataRecovery = await _recoverPendingTurnDataPublish\(\);[\s\S]*?_turnDataRecovery\.ok === false[\s\S]*?throw[\s\S]*?_tmForkLoadedTimeline/.test(lifecycle),
   'receipt recovery failure aborts before the loaded world can fork its timeline');
-ok(/_tmRunCriticalLoadStep\('runtime map bind'/.test(lifecycle)
+ok(/_tmRebindRuntimeWorld\(\{ strict: true, integration: false/.test(lifecycle)
   && /_tmRunCriticalLoadStep\('engine migration'/.test(lifecycle)
   && /_tmRunCriticalLoadStep\('relationship reference migration'/.test(lifecycle)
   && /_tmRunCriticalLoadStep\('fiscal configuration migration'/.test(lifecycle)
-  && /IntegrationBridge\.init\(\{ strict: true \}\)/.test(lifecycle)
+  && /_tmRebindRuntimeWorld\(\{ strict: true, map: false \}\)/.test(lifecycle)
   && /_tmRunCriticalLoadStep\('loaded world validation'/.test(lifecycle),
   'state-mutating load migrations propagate into the load transaction instead of failing open');
 ok(/function aggregateRegionsToVariables\(options\)[\s\S]*?var strict = options\.strict === true/.test(integrationBridge)
-  && /function init\(options\)[\s\S]*?aggregateRegionsToVariables\(\{ strict: true \}\)/.test(integrationBridge)
-  && /if \(strict\) throw _naturalPopulationGrowth|if \(strict\) throw _e/.test(integrationBridge),
-  'integration bridge exposes a strict load mode instead of swallowing partial migration failures');
+  && /var advanceSimulation = options\.advanceSimulation === true/.test(integrationBridge)
+  && /function migrateAndRebind\(options\)[\s\S]*?advanceSimulation: false/.test(integrationBridge)
+  && /function tick\(options\)[\s\S]*?advanceSimulation: true/.test(integrationBridge),
+  'integration bridge separates pure load rebind from the one explicit simulation tick');
+ok(/function _tmStripSaveTransportMetadata\([\s\S]*?\^__tm\(\?:Desktop\|AutoSave\)/.test(lifecycle)
+  && /_tmStripSaveTransportMetadata\(_incomingP\)/.test(lifecycle)
+  && /_tmStripSaveTransportMetadata\(_incomingGM\)/.test(lifecycle),
+  'desktop and auto-save envelope fields are stripped before P/GM become runtime state');
 ok(/stageTurnData\([\s\S]*?result\.success === true[\s\S]*?回合分卷暂存失败/.test(render)
   && /turnPublishReceipt:\s*ctx\.meta\.stagedTurnData/.test(render)
   && /_tmCommitEndTurnTransaction[\s\S]*?await _endTurn_publishStagedTurnData/.test(core), '回合分卷先暂存·receipt 与世界同事务提交·仅在 commit 后发布');
@@ -232,10 +237,79 @@ async function runDynamicLeaseSmokes() {
     ok(settled === true, 'hydration 完成后 load barrier 才放行等待中的操作');
   }
   {
+    const division = {
+      id: 'region-1', population: { mouths: 50000000, households: 10000000, ding: 12500000 },
+      populationDetail: { mouths: 50000000, households: 10000000, ding: 12500000 },
+      minxin: 60, corruption: 30, environment: { currentLoad: 0.5, carrying: 100000000 }, fiscal: {}
+    };
+    const ctx = {
+      console, Promise, JSON, Math, Number, Object, Array, Date,
+      GM: {
+        turn: 10, adminHierarchy: { player: { divisions: [division] } },
+        population: { national: { mouths: 50000000, households: 10000000 } },
+        minxin: { trueIndex: 60 }, corruption: { trueIndex: 30, overall: 30, byDept: {} },
+        chars: [{ name: '测试官', officialTitle: '知县', integrity: 0, resources: { private: { money: 500000 } } }]
+      },
+      P: {}, TM: { errors: { capture() {}, captureSilent() {} } }
+    };
+    ctx.window = ctx;
+    vm.createContext(ctx);
+    vm.runInContext(integrationBridge, ctx);
+    ctx.IntegrationBridge.migrateAndRebind({ strict: true }); // 一次性 schema 对齐
+    function gameplayState() {
+      const leaf = ctx.GM.adminHierarchy.player.divisions[0];
+      return JSON.stringify({
+        turn: ctx.GM.turn, population: leaf.population, populationDetail: leaf.populationDetail,
+        corruption: ctx.GM.corruption, currentLoad: leaf.environment.currentLoad
+      });
+    }
+    const stable = gameplayState();
+    for (let i = 0; i < 10; i++) {
+      const disk = JSON.parse(JSON.stringify({ GM: ctx.GM, P: ctx.P }));
+      ctx.GM = disk.GM; ctx.P = disk.P;
+      ctx.IntegrationBridge.migrateAndRebind({ strict: true });
+    }
+    const afterTenLoads = gameplayState();
+    ctx.IntegrationBridge.tick({ strict: true });
+    const afterTick = gameplayState();
+    ok(afterTenLoads === stable && afterTick !== stable,
+      '读档—保存循环 10 次不推进人口/腐败/承载，唯一 tick 才推进玩法状态');
+  }
+  {
+    const helpers = [
+      sliceFn(lifecycle, 'function _tmStripSaveTransportMetadata('),
+      sliceFn(lifecycle, 'function _tmValidateUniqueStableIds('),
+      sliceFn(lifecycle, 'function _tmValidateFiniteWorldNumbers('),
+      sliceFn(lifecycle, 'function _tmValidateLoadedWorld(')
+    ].join('\n');
+    const ctx = {
+      Number, Object, Array, String, Error, WeakSet,
+      _tmEnsureTimelineIdentity(gm) { return !!gm._timelineId; }
+    };
+    vm.createContext(ctx); vm.runInContext(helpers, ctx);
+    const p = { __tmDesktopSaveGeneration: 'storage-only', __tmAutoSaveEnvelope: 1, conf: {} };
+    const gm = {
+      __tmDesktopPrivate: true, __tmAutoSavePrivate: true,
+      turn: 1, _campaignId: 'campaign', _timelineId: 'tml_runtime_12345678',
+      chars: [{ id: 'char-1' }], facs: [{ id: 'fac-1' }], armies: [], officeTree: [], mapData: { regions: [{ id: 'region-1' }] }
+    };
+    ctx._tmStripSaveTransportMetadata(p); ctx._tmStripSaveTransportMetadata(gm);
+    ok(!Object.keys(p).some(key => /^__tm(?:Desktop|AutoSave)/.test(key))
+      && !Object.keys(gm).some(key => /^__tm(?:Desktop|AutoSave)/.test(key))
+      && ctx._tmValidateLoadedWorld(p, gm) === true,
+    'storage envelope metadata never enters validated runtime P/GM');
+    let duplicateRejected = false;
+    try { ctx._tmValidateLoadedWorld(p, Object.assign({}, gm, { chars: [{ id: 'dup' }, { id: 'dup' }] })); }
+    catch (error) { duplicateRejected = /重复 id/.test(error.message); }
+    ok(duplicateRejected, 'loaded-world invariant gate rejects duplicate stable character IDs before UI opens');
+  }
+  {
     const transactionFns = [
       sliceFn(lifecycle, 'function _tmAwaitLoadBarrier('),
       sliceFn(lifecycle, 'function _tmCaptureLoadStepError('),
       sliceFn(lifecycle, 'function _tmRunCriticalLoadStep('),
+      sliceFn(lifecycle, 'function _tmRuntimeMapSourceForWorld('),
+      sliceFn(lifecycle, 'function _tmRebindRuntimeWorld('),
       sliceFn(lifecycle, 'function _tmCaptureLoadTransaction('),
       sliceFn(lifecycle, 'function _tmRestoreLoadTransaction('),
       sliceFn(lifecycle, 'function fullLoadGame('),
@@ -243,6 +317,7 @@ async function runDynamicLeaseSmokes() {
     ].join('\n');
     function makeLoadContext(rollbackMustFail) {
       let sessionToken = 'session-old-1234567890';
+      const reboundWorlds = [];
       const oldP = { marker: 'old-P' };
       const oldGM = { marker: 'old-GM', running: true, busy: false, _chronicleSysState: { monthDrafts: {}, yearChronicles: {}, yearBases: {} } };
       const context = {
@@ -251,7 +326,11 @@ async function runDynamicLeaseSmokes() {
         _tmGetDesktopAutoSaveSessionToken() { return sessionToken; },
         _tmRotateDesktopAutoSaveSession(_reason, token) { sessionToken = token; return token; },
         ChronicleSystem: { deserialize() {} },
-        buildIndices: rollbackMustFail ? function() { throw new Error('rollback-index-failure'); } : function() {}
+        bindRuntimeMapState() { reboundWorlds.push(['map', context.GM]); },
+        IntegrationBridge: { migrateAndRebind() { reboundWorlds.push(['integration', context.GM]); } },
+        buildIndices: rollbackMustFail ? function() { throw new Error('rollback-index-failure'); } : function() { reboundWorlds.push(['indices', context.GM]); },
+        MemTables: { ensureInit() { reboundWorlds.push(['memory', context.GM]); } },
+        TM: { FactionIndex: { rebuild() { reboundWorlds.push(['faction', context.GM]); } } }
       };
       context.window = context;
       context._tmLoadGen = 7;
@@ -271,7 +350,7 @@ async function runDynamicLeaseSmokes() {
       };
       vm.createContext(context);
       vm.runInContext(transactionFns, context);
-      return { context, oldP, oldGM, getSession: () => sessionToken };
+      return { context, oldP, oldGM, reboundWorlds, getSession: () => sessionToken };
     }
     const restored = makeLoadContext(false);
     let loadError = null;
@@ -279,8 +358,9 @@ async function runDynamicLeaseSmokes() {
     await restored.context._tmAwaitLoadBarrier();
     ok(loadError && loadError._tmLoadRollbackComplete === true && loadError._tmLoadStep === 'engine migration'
       && restored.context.P === restored.oldP && restored.context.GM === restored.oldGM
-      && restored.context._tmLoadGen === 9 && restored.getSession() === 'session-old-1234567890',
-    'critical migration partial write rolls back original P/GM and auto-save session with monotonic load generation');
+      && restored.context._tmLoadGen === 9 && restored.getSession() === 'session-old-1234567890'
+      && restored.reboundWorlds.length >= 4 && restored.reboundWorlds.every(entry => entry[1] === restored.oldGM),
+    'critical migration partial write rolls back P/GM/session and rebinds every runtime singleton to the old world');
 
     const blocked = makeLoadContext(true);
     let blockedError = null;

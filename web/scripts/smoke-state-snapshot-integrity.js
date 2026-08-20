@@ -66,11 +66,17 @@ function fakeIndexedDB(options) {
     },
     close() {},
     transaction(name) {
-      if (!stores.has(name)) throw new Error('missing store ' + name);
-      const def = stores.get(name);
+      const names = Array.isArray(name) ? name : [name];
+      names.forEach(storeName => { if (!stores.has(storeName)) throw new Error('missing store ' + storeName); });
       const tx = { error: null, oncomplete: null, onerror: null, onabort: null };
-      function completeLater() { setTimeout(function() { if (tx.oncomplete) tx.oncomplete(); }, 0); }
-      tx.objectStore = function() {
+      let completionScheduled = false;
+      function completeLater() {
+        if (completionScheduled) return;
+        completionScheduled = true;
+        setTimeout(function() { if (tx.oncomplete) tx.oncomplete(); }, 0);
+      }
+      tx.objectStore = function(storeName) {
+        const def = stores.get(storeName || names[0]);
         const facade = storeFacade(def);
         const put = facade.put;
         const del = facade.delete;
@@ -131,7 +137,8 @@ function fakeIndexedDB(options) {
   vm.createContext(ctx);
   vm.runInContext(src, ctx);
 
-  ok(/DB_VERSION = 4/.test(src) && /keyPath: 'id'/.test(src), 'v4 使用 campaign/timeline/turn compound record id');
+  ok(/DB_VERSION = 5/.test(src) && /LINEAGE_STORE = 'timeline_graph'/.test(src) && /keyPath: 'id'/.test(src),
+    'v5 使用 compound snapshot id 与独立 timeline graph');
   ok(/_buildSaveState/.test(src) && /format: 'idb', detach: true/.test(src), '快照复用完整纯存档 builder');
   ok(registeredHook && typeof registeredHook === 'function', 'after hook 已注册');
 
@@ -197,6 +204,22 @@ function fakeIndexedDB(options) {
   ok(r.ok === true && childOverrideList[0].inherited === true && childOverrideList[1].inherited === false
     && (await ctx.StateSnapshot.load(2)).state.GM.marker === 'A2-child',
   '子时间线同回合快照覆盖父线视图但不复制其他祖先 payload');
+
+  // A → B → C：中间时间线 B 尚未生成任何快照，C 仍须沿独立 timeline graph 继承 A。
+  ctx.GM = {
+    _campaignId: 'campA', _timelineId: 'tml_empty_middle_B_12345678', _parentTimelineId: 'tml_campA_12345678',
+    _forkTurn: 2, turn: 2, marker: 'B-no-snapshot', shijiHistory: [], evtLog: []
+  };
+  await ctx.StateSnapshot.recordTimeline(ctx.GM);
+  ctx.GM = {
+    _campaignId: 'campA', _timelineId: 'tml_deep_child_C_12345678', _parentTimelineId: 'tml_empty_middle_B_12345678',
+    _forkTurn: 2, turn: 2, marker: 'C-live', shijiHistory: [], evtLog: []
+  };
+  await ctx.StateSnapshot.recordTimeline(ctx.GM);
+  const deepInherited = await ctx.StateSnapshot.list('campA', 'tml_deep_child_C_12345678');
+  ok(deepInherited.map(item => item.turn).join(',') === '1,2'
+    && deepInherited.every(item => item.inherited === true && item.sourceTimelineId === 'tml_campA_12345678'),
+  'A→B→C 且 B 无快照时，C 仍通过独立 timeline graph 继承 A 的 forkTurn 前快照');
 
   ctx.GM = { _campaignId: 'campB', _timelineId: 'tml_campB_12345678', turn: 1, marker: 'B1', customWorld: { deep: 99 }, shijiHistory: [], evtLog: [] };
   ctx.P = { conf: { campaign: 'B' } };

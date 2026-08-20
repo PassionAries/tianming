@@ -12,7 +12,8 @@
   var DB_NAME = 'tianming_snapshots';
   var LEGACY_STORE = 'snapshots';
   var STORE = 'snapshots_v2';
-  var DB_VERSION = 4;
+  var LINEAGE_STORE = 'timeline_graph';
+  var DB_VERSION = 5;
   var MAX_SNAPSHOTS = 200;
   var _dbPromise = null;
 
@@ -71,6 +72,35 @@
     return campaignId + ':' + timelineId + ':' + _strictTurn(turn);
   }
 
+  function _lineageId(campaignId, timelineId) {
+    return String(campaignId || '') + ':' + String(timelineId || '');
+  }
+
+  function _lineageRecordFromGM(gm, campaignId, timelineId) {
+    if (!gm || typeof gm !== 'object') return null;
+    campaignId = String(campaignId || gm._campaignId || '');
+    timelineId = String(timelineId || gm._timelineId || '');
+    if (!campaignId || !/^tml_[A-Za-z0-9_-]{8,124}$/.test(timelineId)) return null;
+    var parentTimelineId = String(gm._parentTimelineId || '');
+    var forkTurn = Number(gm._forkTurn);
+    if (!parentTimelineId || !/^tml_[A-Za-z0-9_-]{8,124}$/.test(parentTimelineId) || parentTimelineId === timelineId) {
+      parentTimelineId = '';
+      forkTurn = 0;
+    } else if (!Number.isSafeInteger(forkTurn) || forkTurn < 0) {
+      return null;
+    }
+    return {
+      id: _lineageId(campaignId, timelineId),
+      campaignId: campaignId,
+      timelineId: timelineId,
+      parentTimelineId: parentTimelineId,
+      forkTurn: forkTurn,
+      forkReason: String(gm._timelineForkReason || '').slice(0, 80),
+      createdAt: Number(gm._timelineCreatedAt) || Date.now(),
+      updatedAt: Date.now()
+    };
+  }
+
   function _deepClone(obj) {
     if (obj == null || typeof obj !== 'object') return obj;
     try {
@@ -86,6 +116,18 @@
       var req = indexedDB.open(DB_NAME, DB_VERSION);
       req.onupgradeneeded = function(e) {
         var db = e.target.result;
+        var lineageStore;
+        if (!db.objectStoreNames.contains(LINEAGE_STORE)) {
+          lineageStore = db.createObjectStore(LINEAGE_STORE, { keyPath: 'id' });
+          lineageStore.createIndex('campaignId', 'campaignId', { unique: false });
+        } else {
+          lineageStore = e.target.transaction.objectStore(LINEAGE_STORE);
+          try {
+            if (!lineageStore.indexNames || !lineageStore.indexNames.contains('campaignId')) {
+              lineageStore.createIndex('campaignId', 'campaignId', { unique: false });
+            }
+          } catch (_) {}
+        }
         if (!db.objectStoreNames.contains(STORE)) {
           var store = db.createObjectStore(STORE, { keyPath: 'id' });
           store.createIndex('campaignId', 'campaignId', { unique: false });
@@ -106,13 +148,13 @@
               existingStore.createIndex('timelineTurn', ['campaignId', 'timelineId', 'turn'], { unique: true });
             }
           } catch (_) {}
-          if (e.oldVersion > 0 && e.oldVersion < 4) {
+          if (e.oldVersion > 0 && e.oldVersion < 5) {
             var cursorReq = existingStore.openCursor();
             cursorReq.onsuccess = function() {
               var cursor = cursorReq.result;
               if (!cursor) return;
               var record = cursor.value;
-              if (record && record.campaignId && !/^tml_[A-Za-z0-9_-]{8,124}$/.test(String(record.timelineId || ''))) {
+              if (e.oldVersion < 4 && record && record.campaignId && !/^tml_[A-Za-z0-9_-]{8,124}$/.test(String(record.timelineId || ''))) {
                 var oldId = String(record.id || '');
                 var timelineId = _legacyTimelineId(record.campaignId);
                 record.timelineId = timelineId;
@@ -124,6 +166,9 @@
                 existingStore.put(record);
                 if (oldId && oldId !== record.id) existingStore.delete(oldId);
               }
+              var lineage = record && record.state && record.state.GM
+                ? _lineageRecordFromGM(record.state.GM, record.campaignId, record.timelineId) : null;
+              if (lineage) lineageStore.put(lineage);
               cursor.continue();
             };
           }
@@ -161,8 +206,11 @@
       return new Promise(function(resolve, reject) {
         var tx;
         try {
-          tx = db.transaction(STORE, 'readwrite');
+          tx = db.transaction([STORE, LINEAGE_STORE], 'readwrite');
           tx.objectStore(STORE).put(record);
+          var lineage = record && record.state && record.state.GM
+            ? _lineageRecordFromGM(record.state.GM, record.campaignId, record.timelineId) : null;
+          if (lineage) tx.objectStore(LINEAGE_STORE).put(lineage);
           tx.oncomplete = function() { resolve(record); };
           tx.onerror = function(e) { reject((e.target && e.target.error) || tx.error || new Error('快照写入失败')); };
           tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('快照事务已中止')); };
@@ -186,6 +234,42 @@
     });
   }
 
+  function _getAllLineageRecords() {
+    return _openDB().then(function(db) {
+      return new Promise(function(resolve, reject) {
+        var tx;
+        try {
+          tx = db.transaction(LINEAGE_STORE, 'readonly');
+          var req = tx.objectStore(LINEAGE_STORE).getAll();
+          req.onsuccess = function(e) { resolve(e.target.result || []); };
+          req.onerror = function(e) { reject(e.target.error || new Error('时间线图读取失败')); };
+          tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('时间线图读取事务已中止')); };
+        } catch (e) { reject(e); }
+      });
+    });
+  }
+
+  function recordTimeline(gm) {
+    gm = gm || global.GM || (typeof GM !== 'undefined' ? GM : null);
+    if (!gm) return Promise.resolve({ ok: false, reason: 'no GM' });
+    var campaignId = _ensureCampaignId(gm);
+    var timelineId = _ensureTimelineId(gm);
+    var record = _lineageRecordFromGM(gm, campaignId, timelineId);
+    if (!record) return Promise.reject(new Error('时间线谱系结构非法'));
+    return _openDB().then(function(db) {
+      return new Promise(function(resolve, reject) {
+        var tx;
+        try {
+          tx = db.transaction(LINEAGE_STORE, 'readwrite');
+          tx.objectStore(LINEAGE_STORE).put(record);
+          tx.oncomplete = function() { resolve({ ok: true, record: record }); };
+          tx.onerror = function(e) { reject((e.target && e.target.error) || tx.error || new Error('时间线谱系写入失败')); };
+          tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('时间线谱系事务已中止')); };
+        } catch (e) { reject(e); }
+      });
+    });
+  }
+
   function _timelineOwnerFromRecords(records, campaignId, timelineId, maxTurn) {
     var candidates = (records || []).filter(function(record) {
       return record && record.campaignId === campaignId && record.timelineId === timelineId
@@ -196,22 +280,27 @@
 
   // 子时间线可只读继承 forkTurn 以前的祖先快照。当前线记录优先；祖先 payload 不复制，
   // 因而长局分叉不会造成成倍存储，同时不会让一次正常读档把 T1..Tn 历史列表清空。
-  function _accessibleSnapshotRecords(records, campaignId, timelineId, currentGM) {
+  function _accessibleSnapshotRecords(records, lineageRecords, campaignId, timelineId, currentGM) {
     var chain = [];
     var seen = Object.create(null);
+    var lineageByTimeline = Object.create(null);
+    (lineageRecords || []).forEach(function(record) {
+      if (record && record.campaignId === campaignId && record.timelineId) lineageByTimeline[record.timelineId] = record;
+    });
     var cursorTimeline = timelineId;
     var cursorOwner = currentGM && currentGM._campaignId === campaignId && currentGM._timelineId === timelineId ? currentGM : null;
     var maxTurn = Infinity;
     while (cursorTimeline && !seen[cursorTimeline]) {
       seen[cursorTimeline] = true;
       chain.push({ timelineId: cursorTimeline, maxTurn: maxTurn });
-      if (!cursorOwner) cursorOwner = _timelineOwnerFromRecords(records, campaignId, cursorTimeline, maxTurn);
-      var parentTimeline = cursorOwner && String(cursorOwner._parentTimelineId || '');
-      var forkTurn = cursorOwner && Number(cursorOwner._forkTurn);
+      var lineage = lineageByTimeline[cursorTimeline];
+      if (!cursorOwner && !lineage) cursorOwner = _timelineOwnerFromRecords(records, campaignId, cursorTimeline, maxTurn);
+      var parentTimeline = lineage ? String(lineage.parentTimelineId || '') : (cursorOwner && String(cursorOwner._parentTimelineId || ''));
+      var forkTurn = lineage ? Number(lineage.forkTurn) : (cursorOwner && Number(cursorOwner._forkTurn));
       if (!parentTimeline || !Number.isSafeInteger(forkTurn) || forkTurn < 0) break;
       maxTurn = Math.min(maxTurn, forkTurn);
       cursorTimeline = parentTimeline;
-      cursorOwner = _timelineOwnerFromRecords(records, campaignId, cursorTimeline, maxTurn);
+      cursorOwner = null;
     }
     var byTurn = Object.create(null);
     chain.forEach(function(access, depth) {
@@ -308,9 +397,11 @@
         });
       }).then(function(exact) {
         if (exact) return exact;
-        return _getAllRecords().then(function(records) {
+        return Promise.all([_getAllRecords(), _getAllLineageRecords()]).then(function(parts) {
+          var records = parts[0];
+          var lineageRecords = parts[1];
           var currentGM = global.GM || (typeof GM !== 'undefined' ? GM : null);
-          var accessible = _accessibleSnapshotRecords(records, campaignId, timelineId, currentGM);
+          var accessible = _accessibleSnapshotRecords(records, lineageRecords, campaignId, timelineId, currentGM);
           var match = accessible.find(function(item) { return Number(item.record.turn) === _strictTurn(turn); });
           if (!match) return null;
           var inherited = _deepClone(match.record);
@@ -327,8 +418,8 @@
     campaignId = campaignId || (gm ? _ensureCampaignId(gm) : '');
     timelineId = timelineId || (gm ? _ensureTimelineId(gm) : '');
     if (!campaignId || !timelineId) return Promise.resolve([]);
-    return _getAllRecords().then(function(records) {
-      return _accessibleSnapshotRecords(records, campaignId, timelineId, gm).map(function(item) {
+    return Promise.all([_getAllRecords(), _getAllLineageRecords()]).then(function(parts) {
+      return _accessibleSnapshotRecords(parts[0], parts[1], campaignId, timelineId, gm).map(function(item) {
         var r = item.record;
         return {
           turn: r.turn,
@@ -502,6 +593,7 @@
     list: listSnapshots,
     delete: deleteSnapshot,
     timeTravel: timeTravel,
+    recordTimeline: recordTimeline,
     newCampaignId: _newCampaignId
   };
   Object.defineProperty(global, '_timeTravel', { value: timeTravel, writable: false, configurable: true });

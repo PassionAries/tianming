@@ -48,11 +48,15 @@ console.log('  [T1a] 地方差异(民心高>低)：' + (T1a ? 'OK' : 'FAIL'));
 console.log('  [T1b] 守恒 national==Σ叶：' + (T1b ? 'OK' : 'FAIL'));
 console.log('  [T1c] 叶 populationDetail 被写：' + (T1c ? 'OK' : 'FAIL'));
 
-// ── T2·开关关：原全国逻辑（叶级路径不碰叶 populationDetail）──
+// ── T2·开关关：仍由叶级唯一真值推进，但不应用地方差异修正 ──
 var s2 = setup(false);
 HujiEngine.tick({ turn: 1, monthRatio: 1, _monthRatio: 1 });
-var T2 = s2.L1.populationDetail.mouths === 600000 && s2.L2.populationDetail.mouths === 400000;
-console.log('[T2·开关关零回归] 叶 populationDetail 不被叶级路径碰：' + (T2 ? 'OK' : 'FAIL'));
+var l1rate = (s2.L1.populationDetail.mouths - 600000) / 600000;
+var l2rate = (s2.L2.populationDetail.mouths - 400000) / 400000;
+var T2 = s2.L1.populationDetail.mouths !== 600000
+  && s2.L2.populationDetail.mouths !== 400000
+  && Math.abs(l1rate - l2rate) < 0.00001;
+console.log('[T2·开关关闭回归] 叶级人口仍推进且使用统一全国率：' + (T2 ? 'OK' : 'FAIL'));
 
 var all = T1a && T1b && T1c && T2;
 console.log('\n=== ' + (all ? 'ALL PASS' : 'FAIL') + ' ===');

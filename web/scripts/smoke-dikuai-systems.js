@@ -80,10 +80,14 @@ console.log('— D2 · 叶级吏治连账(行为) —');
 /* ── D1 · 源码契约 ─────────────────────────────────────────── */
 console.log('— D1 · 人口三重错位根治(契约) —');
 var bridge = read('tm-integration-bridge.js');
-ok(/function growLeaf\(div\)/.test(bridge) && /kids\.forEach\(growLeaf\); return;/.test(bridge), '递归到叶(嵌套树不再只扫顶层)');
-ok(/\[pop, pd\]\.forEach/.test(bridge), 'population 与 populationDetail 双账同写');
-ok(/acc\.households \+ Math\.round\(acc\.households \* rate\)/.test(bridge), '户按本叶既有数等比缩放(不再 5/0.25 硬比率)');
-ok(/div\.environment\.currentLoad = Math\.max\(0, Math\.min\(1\.5, mNow \/ cap\)\)/.test(bridge), '活承载:负载随人口重算');
+var huji = read('tm-huji-engine.js');
+ok(/function _allLeafDivisions\(G\)/.test(huji) && /IB\.getLeafDivisions\(ah, facId\)/.test(huji), '人口权威递归取得所有行政区叶子');
+ok(/function _syncLeafPopulationMirrors\(leaf, detail\)/.test(huji)
+  && /leaf\.population\.mouths = detail\.mouths/.test(huji), 'Huji 同步 population 与 populationDetail 双账');
+ok(/leafMouthsPerHousehold = Number\(pd\.households\) > 0 \? mouths \/ Number\(pd\.households\)/.test(huji)
+  && /leafDingRatio = Number\(pd\.ding\) > 0 \? Number\(pd\.ding\) \/ mouths/.test(huji), '户与丁按本叶既有结构同比缩放');
+ok(/detail\.mouths \/ cap/.test(huji) && /env\.currentLoad = load/.test(huji), '活承载负载随 Huji 人口重算');
+ok(!/function _naturalPopulationGrowth\(/.test(bridge), 'IntegrationBridge 不再成为第二个人口生产者');
 
 /* ── D4 · 源码契约 ─────────────────────────────────────────── */
 console.log('— D4 · 势力接地块三断链(契约) —');

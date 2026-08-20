@@ -9,6 +9,7 @@ const WEB = path.resolve(__dirname, '..');
 const coreSource = fs.readFileSync(path.join(WEB, 'tm-endturn-core.js'), 'utf8');
 const systemsSource = fs.readFileSync(path.join(WEB, 'tm-endturn-systems.js'), 'utf8');
 const pipelineStepsSource = fs.readFileSync(path.join(WEB, 'tm-endturn-pipeline-steps.js'), 'utf8');
+const hujiSource = fs.readFileSync(path.join(WEB, 'tm-huji-engine.js'), 'utf8');
 let assertions = 0;
 function ok(value, label) {
   if (!value) throw new Error('[smoke-endturn-transaction-failures] ' + label);
@@ -149,6 +150,38 @@ async function main() {
   ok(await expectFailure(ctx._endTurn_updateSystems(1, ''), 'guoku-ledger-failure'), 'treasury failure propagates after an intermediate turn increment');
   ctx._tmRollbackEndTurnTransaction(txn, new Error('guoku-ledger-failure'));
   ok(ctx.GM.treasury === 50 && ctx.GM.turn === 4, 'partial treasury mutation and turn increment roll back atomically');
+
+  resetWorld({
+    environment: { nationalLoad: 0.5 }, vars: { disasterLevel: 0 }, activeWars: [],
+    population: {
+      national: { mouths: 1000000, households: 200000, ding: 300000 },
+      byRegion: {},
+      dynamics: { birthRateBase: 0.03, deathRateBase: 0.022, yearlyLog: [] }
+    }
+  });
+  const firstLeaf = { id: 'first', populationDetail: { mouths: 600000, households: 120000, ding: 180000 } };
+  const secondDetail = { households: 80000, ding: 120000 };
+  Object.defineProperty(secondDetail, 'mouths', {
+    configurable: true,
+    enumerable: true,
+    get() {
+      if (firstLeaf.populationDetail.mouths !== 600000) throw new Error('huji-second-region-failure');
+      return 400000;
+    }
+  });
+  const secondLeaf = { id: 'second', populationDetail: secondDetail };
+  ctx.GM.adminHierarchy = { player: { divisions: [firstLeaf, secondLeaf] } };
+  ctx.P.conf.populationBottomUpEnabled = false;
+  ctx.IntegrationBridge = { getLeafDivisions() { return [firstLeaf, secondLeaf]; } };
+  vm.runInContext(hujiSource, ctx);
+  const hujiBeforeGM = comparableWorld(ctx.GM);
+  const hujiBeforeP = comparableWorld(ctx.P);
+  txn = ctx._tmCaptureEndTurnTransaction();
+  ok(await expectFailure(ctx._endTurn_updateSystems(1, ''), 'huji-second-region-failure'),
+    'real Huji partial-region failure reaches the outer turn transaction');
+  ctx._tmRollbackEndTurnTransaction(txn, new Error('huji-second-region-failure'));
+  ok(comparableWorld(ctx.GM) === hujiBeforeGM && comparableWorld(ctx.P) === hujiBeforeP,
+    'real Huji partial population writes and turn increment roll back atomically');
 
   resetWorld({ turn: 8 });
   let releaseSubticks;

@@ -452,10 +452,17 @@
     var P = global.GM.population;
     if (!P) return;
     _ensureDeepDemographics(P);
-    // S1·人口自下而上(P.conf.populationBottomUpEnabled·默认关)：增长发生在叶·按本地民心·写叶 populationDetail·
-    // national 增量同步、maintain(bridge:377) 之后从 Σ叶 精确重建。详设 docs/population-bottom-up-redesign-2026-06.md
-    if (global.P && global.P.conf && global.P.conf.populationBottomUpEnabled) {
-      return _tickPopulationLeafGrowth(ctx, mr);
+    // 行政区叶子是人口运行态的唯一真值。无论是否启用“自下而上”细算，
+    // 只要叶级户口存在，都必须在叶子上推进；否则先改 national/byRegion，
+    // 随后的 runtime bridge 又从未变化的叶子重建全国账，会把本次增长抹掉。
+    // 选项只决定是否采用地方民心/粮食/灾异修正，不再决定写入哪套账。
+    var leaves = _allLeafDivisions(global.GM);
+    var hasLeafPopulation = leaves.some(function(leaf) {
+      return !!(leaf && leaf.populationDetail && Number(leaf.populationDetail.mouths) > 0);
+    });
+    if (hasLeafPopulation) {
+      var useLocalFactors = !!(global.P && global.P.conf && global.P.conf.populationBottomUpEnabled);
+      return _tickPopulationLeafGrowth(ctx, mr, useLocalFactors, leaves);
     }
     var d = P.dynamics;
     // 年景因子
@@ -472,15 +479,18 @@
     if (war > 0) deathRate += Math.min(0.03, war * 0.01);
     if (environmentLoad > 1.2) deathRate += (environmentLoad - 1.2) * 0.02;
     // 年度净增长 → 月度化
-    var births = Math.round(P.national.mouths * birthRate * mr / 12);
-    var deaths = Math.round(P.national.mouths * deathRate * mr / 12);
+    var oldMouths = Number(P.national.mouths) || 0;
+    var oldHouseholds = Number(P.national.households) || 0;
+    var oldDing = Number(P.national.ding) || 0;
+    var dingRatio = oldDing / Math.max(1, oldMouths);
+    var mphh = oldMouths / Math.max(1, oldHouseholds);
+    var births = Math.round(oldMouths * birthRate * mr / 12);
+    var deaths = Math.round(oldMouths * deathRate * mr / 12);
     var net = births - deaths;
-    P.national.mouths = Math.max(100000, P.national.mouths + net);
+    P.national.mouths = Math.max(100000, oldMouths + net);
     // 丁同比变化
-    var dingRatio = P.national.ding / Math.max(1, P.national.mouths);
     P.national.ding = Math.round(P.national.mouths * dingRatio);
     // 户同比变化
-    var mphh = P.national.mouths / Math.max(1, P.national.households);
     P.national.households = Math.round(P.national.mouths / mphh);
     // 按区域分配同比
     Object.keys(P.byRegion || {}).forEach(function(rid) {
@@ -508,7 +518,12 @@
       d._yearlyAccumBirths = 0;
       d._yearlyAccumDeaths = 0;
     }
-    d.lastYearNet = net * 12;
+    d.lastYearNet = _annualizePopulationNet(net, mr);
+  }
+
+  function _annualizePopulationNet(net, monthRatio) {
+    var mr = Number(monthRatio);
+    return mr > 0 && isFinite(mr) ? net * 12 / mr : net * 12;
   }
 
   // S1-S4·人口自下而上 取叶(2026-06-20 真机修)：getLeafDivisions(ah) 默认只取 'player' faction
@@ -528,7 +543,28 @@
 
   // S1·人口自下而上：叶级增长(先只接本地民心)·写叶 populationDetail·national = Σ叶 增量同步。
   // 详设 docs/population-bottom-up-redesign-2026-06.md §2.1-2.2。S2 再接粮食供需/生活/赋役，S3 调粮。
-  function _tickPopulationLeafGrowth(ctx, mr) {
+  function _syncLeafPopulationMirrors(leaf, detail) {
+    if (!leaf || !detail) return;
+    if (typeof leaf.population === 'number') {
+      leaf.population = detail.mouths;
+    } else if (leaf.population && typeof leaf.population === 'object' && leaf.population !== detail) {
+      leaf.population.mouths = detail.mouths;
+      leaf.population.households = detail.households;
+      leaf.population.ding = detail.ding;
+    }
+    var env = leaf.environment && typeof leaf.environment === 'object' ? leaf.environment : null;
+    var carrying = leaf.carryingCapacity;
+    var cap = Number(env && env.carrying) ||
+      Number(carrying && typeof carrying === 'object' && carrying.historicalCap) ||
+      (typeof carrying === 'number' ? Number(carrying) : 0);
+    if (cap > 0) {
+      var load = Math.max(0, Math.min(1.5, detail.mouths / cap));
+      if (env) env.currentLoad = load;
+      if (carrying && typeof carrying === 'object') carrying.currentLoad = load;
+    }
+  }
+
+  function _tickPopulationLeafGrowth(ctx, mr, useLocalFactors, suppliedLeaves) {
     var P = global.GM.population;
     var G = global.GM;
     var d = P.dynamics;
@@ -542,11 +578,11 @@
     if (disaster > 0.3) baseDeath += disaster * 0.05;
     if (war > 0) baseDeath += Math.min(0.03, war * 0.01);
     if (environmentLoad > 1.2) baseDeath += (environmentLoad - 1.2) * 0.02;
-    // 丁/户比例(叶级先共享全国比例·S2 视需叶级化)
+    // 全国比例仅作叶数据缺项时的 fallback；有叶级户丁账时保留各自历史结构。
     var dingRatio = P.national.ding / Math.max(1, P.national.mouths);
     var mphh = P.national.mouths / Math.max(1, P.national.households);
     // 遍历叶(2026-06-20 真机修：遍历所有 faction·非仅 player)·各叶按本地民心算生死·写叶 populationDetail
-    var leaves = _allLeafDivisions(G);
+    var leaves = suppliedLeaves || _allLeafDivisions(G);
     var totBirths = 0, totDeaths = 0, totNet = 0;
     leaves.forEach(function(leaf) {
       var pd = leaf && leaf.populationDetail;
@@ -571,21 +607,34 @@
       var rd = leaf.recentDisasters;
       var hasDis = Array.isArray(rd) ? rd.length > 0 : !!rd;
       var corvee = rg ? Math.max(0, Math.min(1, Number(rg.corveeRate) || 0)) : 0;
-      var localBirth = baseBirth
-        * (1 + (minxin - 50) / 100 * 0.4)                  // 民心高→生育↑
-        * (1 + lifeLv * 0.3)                               // 生活好→生育↑
-        * Math.max(0.3, Math.min(1.1, 1.1 - load * 0.3))   // 粮紧(load高)→生育↓
-        * (1 - corvee * 0.2);                              // 役重→生育↓
-      var localDeath = baseDeath
-        * (1 - (minxin - 50) / 100 * 0.25)                 // 民心高→死亡↓
-        * (1 + (hasDis ? 0.5 : 0))                         // 灾异→死亡↑
-        * (1 + Math.max(0, load - 1) * 0.6);               // 缺粮(load>1)→饥荒死亡↑
+      var localBirth = baseBirth;
+      var localDeath = baseDeath;
+      if (useLocalFactors) {
+        localBirth = baseBirth
+          * (1 + (minxin - 50) / 100 * 0.4)                  // 民心高→生育↑
+          * (1 + lifeLv * 0.3)                               // 生活好→生育↑
+          * Math.max(0.3, Math.min(1.1, 1.1 - load * 0.3))   // 粮紧(load高)→生育↓
+          * (1 - corvee * 0.2);                              // 役重→生育↓
+        localDeath = baseDeath
+          * (1 - (minxin - 50) / 100 * 0.25)                 // 民心高→死亡↓
+          * (1 + (hasDis ? 0.5 : 0))                         // 灾异→死亡↑
+          * (1 + Math.max(0, load - 1) * 0.6);               // 缺粮(load>1)→饥荒死亡↑
+      }
       var births = Math.round(mouths * localBirth * mr / 12);
       var deaths = Math.round(mouths * localDeath * mr / 12);
       var net = births - deaths;
+      var leafDingRatio = Number(pd.ding) > 0 ? Number(pd.ding) / mouths : dingRatio;
+      var leafMouthsPerHousehold = Number(pd.households) > 0 ? mouths / Number(pd.households) : mphh;
       pd.mouths = Math.max(0, mouths + net);                         // 写叶(增长落点)
-      pd.households = Math.round(pd.mouths / mphh);
-      pd.ding = Math.round(pd.mouths * dingRatio);
+      pd.households = Math.round(pd.mouths / Math.max(1, leafMouthsPerHousehold));
+      pd.ding = Math.round(pd.mouths * leafDingRatio);
+      _syncLeafPopulationMirrors(leaf, pd);
+      var legacyRow = P.byRegion && (P.byRegion[rid] || (leaf.name ? P.byRegion[leaf.name] : null));
+      if (legacyRow && legacyRow !== pd) {
+        legacyRow.mouths = pd.mouths;
+        legacyRow.households = pd.households;
+        legacyRow.ding = pd.ding;
+      }
       leaf.yearlyBirths = (leaf.yearlyBirths || 0) + births;
       leaf.yearlyDeaths = (leaf.yearlyDeaths || 0) + deaths;
       totBirths += births; totDeaths += deaths; totNet += net;
@@ -611,7 +660,7 @@
       d._yearlyAccumBirths = 0;
       d._yearlyAccumDeaths = 0;
     }
-    d.lastYearNet = totNet * 12;
+    d.lastYearNet = _annualizePopulationNet(totNet, mr);
   }
 
   function _deepFieldDiversityPressure(r) {
@@ -1039,14 +1088,27 @@
       var sc = (typeof global.findScenarioById === 'function') ? global.findScenarioById(global.GM.sid) : null;
       init(sc);
     }
-    var mr = ctx.monthRatio || 1;
-    try { _tickPopulationDynamics(ctx, mr); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'huji] dynamics:') : console.error('[huji] dynamics:', e); }
-    try { _tickDeepFieldLinkages(ctx, mr); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'huji] deepFields:') : console.error('[huji] deepFields:', e); }
-    try { _tickCorvee(ctx, mr); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'huji] corvee:') : console.error('[huji] corvee:', e); }
-    try { _tickLargeCorvee(ctx, mr); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'huji] largeCorvee:') : console.error('[huji] largeCorvee:', e); }
-    try { _tickMilitary(ctx, mr); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'huji] military:') : console.error('[huji] military:', e); }
-    try { _tickMigration(ctx, mr); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'huji] migration:') : console.error('[huji] migration:', e); }
-    try { _tickRegistration(ctx); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'huji] registration:') : console.error('[huji] registration:', e); }
+    var rawMr = Number(ctx.monthRatio);
+    var mr = rawMr > 0 && isFinite(rawMr) ? rawMr : 1;
+    var strict = ctx.strict === true;
+    var failures = [];
+    function runStep(label, fn) {
+      try {
+        fn();
+      } catch(e) {
+        (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'huji] ' + label + ':') : console.error('[huji] ' + label + ':', e);
+        if (strict) throw e;
+        failures.push({ step: label, error: String(e && e.message || e) });
+      }
+    }
+    runStep('dynamics', function() { _tickPopulationDynamics(ctx, mr); });
+    runStep('deepFields', function() { _tickDeepFieldLinkages(ctx, mr); });
+    runStep('corvee', function() { _tickCorvee(ctx, mr); });
+    runStep('largeCorvee', function() { _tickLargeCorvee(ctx, mr); });
+    runStep('military', function() { _tickMilitary(ctx, mr); });
+    runStep('migration', function() { _tickMigration(ctx, mr); });
+    runStep('registration', function() { _tickRegistration(ctx); });
+    return { ok: failures.length === 0, failures: failures };
   }
 
   // ═══════════════════════════════════════════════════════════════════

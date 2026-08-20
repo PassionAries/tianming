@@ -107,18 +107,19 @@ ok(/stageTurnData\([\s\S]*?result\.success === true[\s\S]*?回合分卷暂存失
 ok(/function _recoverPendingTurnDataPublish\(\)[\s\S]*?baseRecoveryLeaseCurrent[\s\S]*?listTurnPublishReceipts\(campaignId, timelineId, 'world-committed'\)[\s\S]*?recoverTurnData\(marker\)[\s\S]*?deleteTurnPublishReceipt\(marker/.test(lifecycle),
   '读档按世界身份租约补发独立 receipt，并只删除轻量事务记录');
 {
-  const loadImpl = sliceFn(lifecycle, 'async function _fullLoadGameImpl(');
+  const loadImpl = sliceFn(lifecycle, 'async function _fullLoadGameApplyImpl(');
   const hydrateAt = loadImpl.indexOf('await ChronicleSystem.hydrateDurableRecords(GM, P)');
   const receiptAt = loadImpl.indexOf('await _recoverPendingTurnDataPublish()');
   const forkAt = loadImpl.indexOf('_tmForkLoadedTimeline(GM');
   const enableAt = loadImpl.indexOf('GM.busy = false');
   const showWorldAt = loadImpl.indexOf('_$("G").style.display="grid"');
   const enterAt = loadImpl.indexOf('enterGame()');
-  ok(/function fullLoadGame\(data, loadOptions\)[\s\S]*?window\._tmLoadBarrier = promise/.test(lifecycle)
+  ok(/function fullLoadGame\(data, loadOptions\)[\s\S]*?window\._tmLoadBarrier = barrier/.test(lifecycle)
     && hydrateAt >= 0 && receiptAt > hydrateAt && forkAt > receiptAt && enableAt > forkAt
     && showWorldAt > enableAt && enterAt > showWorldAt,
   '读档以显式 Promise 屏障等待编年 hydration 和 receipt 恢复后才开放玩法');
   ok(/GM\.busy = true;[\s\S]*?GM\._loadHydrationPending = true;/.test(loadImpl)
+    && /function _tmAwaitLoadBarrier\(\)[\s\S]*?result !== true[\s\S]*?throw new Error/.test(lifecycle)
     && /doSaveGame=async function\(\)\{\s*await _tmAwaitLoadBarrier\(\)/.test(lifecycle)
     && /desktopDoSave=async function\(\)\{\s*await _tmAwaitLoadBarrier\(\)/.test(lifecycle)
     && /saveToSlot:\s*async function[\s\S]*?await _tmAwaitLoadBarrier\(\)/.test(manager),
@@ -215,6 +216,77 @@ async function runDynamicLeaseSmokes() {
     releaseBarrier(true);
     await waiting;
     ok(settled === true, 'hydration 完成后 load barrier 才放行等待中的操作');
+  }
+  {
+    const transactionFns = [
+      sliceFn(lifecycle, 'function _tmAwaitLoadBarrier('),
+      sliceFn(lifecycle, 'function _tmCaptureLoadTransaction('),
+      sliceFn(lifecycle, 'function _tmRestoreLoadTransaction('),
+      sliceFn(lifecycle, 'function fullLoadGame('),
+      sliceFn(lifecycle, 'async function _fullLoadGameImpl(')
+    ].join('\n');
+    function makeLoadContext(rollbackMustFail) {
+      let sessionToken = 'session-old-1234567890';
+      const oldP = { marker: 'old-P' };
+      const oldGM = { marker: 'old-GM', running: true, busy: false, _chronicleSysState: { monthDrafts: {}, yearChronicles: {}, yearBases: {} } };
+      const context = {
+        P: oldP, GM: oldGM, Promise, Date, Math, Error, String, Object, Array,
+        console: { warn() {}, error() {}, log() {} },
+        _tmGetDesktopAutoSaveSessionToken() { return sessionToken; },
+        _tmRotateDesktopAutoSaveSession(_reason, token) { sessionToken = token; return token; },
+        ChronicleSystem: { deserialize() {} },
+        buildIndices: rollbackMustFail ? function() { throw new Error('rollback-index-failure'); } : function() {}
+      };
+      context.window = context;
+      context._tmLoadGen = 7;
+      context.scriptData = { customPresets: { old: true } };
+      context._fullLoadGameApplyImpl = async function() {
+        context.P = { marker: 'incoming-P' };
+        context.GM = { marker: 'incoming-GM', running: true, busy: true };
+        context.window.P = context.P;
+        context.window.GM = context.GM;
+        context._tmLoadGen++;
+        context._tmRotateDesktopAutoSaveSession('full-load', 'session-incoming-123456');
+        await Promise.resolve();
+        throw new Error('hydrate-injected-failure');
+      };
+      vm.createContext(context);
+      vm.runInContext(transactionFns, context);
+      return { context, oldP, oldGM, getSession: () => sessionToken };
+    }
+    const restored = makeLoadContext(false);
+    let loadError = null;
+    try { await restored.context.fullLoadGame({}); } catch (error) { loadError = error; }
+    await restored.context._tmAwaitLoadBarrier();
+    ok(loadError && loadError._tmLoadRollbackComplete === true
+      && restored.context.P === restored.oldP && restored.context.GM === restored.oldGM
+      && restored.context._tmLoadGen === 9 && restored.getSession() === 'session-old-1234567890',
+    'hydration 失败恢复原 P/GM 与自动存档 session，并以单调 load generation 失效旧租约');
+
+    const blocked = makeLoadContext(true);
+    let blockedError = null;
+    try { await blocked.context.fullLoadGame({}); } catch (error) { blockedError = error; }
+    let barrierRejected = false;
+    try { await blocked.context._tmAwaitLoadBarrier(); } catch (_) { barrierRejected = true; }
+    ok(blockedError && blockedError._tmLoadRollbackComplete !== true && blockedError._tmLoadRollbackError
+      && barrierRejected === true,
+    '读档回滚自身失败时 barrier 保持 rejected，半恢复世界不能被手动保存入口放行');
+
+    let releaseFirstLoad;
+    const serialized = makeLoadContext(false);
+    serialized.context._fullLoadGameApplyImpl = async function() {
+      await new Promise(resolve => { releaseFirstLoad = resolve; });
+    };
+    const firstLoad = serialized.context.fullLoadGame({ id: 'first' });
+    const firstBarrier = serialized.context._tmLoadBarrier;
+    let overlappingRejected = false;
+    try { await serialized.context.fullLoadGame({ id: 'second' }); } catch (_) { overlappingRejected = true; }
+    ok(overlappingRejected && serialized.context._tmLoadBarrier === firstBarrier
+      && serialized.context._tmActiveLoadTransaction,
+    '重叠读档被同步拒绝且不能替换第一条仍在进行的完成屏障');
+    releaseFirstLoad();
+    await firstLoad;
+    await serialized.context._tmAwaitLoadBarrier();
   }
   {
     const writes = [], order = [];

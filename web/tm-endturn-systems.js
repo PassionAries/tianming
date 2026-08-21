@@ -83,7 +83,7 @@ async function _endTurn_updateSystems(timeRatio, zhengwen) {
   } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'endTurn] HujiEngine(early) 失败:') : console.error('[endTurn] HujiEngine(early) 失败:', e); throw e; }
   try {
     if (typeof HujiDeepFill !== 'undefined') {
-      HujiDeepFill.tick({ turn: GM.turn, monthRatio: monthRatio, _monthRatio: monthRatio });
+      HujiDeepFill.tick({ turn: GM.turn, monthRatio: monthRatio, _monthRatio: monthRatio, strict: true });
     }
   } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'endTurn] HujiDeepFill(early) 失败:') : console.error('[endTurn] HujiDeepFill(early) 失败:', e); throw e; }
   // 标记已早跑，后文跳过
@@ -211,7 +211,7 @@ async function _endTurn_updateSystems(timeRatio, zhengwen) {
   // 6.10 户口深化（已在 6.015 早跑，跳过）
   if (!GM._hujiEarlyTicked) try {
     if (typeof HujiDeepFill !== 'undefined') {
-      HujiDeepFill.tick({ turn: GM.turn, monthRatio: monthRatio, _monthRatio: monthRatio });
+      HujiDeepFill.tick({ turn: GM.turn, monthRatio: monthRatio, _monthRatio: monthRatio, strict: true });
     }
   } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'endTurn] HujiDeepFill.tick 失败:') : console.error('[endTurn] HujiDeepFill.tick 失败:', e); throw e; }
   // 清 early 标记，下回合重新走

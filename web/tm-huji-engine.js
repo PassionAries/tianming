@@ -128,6 +128,12 @@
     { id:'huguang_tian',   name:'湖广填四川',century:17,scale:2000000, fromRegion:'湖广', toRegion:'四川' },
     { id:'chuang_guandong',name:'闯关东',   century:19, scale:8000000, fromRegion:'山东', toRegion:'东北' }
   ];
+  // 迁徙预设是进程级常量，不得承载某一战役的触发状态。
+  // 旧实现向预设写 _triggered，导致同进程跨档抑制、重启后重复触发。
+  if (typeof Object.freeze === 'function') {
+    MIGRATION_EVENTS.forEach(function(eventPreset) { Object.freeze(eventPreset); });
+    Object.freeze(MIGRATION_EVENTS);
+  }
 
   // ═══════════════════════════════════════════════════════════════════
   //  初始化
@@ -145,6 +151,18 @@
       if (!G.population.corvee) G.population.corvee = _defaultCorvee();
       if (!G.population.military) G.population.military = _defaultMilitary();
       if (!G.population.meta) G.population.meta = _defaultMeta();
+      if (!Array.isArray(G.population.migrationEvents)) G.population.migrationEvents = []; // arch-ok: 户籍权威写口迁移战役事件账本
+      if (!G.population.migrationEventStates || typeof G.population.migrationEventStates !== 'object' || Array.isArray(G.population.migrationEventStates)) {
+        G.population.migrationEventStates = {}; // arch-ok: 户籍权威写口迁移战役事件状态
+      }
+      if (!Array.isArray(G.population.triggeredMigrationEventIds)) G.population.triggeredMigrationEventIds = []; // arch-ok: 户籍权威写口迁移已触发事件集合
+      G.population.migrationEvents.forEach(function(record) {
+        if (!record || !record.id) return;
+        if (G.population.triggeredMigrationEventIds.indexOf(record.id) < 0) G.population.triggeredMigrationEventIds.push(record.id); // arch-ok: 户籍权威写口迁移已触发事件集合
+        if (!G.population.migrationEventStates[record.id]) {
+          G.population.migrationEventStates[record.id] = { status:'triggered', turn:record.turn, scale:record.scale }; // arch-ok: 户籍权威写口迁移事件状态
+        }
+      });
       _ensureDeepDemographics(G.population);
       return;
     }
@@ -178,7 +196,9 @@
       hiddenCount: 0,
       largeCorveeActive: [],    // 正在进行的大徭役
       garrisons: [],            // 卫所
-      migrationEvents: []       // 触发的迁徙事件
+      migrationEvents: [],      // 已成功触发的迁徙事件
+      migrationEventStates: {}, // 战役内的 pending/triggered 状态
+      triggeredMigrationEventIds: []
     };
     _ensureDeepDemographics(G.population);
   }
@@ -374,7 +394,11 @@
   function _defaultCorvee() {
     var byType = {};
     Object.keys(CORVEE_TYPES).forEach(function(k) {
-      byType[k] = { daysPerDing: CORVEE_TYPES[k].daysPerDing, totalDays: 0, fulfilled: 0, commutedRate: 0, deaths: 0 };
+      byType[k] = {
+        daysPerDing: CORVEE_TYPES[k].daysPerDing,
+        totalDays: 0, fulfilled: 0, commutedRate: 0, deaths: 0,
+        currentYearDays: 0, currentYearFulfilled: 0, currentYearDeaths: 0
+      };
     });
     return {
       enabled: true,
@@ -391,7 +415,9 @@
       commutationRate: 0.5,
       fullyCommuted: false,
       proxyRate: 0,
-      burdenThreshold: 0.40
+      burdenThreshold: 0.40,
+      currentYear: null,
+      currentYearBurden: 0
     };
   }
 
@@ -431,7 +457,8 @@
       registrationCycle: 10,
       lastRegistrationTurn: 0,
       registrationAccuracy: 0.85,
-      registrationCost: { money: 0, grain: 0 }
+      registrationCost: { money: 0, grain: 0 },
+      minimumPopulation: 0
     };
   }
 
@@ -456,13 +483,14 @@
     // 只要叶级户口存在，都必须在叶子上推进；否则先改 national/byRegion，
     // 随后的 runtime bridge 又从未变化的叶子重建全国账，会把本次增长抹掉。
     // 选项只决定是否采用地方民心/粮食/灾异修正，不再决定写入哪套账。
-    var leaves = _allLeafDivisions(global.GM);
+    var groups = _factionLeafGroups(global.GM);
+    var leaves = _allLeafDivisions(global.GM, groups);
     var hasLeafPopulation = leaves.some(function(leaf) {
       return !!(leaf && leaf.populationDetail && Number(leaf.populationDetail.mouths) > 0);
     });
     if (hasLeafPopulation) {
       var useLocalFactors = !!(global.P && global.P.conf && global.P.conf.populationBottomUpEnabled);
-      return _tickPopulationLeafGrowth(ctx, mr, useLocalFactors, leaves);
+      return _tickPopulationLeafGrowth(ctx, mr, useLocalFactors, groups);
     }
     var d = P.dynamics;
     // 年景因子
@@ -487,7 +515,7 @@
     var births = Math.round(oldMouths * birthRate * mr / 12);
     var deaths = Math.round(oldMouths * deathRate * mr / 12);
     var net = births - deaths;
-    P.national.mouths = Math.max(100000, oldMouths + net);
+    P.national.mouths = Math.max(_minimumPopulation(P), oldMouths + net);
     // 丁同比变化
     P.national.ding = Math.round(P.national.mouths * dingRatio);
     // 户同比变化
@@ -526,19 +554,182 @@
     return mr > 0 && isFinite(mr) ? net * 12 / mr : net * 12;
   }
 
-  // S1-S4·人口自下而上 取叶(2026-06-20 真机修)：getLeafDivisions(ah) 默认只取 'player' faction
-  // (getTopLevelDivisions: ah[factionId||'player'])·须遍历所有 faction·否则 NPC 势力地块人口静止。
-  function _allLeafDivisions(G) {
-    var ah = G && G.adminHierarchy;
-    if (!ah) return [];
-    var IB = global.IntegrationBridge;
-    if (!IB || typeof IB.getLeafDivisions !== 'function') return [];
+  function _minimumPopulation(P) {
+    var configured = Number(P && P.meta && P.meta.minimumPopulation);
+    return configured >= 0 && isFinite(configured) ? configured : 0;
+  }
+
+  function _walkAdminLeaves(nodes, out, seen) {
+    (Array.isArray(nodes) ? nodes : []).forEach(function(node) {
+      if (!node || typeof node !== 'object') return;
+      if (seen && seen.indexOf(node) >= 0) return;
+      if (seen) seen.push(node);
+      var childGroups = [node.children, node.divisions, node.subdivisions, node.subs]
+        .filter(function(children, index, all) {
+          return Array.isArray(children) && children.length && all.indexOf(children) === index;
+        });
+      if (childGroups.length) {
+        childGroups.forEach(function(children) { _walkAdminLeaves(children, out, seen); });
+      } else out.push(node);
+    });
+  }
+
+  function _normPopulationName(value) {
+    return String(value == null ? '' : value).replace(/[\s·（）()\-—_]/g, '').toLowerCase();
+  }
+
+  function _playerAdminKey(G, hierarchy) {
+    try {
+      if (typeof global._tmResolvePlayerAdminKey === 'function') {
+        var resolved = global._tmResolvePlayerAdminKey(hierarchy, global.P || null);
+        if (resolved && resolved !== 'divisions') return resolved;
+      }
+    } catch (_) {}
+    if (hierarchy && hierarchy.player) return 'player';
+    var keys = Object.keys(hierarchy || {}).filter(function(key) {
+      var branch = hierarchy[key];
+      return Array.isArray(branch) || (branch && Array.isArray(branch.divisions));
+    });
+    if (keys.length === 1) return keys[0];
+    var playerNames = [];
+    function add(value) {
+      var normalized = _normPopulationName(value);
+      if (normalized && playerNames.indexOf(normalized) < 0) playerNames.push(normalized);
+    }
+    add(global.P && global.P.playerInfo && global.P.playerInfo.factionName);
+    add(global.P && global.P.playerFaction);
+    add(G && G.playerFaction);
+    (G && Array.isArray(G.facs) ? G.facs : []).forEach(function(faction) {
+      if (faction && faction.isPlayer) { add(faction.id); add(faction.name); add(faction.key); }
+    });
+    for (var i = 0; i < keys.length; i++) {
+      var branch = hierarchy[keys[i]] || {};
+      var aliases = [keys[i], branch.factionId, branch.factionName, branch.name, branch.key];
+      if (aliases.some(function(alias) { return playerNames.indexOf(_normPopulationName(alias)) >= 0; })) return keys[i];
+    }
+    return null;
+  }
+
+  function _factionForAdminBranch(G, key, branch) {
+    var factions = G && Array.isArray(G.facs) ? G.facs : [];
+    var aliases = [key, branch && branch.factionId, branch && branch.factionName, branch && branch.name]
+      .map(_normPopulationName).filter(Boolean);
+    for (var i = 0; i < factions.length; i++) {
+      var faction = factions[i] || {};
+      var values = [faction.id, faction.key, faction.name, faction.factionName].map(_normPopulationName);
+      if (values.some(function(value) { return value && aliases.indexOf(value) >= 0; })) return faction;
+    }
+    return null;
+  }
+
+  // 每个势力独立持有叶级人口、统计和迁徙范围。玩家 national 仅由玩家分支聚合；
+  // NPC 的人口摘要写入 worldPopulationSummary，不再混进玩家户籍账本。
+  function _factionLeafGroups(G) {
+    var hierarchy = G && G.adminHierarchy;
+    if (!hierarchy || typeof hierarchy !== 'object') return [];
+    if (Array.isArray(hierarchy.divisions)) hierarchy = { player: hierarchy };
+    var playerKey = _playerAdminKey(G, hierarchy);
+    var groups = [];
+    Object.keys(hierarchy).forEach(function(key) {
+      var branch = hierarchy[key];
+      var roots = Array.isArray(branch) ? branch : (branch && branch.divisions);
+      if (!Array.isArray(roots)) return;
+      var leaves = [];
+      _walkAdminLeaves(roots, leaves, []);
+      if (!leaves.length) return;
+      var faction = _factionForAdminBranch(G, key, branch || {});
+      groups.push({
+        key: key,
+        branch: branch || {},
+        leaves: leaves,
+        isPlayer: key === playerKey,
+        faction: faction,
+        factionId: String((faction && faction.id) || (branch && branch.factionId) || key),
+        factionName: String((faction && faction.name) || (branch && (branch.factionName || branch.name)) || key)
+      });
+    });
+    // Old saves and focused subsystem tests may expose the player leaves only
+    // through IntegrationBridge while their hierarchy shell has not yet been
+    // normalized. Preserve that compatibility without ever using it to infer
+    // NPC ownership or combine multiple factions.
+    if (!groups.length && global.IntegrationBridge && typeof global.IntegrationBridge.getLeafDivisions === 'function') {
+      var bridgedLeaves = [];
+      try { bridgedLeaves = global.IntegrationBridge.getLeafDivisions(hierarchy, 'player') || []; } catch (_) {}
+      if (bridgedLeaves.length) {
+        groups.push({
+          key:'player', branch:{}, leaves:bridgedLeaves, isPlayer:true, faction:null,
+          factionId:'player', factionName:String(global.P && global.P.playerInfo && global.P.playerInfo.factionName || 'player')
+        });
+      }
+    }
+    if (groups.length === 1 && !groups[0].isPlayer) groups[0].isPlayer = true;
+    return groups;
+  }
+
+  function _allLeafDivisions(G, suppliedGroups) {
     var leaves = [];
-    Object.keys(ah).forEach(function(facId) {
-      var fl = IB.getLeafDivisions(ah, facId) || [];
-      for (var i = 0; i < fl.length; i++) { if (leaves.indexOf(fl[i]) < 0) leaves.push(fl[i]); }
+    (suppliedGroups || _factionLeafGroups(G)).forEach(function(group) {
+      (group.leaves || []).forEach(function(leaf) { if (leaves.indexOf(leaf) < 0) leaves.push(leaf); });
     });
     return leaves;
+  }
+
+  function _leafPopulationTotals(leaves) {
+    var totals = { mouths:0, households:0, ding:0 };
+    (leaves || []).forEach(function(leaf) {
+      var detail = leaf && leaf.populationDetail;
+      if (!detail) return;
+      totals.mouths += Math.max(0, Number(detail.mouths) || 0);
+      totals.households += Math.max(0, Number(detail.households) || 0);
+      totals.ding += Math.max(0, Number(detail.ding) || 0);
+    });
+    totals.mouths = Math.round(totals.mouths);
+    totals.households = Math.round(totals.households);
+    totals.ding = Math.round(totals.ding);
+    return totals;
+  }
+
+  function _ensureWorldPopulationSummary(G) {
+    if (!G.worldPopulationSummary || typeof G.worldPopulationSummary !== 'object' || Array.isArray(G.worldPopulationSummary)) {
+      G.worldPopulationSummary = { byFaction:{}, national:{ mouths:0, households:0, ding:0 } }; // arch-ok: 户籍权威写口创建世界人口只读汇总
+    }
+    if (!G.worldPopulationSummary.byFaction || typeof G.worldPopulationSummary.byFaction !== 'object') {
+      G.worldPopulationSummary.byFaction = {}; // arch-ok: 户籍权威写口修复世界人口分势力汇总
+    }
+    return G.worldPopulationSummary;
+  }
+
+  function _factionPopulationEntry(G, group) {
+    var world = _ensureWorldPopulationSummary(G);
+    var key = String(group && group.key || 'unknown');
+    var entry = world.byFaction[key];
+    if (!entry || typeof entry !== 'object') entry = world.byFaction[key] = {};
+    entry.factionId = group.factionId;
+    entry.factionName = group.factionName;
+    if (!entry.dynamics || typeof entry.dynamics !== 'object') entry.dynamics = _defaultDynamics();
+    return entry;
+  }
+
+  function _refreshWorldPopulationSummary(G, groups) {
+    var world = _ensureWorldPopulationSummary(G);
+    var aliveKeys = Object.create(null);
+    var total = { mouths:0, households:0, ding:0 };
+    (groups || []).forEach(function(group) {
+      var entry = _factionPopulationEntry(G, group);
+      var national = _leafPopulationTotals(group.leaves);
+      entry.national = national;
+      entry.isPlayer = !!group.isPlayer;
+      aliveKeys[group.key] = true;
+      total.mouths += national.mouths;
+      total.households += national.households;
+      total.ding += national.ding;
+    });
+    Object.keys(world.byFaction).forEach(function(key) {
+      if (!aliveKeys[key]) delete world.byFaction[key];
+    });
+    world.national = total;
+    world.updatedTurn = Number(G && G.turn) || 0;
+    return world;
   }
 
   // S1·人口自下而上：叶级增长(先只接本地民心)·写叶 populationDetail·national = Σ叶 增量同步。
@@ -564,103 +755,304 @@
     }
   }
 
-  function _tickPopulationLeafGrowth(ctx, mr, useLocalFactors, suppliedLeaves) {
-    var P = global.GM.population;
-    var G = global.GM;
-    var d = P.dynamics;
-    // 全国基准率(年景因子全国级·作各叶基准·与原逻辑同源)
-    var environmentLoad = (G.environment && G.environment.nationalLoad) || 0.5;
-    var disaster = (G.vars && G.vars.disasterLevel) || 0;
-    var war = (G.activeWars || []).length;
-    var baseBirth = d.birthRateBase + (d.prosperityBonus || 0) - Math.max(0, environmentLoad - 1) * 0.005;
-    if (disaster > 0.3) baseBirth -= 0.01;
-    var baseDeath = d.deathRateBase + (d.agingPenalty || 0) + (d.diseaseBoost || 0);
-    if (disaster > 0.3) baseDeath += disaster * 0.05;
-    if (war > 0) baseDeath += Math.min(0.03, war * 0.01);
-    if (environmentLoad > 1.2) baseDeath += (environmentLoad - 1.2) * 0.02;
-    // 全国比例仅作叶数据缺项时的 fallback；有叶级户丁账时保留各自历史结构。
-    var dingRatio = P.national.ding / Math.max(1, P.national.mouths);
-    var mphh = P.national.mouths / Math.max(1, P.national.households);
-    // 遍历叶(2026-06-20 真机修：遍历所有 faction·非仅 player)·各叶按本地民心算生死·写叶 populationDetail
-    var leaves = suppliedLeaves || _allLeafDivisions(G);
-    var totBirths = 0, totDeaths = 0, totNet = 0;
-    leaves.forEach(function(leaf) {
-      var pd = leaf && leaf.populationDetail;
-      if (!pd) return;
-      var mouths = Number(pd.mouths) || 0;
-      if (mouths <= 0) return;
-      var minxin = Number(leaf.minxin);
-      if (!isFinite(minxin)) minxin = Number(leaf.minxinLocal);
-      if (!isFinite(minxin)) minxin = 50;
-      // S2·粮食供需(马尔萨斯核心·接 renli)：载力 load = 口粮需求/粮食供给(含调入)·>1 缺粮
-      var rid = String(leaf.id || leaf.name || '');
-      var rg = (G.renli && G.renli.byRegion) ? (G.renli.byRegion[rid] || (leaf.name ? G.renli.byRegion[leaf.name] : null)) : null;
-      var load = 1;  // 无 renli 账(未种子)→中性·走民心/生活驱动
-      if (rg) {
-        var grainSupply = (Number(rg.grainOutput) || 0) + (Number(leaf._grainInflowThisTurn) || 0);  // +调入(S3 填)
-        var grainDemand = Number(rg.foodNeed) || 0;  // renli:282 = mouths×SUBSIST·随人口(马尔萨斯闭环)
-        if (grainDemand > 0) load = grainSupply > 0 ? grainDemand / grainSupply : 2;
-      }
-      // S2·生活水平(prosperity→生育)·灾异(death↑)·赋役(corvee→少生)
-      var prosperity = Number(leaf.prosperity); if (!isFinite(prosperity)) prosperity = 50;
-      var lifeLv = (prosperity - 50) / 100;
-      var rd = leaf.recentDisasters;
-      var hasDis = Array.isArray(rd) ? rd.length > 0 : !!rd;
-      var corvee = rg ? Math.max(0, Math.min(1, Number(rg.corveeRate) || 0)) : 0;
-      var localBirth = baseBirth;
-      var localDeath = baseDeath;
-      if (useLocalFactors) {
-        localBirth = baseBirth
-          * (1 + (minxin - 50) / 100 * 0.4)                  // 民心高→生育↑
-          * (1 + lifeLv * 0.3)                               // 生活好→生育↑
-          * Math.max(0.3, Math.min(1.1, 1.1 - load * 0.3))   // 粮紧(load高)→生育↓
-          * (1 - corvee * 0.2);                              // 役重→生育↓
-        localDeath = baseDeath
-          * (1 - (minxin - 50) / 100 * 0.25)                 // 民心高→死亡↓
-          * (1 + (hasDis ? 0.5 : 0))                         // 灾异→死亡↑
-          * (1 + Math.max(0, load - 1) * 0.6);               // 缺粮(load>1)→饥荒死亡↑
-      }
-      var births = Math.round(mouths * localBirth * mr / 12);
-      var deaths = Math.round(mouths * localDeath * mr / 12);
-      var net = births - deaths;
-      var leafDingRatio = Number(pd.ding) > 0 ? Number(pd.ding) / mouths : dingRatio;
-      var leafMouthsPerHousehold = Number(pd.households) > 0 ? mouths / Number(pd.households) : mphh;
-      pd.mouths = Math.max(0, mouths + net);                         // 写叶(增长落点)
-      pd.households = Math.round(pd.mouths / Math.max(1, leafMouthsPerHousehold));
-      pd.ding = Math.round(pd.mouths * leafDingRatio);
-      _syncLeafPopulationMirrors(leaf, pd);
-      var legacyRow = P.byRegion && (P.byRegion[rid] || (leaf.name ? P.byRegion[leaf.name] : null));
-      if (legacyRow && legacyRow !== pd) {
-        legacyRow.mouths = pd.mouths;
-        legacyRow.households = pd.households;
-        legacyRow.ding = pd.ding;
-      }
-      leaf.yearlyBirths = (leaf.yearlyBirths || 0) + births;
-      leaf.yearlyDeaths = (leaf.yearlyDeaths || 0) + deaths;
-      totBirths += births; totDeaths += deaths; totNet += net;
-      if (leaf._grainInflowThisTurn) leaf._grainInflowThisTurn = 0;  // S3·调粮用后清零(下回合 local action 重计)
-    });
-    // national 增量同步(maintain:377 之后从 Σ叶 精确重建·守恒 Σ叶 = national)
-    P.national.mouths = Math.max(100000, P.national.mouths + totNet);
-    P.national.ding = Math.round(P.national.mouths * dingRatio);
-    P.national.households = Math.round(P.national.mouths / mphh);
-    // 年度日志(复用原·全国口径)
-    if (!d._yearlyAccumBirths) d._yearlyAccumBirths = 0;
-    if (!d._yearlyAccumDeaths) d._yearlyAccumDeaths = 0;
-    d._yearlyAccumBirths += totBirths;
-    d._yearlyAccumDeaths += totDeaths;
-    if (!d._lastLogTurn) d._lastLogTurn = ctx.turn || 0;
+  function _recordPopulationDynamics(d, ctx, G, births, deaths, mr) {
+    if (!d || typeof d !== 'object') return;
+    if (!Array.isArray(d.yearlyLog)) d.yearlyLog = []; // arch-ok: 户籍权威写口维护分势力人口年账
+    d._yearlyAccumBirths = Number(d._yearlyAccumBirths) || 0; // arch-ok: 户籍权威写口维护分势力人口年账
+    d._yearlyAccumDeaths = Number(d._yearlyAccumDeaths) || 0; // arch-ok: 户籍权威写口维护分势力人口年账
+    d._yearlyAccumBirths += births; // arch-ok: 户籍权威写口维护分势力人口年账
+    d._yearlyAccumDeaths += deaths; // arch-ok: 户籍权威写口维护分势力人口年账
+    if (d._lastLogTurn == null) d._lastLogTurn = ctx.turn || 0; // arch-ok: 户籍权威写口维护分势力人口年账
     var yearlyLogTurns = (typeof global.turnsForMonths === 'function') ? global.turnsForMonths(12) : 12;
     if (((ctx.turn || 0) - d._lastLogTurn) >= yearlyLogTurns) {
-      var logYear = (typeof global.calcDateFromTurn === 'function') ? global.calcDateFromTurn(ctx.turn || 1).adYear
-        : ((G.year || ((global.P && global.P.time && global.P.time.year) || 0)) + Math.floor(Math.max(0, (ctx.turn || 1) - 1) * ((typeof global._getDaysPerTurn === 'function') ? global._getDaysPerTurn() : 30) / 365));
-      d.yearlyLog.push({ year: logYear, birth: d._yearlyAccumBirths, death: d._yearlyAccumDeaths, net: d._yearlyAccumBirths - d._yearlyAccumDeaths });
-      if (d.yearlyLog.length > 50) d.yearlyLog.splice(0, d.yearlyLog.length - 50);
-      d._lastLogTurn = ctx.turn || 0;
-      d._yearlyAccumBirths = 0;
-      d._yearlyAccumDeaths = 0;
+      var logYear = _calendarYearForTurn(ctx.turn || 1, G);
+      d.yearlyLog.push({ year:logYear, birth:d._yearlyAccumBirths, death:d._yearlyAccumDeaths, net:d._yearlyAccumBirths - d._yearlyAccumDeaths }); // arch-ok: 户籍权威写口维护分势力人口年账
+      if (d.yearlyLog.length > 50) d.yearlyLog.splice(0, d.yearlyLog.length - 50); // arch-ok: 户籍权威写口裁剪分势力人口年账
+      d._lastLogTurn = ctx.turn || 0; // arch-ok: 户籍权威写口维护分势力人口年账
+      d._yearlyAccumBirths = 0; // arch-ok: 户籍权威写口滚动分势力人口年账
+      d._yearlyAccumDeaths = 0; // arch-ok: 户籍权威写口滚动分势力人口年账
     }
-    d.lastYearNet = _annualizePopulationNet(totNet, mr);
+    d.lastYearNet = _annualizePopulationNet(births - deaths, mr); // arch-ok: 户籍权威写口维护分势力人口年账
+  }
+
+  function _calendarYearForTurn(turn, G) {
+    try {
+      if (typeof global.calcDateFromTurn === 'function') {
+        var date = global.calcDateFromTurn(turn || 1);
+        var year = Number(date && (date.adYear != null ? date.adYear : date.year));
+        if (isFinite(year)) return year;
+      }
+    } catch (_) {}
+    var startYear = Number(G && G.year);
+    if (!isFinite(startYear)) startYear = Number(global.P && global.P.time && global.P.time.year) || 0;
+    var days = (typeof global._getDaysPerTurn === 'function') ? Number(global._getDaysPerTurn()) : 30;
+    if (!(days > 0)) days = 30;
+    return startYear + Math.floor(Math.max(0, Number(turn || 1) - 1) * days / 365);
+  }
+
+  function _syncPlayerLegacyRow(P, leaf, detail) {
+    if (!P || !P.byRegion || !leaf || !detail) return;
+    var rid = String(leaf.id || leaf.name || '');
+    var legacyRow = P.byRegion[rid] || (leaf.name ? P.byRegion[leaf.name] : null);
+    if (legacyRow && legacyRow !== detail) {
+      legacyRow.mouths = detail.mouths;
+      legacyRow.households = detail.households;
+      legacyRow.ding = detail.ding;
+    }
+  }
+
+  function _tickPopulationLeafGrowth(ctx, mr, useLocalFactors, suppliedGroups) {
+    var P = global.GM.population;
+    var G = global.GM;
+    var groups = suppliedGroups || _factionLeafGroups(G);
+    groups.forEach(function(group) {
+      var entry = _factionPopulationEntry(G, group);
+      var d = group.isPlayer ? P.dynamics : entry.dynamics;
+      var beforeTotals = group.isPlayer && P.national
+        ? {
+            mouths:Math.max(0, Number(P.national.mouths) || 0),
+            households:Math.max(0, Number(P.national.households) || 0),
+            ding:Math.max(0, Number(P.national.ding) || 0)
+          }
+        : ((entry.national && Number(entry.national.mouths) > 0) ? entry.national : _leafPopulationTotals(group.leaves));
+      var dingRatio = beforeTotals.ding / Math.max(1, beforeTotals.mouths);
+      var mphh = beforeTotals.mouths / Math.max(1, beforeTotals.households);
+      var environmentLoad = group.isPlayer
+        ? ((G.environment && G.environment.nationalLoad) || 0.5)
+        : Number(group.branch && group.branch.environmentLoad);
+      if (!isFinite(environmentLoad)) environmentLoad = 0.5;
+      var disaster = Number(group.branch && group.branch.disasterLevel);
+      if (!isFinite(disaster)) disaster = group.isPlayer ? Number(G.vars && G.vars.disasterLevel) || 0 : 0;
+      var war = (G.activeWars || []).filter(function(activeWar) {
+        if (!activeWar || group.isPlayer) return group.isPlayer;
+        var refs = [activeWar.factionId, activeWar.attackerId, activeWar.defenderId, activeWar.sourceFactionId, activeWar.targetFactionId]
+          .map(String);
+        return refs.indexOf(group.factionId) >= 0;
+      }).length;
+      var baseBirth = Number(d.birthRateBase); if (!isFinite(baseBirth)) baseBirth = 0.035;
+      baseBirth += Number(d.prosperityBonus) || 0;
+      baseBirth -= Math.max(0, environmentLoad - 1) * 0.005;
+      if (disaster > 0.3) baseBirth -= 0.01;
+      var baseDeath = Number(d.deathRateBase); if (!isFinite(baseDeath)) baseDeath = 0.025;
+      baseDeath += (Number(d.agingPenalty) || 0) + (Number(d.diseaseBoost) || 0);
+      if (disaster > 0.3) baseDeath += disaster * 0.05;
+      if (war > 0) baseDeath += Math.min(0.03, war * 0.01);
+      if (environmentLoad > 1.2) baseDeath += (environmentLoad - 1.2) * 0.02;
+
+      var totBirths = 0, totDeaths = 0;
+      group.leaves.forEach(function(leaf) {
+        var pd = leaf && leaf.populationDetail;
+        if (!pd) return;
+        var mouths = Number(pd.mouths) || 0;
+        if (mouths <= 0) return;
+        var minxin = Number(leaf.minxin);
+        if (!isFinite(minxin)) minxin = Number(leaf.minxinLocal);
+        if (!isFinite(minxin)) minxin = 50;
+        var rid = String(leaf.id || leaf.name || '');
+        var rg = G.renli && G.renli.byRegion
+          ? (G.renli.byRegion[rid] || (leaf.name ? G.renli.byRegion[leaf.name] : null)) : null;
+        var load = 1;
+        if (rg) {
+          var grainSupply = (Number(rg.grainOutput) || 0) + (Number(leaf._grainInflowThisTurn) || 0);
+          var grainDemand = Number(rg.foodNeed) || 0;
+          if (grainDemand > 0) load = grainSupply > 0 ? grainDemand / grainSupply : 2;
+        }
+        var prosperity = Number(leaf.prosperity); if (!isFinite(prosperity)) prosperity = 50;
+        var lifeLv = (prosperity - 50) / 100;
+        var recentDisasters = leaf.recentDisasters;
+        var hasDisaster = Array.isArray(recentDisasters) ? recentDisasters.length > 0 : !!recentDisasters;
+        var corvee = rg ? Math.max(0, Math.min(1, Number(rg.corveeRate) || 0)) : 0;
+        var localBirth = baseBirth;
+        var localDeath = baseDeath;
+        if (useLocalFactors) {
+          localBirth = baseBirth
+            * (1 + (minxin - 50) / 100 * 0.4)
+            * (1 + lifeLv * 0.3)
+            * Math.max(0.3, Math.min(1.1, 1.1 - load * 0.3))
+            * (1 - corvee * 0.2);
+          localDeath = baseDeath
+            * (1 - (minxin - 50) / 100 * 0.25)
+            * (1 + (hasDisaster ? 0.5 : 0))
+            * (1 + Math.max(0, load - 1) * 0.6);
+        }
+        var births = Math.round(mouths * localBirth * mr / 12);
+        var deaths = Math.round(mouths * localDeath * mr / 12);
+        var leafDingRatio = Number(pd.ding) > 0 ? Number(pd.ding) / mouths : dingRatio;
+        var leafMouthsPerHousehold = Number(pd.households) > 0 ? mouths / Number(pd.households) : mphh;
+        pd.mouths = Math.max(0, mouths + births - deaths);
+        pd.households = Math.round(pd.mouths / Math.max(1, leafMouthsPerHousehold));
+        pd.ding = Math.round(pd.mouths * leafDingRatio);
+        _syncLeafPopulationMirrors(leaf, pd);
+        if (group.isPlayer) _syncPlayerLegacyRow(P, leaf, pd);
+        leaf.yearlyBirths = (Number(leaf.yearlyBirths) || 0) + births;
+        leaf.yearlyDeaths = (Number(leaf.yearlyDeaths) || 0) + deaths;
+        totBirths += births;
+        totDeaths += deaths;
+        if (leaf._grainInflowThisTurn) leaf._grainInflowThisTurn = 0;
+      });
+
+      var afterTotals = _leafPopulationTotals(group.leaves);
+      entry.national = afterTotals;
+      _recordPopulationDynamics(d, ctx, G, totBirths, totDeaths, mr);
+      if (group.isPlayer) {
+        // 叶级行政区是运行真值；national 必须始终与叶级合计严格相等。
+        // 可配置下限只约束损失账本，不得凭空在汇总层造人口。
+        P.national.mouths = afterTotals.mouths; // arch-ok: 户籍权威写口由玩家叶级真值聚合全国人口
+        P.national.households = afterTotals.households; // arch-ok: 户籍权威写口由玩家叶级真值聚合全国户数
+        P.national.ding = afterTotals.ding; // arch-ok: 户籍权威写口由玩家叶级真值聚合全国丁口
+      }
+    });
+    _refreshWorldPopulationSummary(G, groups);
+  }
+
+  function _findFactionPopulationGroup(G, options, groups) {
+    options = options || {};
+    groups = groups || _factionLeafGroups(G);
+    var regionId = _normPopulationName(options.regionId || options.regionName);
+    if (regionId) {
+      for (var regionGroupIndex = 0; regionGroupIndex < groups.length; regionGroupIndex++) {
+        var regionGroup = groups[regionGroupIndex];
+        var ownsRegion = (regionGroup.leaves || []).some(function(leaf) {
+          return [leaf && leaf.id, leaf && leaf.name, leaf && leaf.mapRegionId, leaf && leaf.regionId]
+            .map(_normPopulationName).some(function(alias) { return alias && alias === regionId; });
+        });
+        if (ownsRegion) return regionGroup;
+      }
+      return null;
+    }
+    var wanted = [_normPopulationName(options.factionKey), _normPopulationName(options.factionId), _normPopulationName(options.factionName)].filter(Boolean);
+    if (wanted.length) {
+      for (var i = 0; i < groups.length; i++) {
+        var group = groups[i];
+        var aliases = [group.key, group.factionId, group.factionName].map(_normPopulationName);
+        if (aliases.some(function(alias) { return alias && wanted.indexOf(alias) >= 0; })) return group;
+      }
+    }
+    return groups.find(function(group) { return group.isPlayer; }) || null;
+  }
+
+  function _applyPopulationLossToLeaves(group, mouthsRequested, dingRequested, cause, regionId) {
+    var wantedRegion = _normPopulationName(regionId);
+    var groupLeaves = (group && group.leaves || []).filter(function(leaf) {
+      return leaf && leaf.populationDetail && Number(leaf.populationDetail.mouths) > 0;
+    });
+    var leaves = wantedRegion ? groupLeaves.filter(function(leaf) {
+      return [leaf.id, leaf.name, leaf.mapRegionId, leaf.regionId]
+        .map(_normPopulationName).some(function(alias) { return alias && alias === wantedRegion; });
+    }) : groupLeaves;
+    if (!leaves.length) return { mouths:0, ding:0 };
+    var totals = _leafPopulationTotals(leaves);
+    var groupTotals = wantedRegion ? _leafPopulationTotals(groupLeaves) : totals;
+    var minimum = group.isPlayer ? _minimumPopulation(global.GM.population) : 0;
+    var mouthTarget = Math.min(
+      Math.max(0, Math.round(Number(mouthsRequested) || 0)),
+      totals.mouths,
+      Math.max(0, groupTotals.mouths - minimum)
+    );
+    var dingTarget = Number(dingRequested);
+    if (!(dingTarget >= 0) || !isFinite(dingTarget)) dingTarget = mouthTarget * totals.ding / Math.max(1, totals.mouths);
+    dingTarget = Math.min(Math.max(0, Math.round(dingTarget)), totals.ding);
+    var remainingMouthLoss = mouthTarget;
+    var remainingDingLoss = dingTarget;
+    var remainingMouthPool = totals.mouths;
+    var remainingDingPool = totals.ding;
+    var appliedMouths = 0;
+    var appliedDing = 0;
+    leaves.forEach(function(leaf, index) {
+      var detail = leaf.populationDetail;
+      var mouthsBefore = Math.max(0, Math.round(Number(detail.mouths) || 0));
+      var dingBefore = Math.max(0, Math.round(Number(detail.ding) || 0));
+      var mouthsPerHousehold = mouthsBefore / Math.max(1, Number(detail.households) || 0);
+      var mouthLoss = index === leaves.length - 1
+        ? Math.min(mouthsBefore, remainingMouthLoss)
+        : Math.min(mouthsBefore, Math.round(remainingMouthLoss * mouthsBefore / Math.max(1, remainingMouthPool)));
+      var dingLoss = index === leaves.length - 1
+        ? Math.min(dingBefore, remainingDingLoss)
+        : Math.min(dingBefore, Math.round(remainingDingLoss * dingBefore / Math.max(1, remainingDingPool)));
+      detail.mouths = Math.max(0, mouthsBefore - mouthLoss);
+      detail.ding = Math.max(0, dingBefore - dingLoss);
+      detail.households = detail.mouths > 0 ? Math.round(detail.mouths / Math.max(1, mouthsPerHousehold)) : 0;
+      leaf.yearlyDeaths = (Number(leaf.yearlyDeaths) || 0) + mouthLoss;
+      if (!Array.isArray(leaf.populationLossLedger)) leaf.populationLossLedger = [];
+      if (mouthLoss || dingLoss) {
+        leaf.populationLossLedger.push({ turn:Number(global.GM.turn) || 0, cause:String(cause || 'unknown'), mouths:mouthLoss, ding:dingLoss });
+        if (leaf.populationLossLedger.length > 40) leaf.populationLossLedger.splice(0, leaf.populationLossLedger.length - 40);
+      }
+      _syncLeafPopulationMirrors(leaf, detail);
+      if (group.isPlayer) _syncPlayerLegacyRow(global.GM.population, leaf, detail);
+      remainingMouthLoss -= mouthLoss;
+      remainingDingLoss -= dingLoss;
+      remainingMouthPool -= mouthsBefore;
+      remainingDingPool -= dingBefore;
+      appliedMouths += mouthLoss;
+      appliedDing += dingLoss;
+    });
+    return { mouths:appliedMouths, ding:appliedDing };
+  }
+
+  function _applyPopulationLossLegacy(P, mouthsRequested, dingRequested) {
+    var oldMouths = Math.max(0, Math.round(Number(P.national && P.national.mouths) || 0));
+    var oldDing = Math.max(0, Math.round(Number(P.national && P.national.ding) || 0));
+    var oldHouseholds = Math.max(0, Math.round(Number(P.national && P.national.households) || 0));
+    var mouthLoss = Math.min(Math.max(0, Math.round(Number(mouthsRequested) || 0)), Math.max(0, oldMouths - _minimumPopulation(P)));
+    var requestedDing = Number(dingRequested);
+    if (!(requestedDing >= 0) || !isFinite(requestedDing)) requestedDing = mouthLoss * oldDing / Math.max(1, oldMouths);
+    var dingLoss = Math.min(oldDing, Math.max(0, Math.round(requestedDing)));
+    var mouthsPerHousehold = oldMouths / Math.max(1, oldHouseholds);
+    P.national.mouths = oldMouths - mouthLoss; // arch-ok: 无叶级旧档的人口损失兼容写口
+    P.national.ding = oldDing - dingLoss; // arch-ok: 无叶级旧档的丁口损失兼容写口
+    P.national.households = P.national.mouths > 0 ? Math.round(P.national.mouths / Math.max(1, mouthsPerHousehold)) : 0; // arch-ok: 无叶级旧档的户数损失兼容写口
+    return { mouths:mouthLoss, ding:dingLoss };
+  }
+
+  function _appendPopulationLossLedger(owner, row) {
+    if (!owner || typeof owner !== 'object') return;
+    if (!Array.isArray(owner.mortalityLedger)) owner.mortalityLedger = [];
+    owner.mortalityLedger.push(row);
+    if (owner.mortalityLedger.length > 120) owner.mortalityLedger.splice(0, owner.mortalityLedger.length - 120);
+  }
+
+  // 所有人口损失的唯一落点：先写叶级人口真值，再汇总 national。
+  // 供徭役、工程、气候、瘟疫等系统复用，避免“只扣 national 后被 RuntimeBridge 抹掉”。
+  function applyPopulationLoss(options) {
+    options = options || {};
+    var G = global.GM;
+    var P = G && G.population;
+    if (!P || !P.national) return { ok:false, reason:'population-unavailable', mouths:0, ding:0 };
+    var groups = _factionLeafGroups(G);
+    var group = _findFactionPopulationGroup(G, options, groups);
+    if ((options.regionId || options.regionName) && !group) {
+      return { ok:false, reason:'region-not-found', mouths:0, ding:0 };
+    }
+    var applied;
+    var entry = null;
+    if (group && group.leaves.length) {
+      applied = _applyPopulationLossToLeaves(group, options.mouths, options.ding, options.cause, options.regionId || options.regionName);
+      var totals = _leafPopulationTotals(group.leaves);
+      entry = _factionPopulationEntry(G, group);
+      entry.national = totals;
+      if (group.isPlayer) {
+        P.national.mouths = totals.mouths; // arch-ok: 死亡账本由玩家叶级真值聚合全国人口
+        P.national.households = totals.households; // arch-ok: 死亡账本由玩家叶级真值聚合全国户数
+        P.national.ding = totals.ding; // arch-ok: 死亡账本由玩家叶级真值聚合全国丁口
+        if (P.dynamics) P.dynamics._yearlyAccumDeaths = (Number(P.dynamics._yearlyAccumDeaths) || 0) + applied.mouths; // arch-ok: 死亡账本同步玩家年度死亡统计
+      } else if (entry.dynamics) {
+        entry.dynamics._yearlyAccumDeaths = (Number(entry.dynamics._yearlyAccumDeaths) || 0) + applied.mouths;
+      }
+      _refreshWorldPopulationSummary(G, groups);
+    } else {
+      applied = _applyPopulationLossLegacy(P, options.mouths, options.ding);
+      if (P.dynamics) P.dynamics._yearlyAccumDeaths = (Number(P.dynamics._yearlyAccumDeaths) || 0) + applied.mouths; // arch-ok: 旧档死亡账本同步玩家年度死亡统计
+    }
+    var ledgerRow = {
+      turn:Number(G.turn) || 0,
+      factionId:group ? group.factionId : String(options.factionId || 'player'),
+      cause:String(options.cause || 'unknown'),
+      mouths:applied.mouths,
+      ding:applied.ding
+    };
+    _appendPopulationLossLedger(group && !group.isPlayer ? entry : P, ledgerRow);
+    return { ok:true, mouths:applied.mouths, ding:applied.ding, factionId:group && group.factionId };
   }
 
   function _deepFieldDiversityPressure(r) {
@@ -752,10 +1144,32 @@
   //  Ⅴ 徭役征发 + 死亡率 + 逃役
   // ═══════════════════════════════════════════════════════════════════
 
+  function _ensureCorveeAnnualWindow(c, ctx) {
+    var year = _calendarYearForTurn(ctx && ctx.turn || global.GM.turn || 1, global.GM);
+    var firstBinding = c.currentYear === undefined || c.currentYear === null;
+    var changed = !firstBinding && Number(c.currentYear) !== Number(year);
+    Object.keys(c.byType || {}).forEach(function(key) {
+      var type = c.byType[key];
+      if (!type || typeof type !== 'object') return;
+      if (changed || firstBinding) {
+        type.currentYearDays = 0;
+        type.currentYearFulfilled = 0;
+        type.currentYearDeaths = 0;
+      } else {
+        if (!isFinite(Number(type.currentYearDays))) type.currentYearDays = 0;
+        if (!isFinite(Number(type.currentYearFulfilled))) type.currentYearFulfilled = 0;
+        if (!isFinite(Number(type.currentYearDeaths))) type.currentYearDeaths = 0;
+      }
+    });
+    c.currentYear = year; // arch-ok: 户籍权威写口滚动年度徭役窗口
+    return year;
+  }
+
   function _tickCorvee(ctx, mr) {
     var P = global.GM.population;
     if (!P || !P.corvee || !P.corvee.enabled) return;
     var c = P.corvee;
+    _ensureCorveeAnnualWindow(c, ctx);
     // 计算有效丁
     var totalDing = P.national.ding || 0;
     var serviceAgeDing = P.deepFieldEffects && P.deepFieldEffects.serviceAgeDing ? P.deepFieldEffects.serviceAgeDing : _computeDeepServiceDing(P);
@@ -787,18 +1201,22 @@
       var type = c.byType[k];
       if (!type) return;
       var req = effectiveDing * t.daysPerDing * mr / 12;
-      type.totalDays += req;
-      type.fulfilled += req * (1 - (global.GM.population.fugitives || 0) / Math.max(1, totalDing));
+      var fulfilled = req * (1 - (global.GM.population.fugitives || 0) / Math.max(1, totalDing));
+      type.totalDays = (Number(type.totalDays) || 0) + req;
+      type.fulfilled = (Number(type.fulfilled) || 0) + fulfilled;
+      type.currentYearDays = (Number(type.currentYearDays) || 0) + req;
+      type.currentYearFulfilled = (Number(type.currentYearFulfilled) || 0) + fulfilled;
       // 死亡
       var dyingDing = effectiveDing * t.deathRate * mr / 12 * (CATEGORY_TEMPLATES[k] ? CATEGORY_TEMPLATES[k].corveeLevel || 1 : 1);
-      type.deaths += dyingDing;
-      // 汇入全国死亡
-      P.national.ding = Math.max(0, P.national.ding - dyingDing);
-      P.national.mouths = Math.max(0, P.national.mouths - dyingDing);
+      var mortality = applyPopulationLoss({ cause:'corvee:' + k, mouths:dyingDing, ding:dyingDing });
+      type.deaths = (Number(type.deaths) || 0) + mortality.ding;
+      type.currentYearDeaths = (Number(type.currentYearDeaths) || 0) + mortality.ding;
     });
     // 逃役——burden 超过阈值
-    var corveeBurden = c.byType.junyi.totalDays + c.byType.gongyi.totalDays;
+    var corveeBurden = (Number(c.byType.junyi && c.byType.junyi.currentYearDays) || 0)
+      + (Number(c.byType.gongyi && c.byType.gongyi.currentYearDays) || 0);
     corveeBurden = corveeBurden / Math.max(1, effectiveDing * 365);
+    c.currentYearBurden = corveeBurden; // arch-ok: 户籍权威写口记录本年徭役压力
     if (corveeBurden > c.burdenThreshold) {
       var _rlShare = (function(){ var rl = _renli(); return (rl && rl.seededDingShare) ? rl.seededDingShare() : 0; })(); // 已种子地域逃役归 Renli·按未种子丁占比缩减（A2a）
       var newFugitives = Math.round(effectiveDing * (corveeBurden - c.burdenThreshold) * 0.1 * mr * (1 - _rlShare));
@@ -861,9 +1279,8 @@
       var progressPerMonth = 1 / Math.max(1, a.duration * 12);
       a.progress += progressPerMonth * mr;
       var deathsThisMonth = a.laborDemand * a.deathRate * progressPerMonth * mr;
-      a.totalDeaths += deathsThisMonth;
-      P.national.ding = Math.max(0, P.national.ding - deathsThisMonth);
-      P.national.mouths = Math.max(0, P.national.mouths - deathsThisMonth);
+      var mortality = applyPopulationLoss({ cause:'large-corvee:' + String(a.presetId || a.id || 'unknown'), mouths:deathsThisMonth, ding:deathsThisMonth });
+      a.totalDeaths += mortality.ding;
       // 完工
       if (a.progress >= 1.0) {
         a.status = 'completed';
@@ -926,11 +1343,16 @@
   function _tickMigration(ctx, mr) {
     var P = global.GM.population;
     if (!P) return;
-    // 京畿虹吸（S4·人口自下而上：开关开走叶级 populationDetail·否则原 byRegion）
-    var capital = global.GM._capital || '京城';
-    if (global.P && global.P.conf && global.P.conf.populationBottomUpEnabled) {
-      _tickMigrationLeaf(ctx, mr, capital);
-    } else if (P.byRegion && P.byRegion[capital]) {
+    // 行政叶是运行真值时，每个势力只在自己的叶级人口和首都之间迁徙。
+    var groups = _factionLeafGroups(global.GM);
+    var hasLeafPopulation = groups.some(function(group) {
+      return group.leaves.some(function(leaf) { return leaf && leaf.populationDetail && Number(leaf.populationDetail.mouths) > 0; });
+    });
+    if (hasLeafPopulation) {
+      _tickMigrationLeaf(ctx, mr, groups);
+    } else {
+      var capital = global.GM._capital || '京城';
+      if (P.byRegion && P.byRegion[capital]) {
       Object.keys(P.byRegion).forEach(function(rid) {
         if (rid === capital) return;
         var r = P.byRegion[rid];
@@ -943,73 +1365,176 @@
           P.byRegion[capital].yearlyNetMigration = (P.byRegion[capital].yearlyNetMigration || 0) + flow;
         }
       });
+      }
     }
     // 历史大迁徙事件——按 turn/century 触发
-    var currentYear = global.GM.year || 1;
-    var century = Math.floor(currentYear / 100);
+    if (!P.migrationEventStates || typeof P.migrationEventStates !== 'object' || Array.isArray(P.migrationEventStates)) P.migrationEventStates = {}; // arch-ok: 户籍权威写口创建战役迁徙状态
+    if (!Array.isArray(P.triggeredMigrationEventIds)) P.triggeredMigrationEventIds = []; // arch-ok: 户籍权威写口创建已触发迁徙集合
+    (P.migrationEvents || []).forEach(function(record) {
+      if (record && record.id && P.triggeredMigrationEventIds.indexOf(record.id) < 0) P.triggeredMigrationEventIds.push(record.id); // arch-ok: 户籍权威写口迁移旧事件收据
+    });
+    var currentYear = _calendarYearForTurn(ctx.turn || global.GM.turn || 1, global.GM);
+    var century = Math.floor((currentYear - 1) / 100) + 1;
     MIGRATION_EVENTS.forEach(function(e) {
-      if (e._triggered) return;
-      if (century >= e.century && !e._triggered && currentYear % 100 < 30) {
-        // 触发
-        e._triggered = true;
-        _executeMigrationEvent(e);
+      var state = P.migrationEventStates[e.id];
+      if ((state && state.status === 'triggered') || P.triggeredMigrationEventIds.indexOf(e.id) >= 0) return;
+      if (!(century >= e.century && currentYear % 100 < 30)) return;
+      var result = _executeMigrationEvent(e, groups);
+      if (result && result.ok) {
+        P.migrationEventStates[e.id] = { status:'triggered', turn:Number(global.GM.turn) || 0, scale:result.scale }; // arch-ok: 户籍权威写口提交战役迁徙状态
+        if (P.triggeredMigrationEventIds.indexOf(e.id) < 0) P.triggeredMigrationEventIds.push(e.id); // arch-ok: 户籍权威写口提交已触发迁徙 ID
+      } else {
+        P.migrationEventStates[e.id] = { // arch-ok: 户籍权威写口记录待处理迁徙状态
+          status:'pending',
+          lastAttemptTurn:Number(global.GM.turn) || 0,
+          reason:String(result && result.reason || 'region-match-failed')
+        };
       }
     });
   }
 
-  // S4·人口自下而上：京畿虹吸叶级化(非首都叶 → 首都叶·守恒叶间转移·写 populationDetail·与增长同源)
-  function _tickMigrationLeaf(ctx, mr, capital) {
+  function _capitalCandidatesForGroup(group) {
     var G = global.GM;
     var P = G.population;
-    var leaves = _allLeafDivisions(G);  // (2026-06-20 真机修：遍历所有 faction)
-    if (!leaves.length) return;
-    var dingRatio = P.national.ding / Math.max(1, P.national.mouths);
-    var mphh = P.national.mouths / Math.max(1, P.national.households);
-    var capLeaf = null;
-    for (var i = 0; i < leaves.length; i++) {
-      var lid = String(leaves[i].id || leaves[i].name || '');
-      if (lid === capital || leaves[i].name === capital) { capLeaf = leaves[i]; break; }
+    var values = [];
+    function add(value) {
+      var text = String(value == null ? '' : value).trim();
+      if (text && values.indexOf(text) < 0) values.push(text);
     }
-    if (!capLeaf) return;  // 无首都叶→不虹吸(避免流出无接收·破坏守恒·对齐原 byRegion 的 if(P.byRegion[capital]) 守卫)
-    var pullRate = 0.0001 * mr;  // 月千分之一流入京畿(与原 byRegion 逻辑同率)
-    var totalFlow = 0;
-    leaves.forEach(function(l) {
-      if (l === capLeaf) return;
-      var pd = l.populationDetail; if (!pd) return;
-      var mouths = Number(pd.mouths) || 0;
-      if (mouths <= 10000) return;
-      var flow = Math.round(mouths * pullRate);
-      if (flow > 0) {
-        pd.mouths = mouths - flow;
-        pd.households = Math.round(pd.mouths / mphh);
-        pd.ding = Math.round(pd.mouths * dingRatio);
-        l.yearlyNetMigration = (l.yearlyNetMigration || 0) - flow;
-        totalFlow += flow;
-      }
-    });
-    if (capLeaf && capLeaf.populationDetail && totalFlow > 0) {
-      var cpd = capLeaf.populationDetail;
-      cpd.mouths = (Number(cpd.mouths) || 0) + totalFlow;
-      cpd.households = Math.round(cpd.mouths / mphh);
-      cpd.ding = Math.round(cpd.mouths * dingRatio);
-      capLeaf.yearlyNetMigration = (capLeaf.yearlyNetMigration || 0) + totalFlow;
+    if (group.isPlayer) {
+      add(G._capital); add(G.capital); add(global.P && global.P.playerInfo && global.P.playerInfo.capital);
+      add(global.P && global.P.playerInfo && global.P.playerInfo.capitalName);
+      add(P && P.capital);
     }
+    add(group.branch && group.branch.capital);
+    add(group.branch && group.branch.capitalName);
+    add(group.branch && group.branch.capitalChildId);
+    add(group.faction && group.faction.capital);
+    add(group.faction && group.faction.capitalName);
+    return values;
   }
 
-  function _executeMigrationEvent(e) {
+  function _findCapitalLeaf(group) {
+    var candidates = _capitalCandidatesForGroup(group).map(_normPopulationName).filter(Boolean);
+    for (var i = 0; i < group.leaves.length; i++) {
+      var leaf = group.leaves[i];
+      if (leaf && (leaf.isCapital || leaf.regionType === 'capital' || leaf.type === 'capital')) return leaf;
+    }
+    for (var j = 0; j < group.leaves.length; j++) {
+      var current = group.leaves[j];
+      var aliases = [current && current.id, current && current.name, current && current.capital, current && current.mapRegionId]
+        .map(_normPopulationName).filter(Boolean);
+      if (aliases.some(function(alias) {
+        return candidates.some(function(candidate) { return alias === candidate || alias.indexOf(candidate) >= 0 || candidate.indexOf(alias) >= 0; });
+      })) return current;
+    }
+    return null;
+  }
+
+  // S4·京畿虹吸按 faction 分账；任何来源与目标都必须属于同一 group。
+  function _tickMigrationLeaf(ctx, mr, suppliedGroups) {
+    var G = global.GM;
+    var P = G.population;
+    var groups = suppliedGroups || _factionLeafGroups(G);
+    groups.forEach(function(group) {
+      var capLeaf = _findCapitalLeaf(group);
+      if (!capLeaf || !capLeaf.populationDetail) return;
+      var totals = _leafPopulationTotals(group.leaves);
+      var dingRatio = totals.ding / Math.max(1, totals.mouths);
+      var mphh = totals.mouths / Math.max(1, totals.households);
+      var pullRate = 0.0001 * mr;
+      var totalFlow = 0;
+      group.leaves.forEach(function(leaf) {
+        if (leaf === capLeaf) return;
+        var detail = leaf && leaf.populationDetail;
+        if (!detail) return;
+        var mouths = Number(detail.mouths) || 0;
+        if (mouths <= 10000) return;
+        var flow = Math.round(mouths * pullRate);
+        if (flow > 0) {
+          var localDingRatio = Number(detail.ding) > 0 ? Number(detail.ding) / mouths : dingRatio;
+          var localMphh = Number(detail.households) > 0 ? mouths / Number(detail.households) : mphh;
+          detail.mouths = mouths - flow;
+          detail.households = Math.round(detail.mouths / Math.max(1, localMphh));
+          detail.ding = Math.round(detail.mouths * localDingRatio);
+          _syncLeafPopulationMirrors(leaf, detail);
+          if (group.isPlayer) _syncPlayerLegacyRow(P, leaf, detail);
+          leaf.yearlyNetMigration = (Number(leaf.yearlyNetMigration) || 0) - flow;
+          totalFlow += flow;
+        }
+      });
+      if (totalFlow > 0) {
+        var capitalDetail = capLeaf.populationDetail;
+        var capitalMouths = Number(capitalDetail.mouths) || 0;
+        var capitalDingRatio = Number(capitalDetail.ding) > 0 ? Number(capitalDetail.ding) / Math.max(1, capitalMouths) : dingRatio;
+        var capitalMphh = Number(capitalDetail.households) > 0 ? capitalMouths / Number(capitalDetail.households) : mphh;
+        capitalDetail.mouths = capitalMouths + totalFlow;
+        capitalDetail.households = Math.round(capitalDetail.mouths / Math.max(1, capitalMphh));
+        capitalDetail.ding = Math.round(capitalDetail.mouths * capitalDingRatio);
+        _syncLeafPopulationMirrors(capLeaf, capitalDetail);
+        if (group.isPlayer) _syncPlayerLegacyRow(P, capLeaf, capitalDetail);
+        capLeaf.yearlyNetMigration = (Number(capLeaf.yearlyNetMigration) || 0) + totalFlow;
+      }
+    });
+    var playerGroup = groups.find(function(group) { return group.isPlayer; });
+    if (playerGroup) {
+      var playerTotals = _leafPopulationTotals(playerGroup.leaves);
+      P.national.mouths = playerTotals.mouths; // arch-ok: 户籍权威写口由玩家叶级真值聚合全国人口
+      P.national.households = playerTotals.households; // arch-ok: 户籍权威写口由玩家叶级真值聚合全国户数
+      P.national.ding = playerTotals.ding; // arch-ok: 户籍权威写口由玩家叶级真值聚合全国丁口
+    }
+    _refreshWorldPopulationSummary(G, groups);
+  }
+
+  function _executeMigrationEvent(e, suppliedGroups) {
     var P = global.GM.population;
-    if (!P || !P.byRegion) return;
-    // 找对应区域
-    var fromKey = Object.keys(P.byRegion).find(function(k) { return k.indexOf(e.fromRegion) >= 0; });
-    var toKey = Object.keys(P.byRegion).find(function(k) { return k.indexOf(e.toRegion) >= 0; });
-    if (!fromKey || !toKey) return;
-    var from = P.byRegion[fromKey];
-    var to = P.byRegion[toKey];
-    var scale = Math.min(e.scale, from.mouths * 0.3);
-    from.mouths -= scale;
-    to.mouths += scale;
+    if (!P) return { ok:false, reason:'population-unavailable' };
+    if (!Array.isArray(P.migrationEvents)) P.migrationEvents = [];
+    var groups = suppliedGroups || _factionLeafGroups(global.GM);
+    var playerGroup = groups.find(function(group) { return group.isPlayer; });
+    var from = null, to = null;
+    if (playerGroup) {
+      from = playerGroup.leaves.find(function(leaf) { return _normPopulationName(leaf && (leaf.name || leaf.id)).indexOf(_normPopulationName(e.fromRegion)) >= 0; });
+      to = playerGroup.leaves.find(function(leaf) { return _normPopulationName(leaf && (leaf.name || leaf.id)).indexOf(_normPopulationName(e.toRegion)) >= 0; });
+    }
+    if (from && to && from.populationDetail && to.populationDetail) {
+      var fromDetail = from.populationDetail;
+      var toDetail = to.populationDetail;
+      var fromMouths = Math.max(0, Number(fromDetail.mouths) || 0);
+      var toMouths = Math.max(0, Number(toDetail.mouths) || 0);
+      var scale = Math.max(0, Math.round(Math.min(e.scale, fromMouths * 0.3)));
+      if (!scale) return { ok:false, reason:'source-population-empty' };
+      var fromMphh = fromMouths / Math.max(1, Number(fromDetail.households) || 0);
+      var fromDingRatio = Number(fromDetail.ding) / Math.max(1, fromMouths);
+      var toMphh = toMouths / Math.max(1, Number(toDetail.households) || 0);
+      var toDingRatio = Number(toDetail.ding) / Math.max(1, toMouths);
+      fromDetail.mouths = fromMouths - scale;
+      fromDetail.households = Math.round(fromDetail.mouths / Math.max(1, fromMphh));
+      fromDetail.ding = Math.round(fromDetail.mouths * fromDingRatio);
+      toDetail.mouths = toMouths + scale;
+      toDetail.households = Math.round(toDetail.mouths / Math.max(1, toMphh));
+      toDetail.ding = Math.round(toDetail.mouths * toDingRatio);
+      _syncLeafPopulationMirrors(from, fromDetail);
+      _syncLeafPopulationMirrors(to, toDetail);
+      _syncPlayerLegacyRow(P, from, fromDetail);
+      _syncPlayerLegacyRow(P, to, toDetail);
+      from.yearlyNetMigration = (Number(from.yearlyNetMigration) || 0) - scale;
+      to.yearlyNetMigration = (Number(to.yearlyNetMigration) || 0) + scale;
+    } else {
+      if (!P.byRegion) return { ok:false, reason:'regions-unavailable' };
+      var fromKey = Object.keys(P.byRegion).find(function(k) { return _normPopulationName(k).indexOf(_normPopulationName(e.fromRegion)) >= 0; });
+      var toKey = Object.keys(P.byRegion).find(function(k) { return _normPopulationName(k).indexOf(_normPopulationName(e.toRegion)) >= 0; });
+      if (!fromKey || !toKey) return { ok:false, reason:'region-match-failed' };
+      from = P.byRegion[fromKey];
+      to = P.byRegion[toKey];
+      var scale = Math.max(0, Math.round(Math.min(e.scale, (Number(from.mouths) || 0) * 0.3)));
+      if (!scale) return { ok:false, reason:'source-population-empty' };
+      from.mouths -= scale;
+      to.mouths += scale;
+    }
     P.migrationEvents.push({ id: e.id, name: e.name, turn: global.GM.turn, scale: scale });
     if (global.addEB) global.addEB('迁徙', e.name + '：' + e.fromRegion + ' → ' + e.toRegion + ' 约 ' + Math.round(scale/10000) + ' 万口');
+    return { ok:true, scale:scale };
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -1020,7 +1545,9 @@
     var P = global.GM.population;
     if (!P || !P.meta) return;
     var turnsSince = (ctx.turn || 0) - (P.meta.lastRegistrationTurn || 0);
-    if (turnsSince < P.meta.registrationCycle * 12) return;
+    var cycleMonths = Math.max(0, Number(P.meta.registrationCycle) || 0) * 12;
+    var cycleTurns = (typeof global.turnsForMonths === 'function') ? global.turnsForMonths(cycleMonths) : cycleMonths;
+    if (turnsSince < Math.max(1, Number(cycleTurns) || 1)) return;
     // 触发造册
     var cost = Math.round(P.national.households * 0.05);
     if (global.GM.guoku && global.GM.guoku.money !== undefined && global.GM.guoku.money >= cost) {
@@ -1118,6 +1645,7 @@
   global.HujiEngine = {
     init: init,
     tick: tick,
+    applyPopulationLoss: applyPopulationLoss,
     startLargeCorvee: startLargeCorvee,
     getAIContext: getAIContext,
     CATEGORY_TEMPLATES: CATEGORY_TEMPLATES,

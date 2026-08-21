@@ -182,9 +182,25 @@
         try { leaves = global.IntegrationBridge.getLeafDivisions(root.adminHierarchy) || []; } catch (_) { leaves = []; }
       }
       if (!leaves.length) {
-        Object.keys(root.adminHierarchy || {}).forEach(function(k) {
-          walkAdminNode(root.adminHierarchy[k], leaves);
-        });
+        var hierarchy = root.adminHierarchy || {};
+        var playerKey = null;
+        if (typeof global._tmResolvePlayerAdminKey === 'function') {
+          try { playerKey = global._tmResolvePlayerAdminKey(hierarchy) || null; } catch (_) {}
+        }
+        if (!playerKey && Object.prototype.hasOwnProperty.call(hierarchy, 'player')) playerKey = 'player';
+        if (!playerKey && Array.isArray(hierarchy.divisions)) {
+          walkAdminNode(hierarchy.divisions, leaves);
+        } else if (!playerKey) {
+          var candidateKeys = Object.keys(hierarchy).filter(function(k) {
+            var branch = hierarchy[k];
+            return Array.isArray(branch) || (branch && Array.isArray(branch.divisions));
+          });
+          if (candidateKeys.length === 1) playerKey = candidateKeys[0];
+        }
+        // Compatibility aggregation must never silently turn a multi-faction
+        // world into the player's national ledger. If ownership is ambiguous,
+        // leave the fallback empty instead of summing every faction together.
+        if (playerKey) walkAdminNode(hierarchy[playerKey], leaves);
       }
     }
     if (!leaves.length && Array.isArray(root.regions)) leaves = root.regions.slice();

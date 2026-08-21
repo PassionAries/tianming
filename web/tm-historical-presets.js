@@ -442,28 +442,31 @@
   function recordPlague(scale, region, cause) {
     _initPlagueWarFields();
     var G = global.GM;
+    if (!global.HujiEngine || typeof global.HujiEngine.applyPopulationLoss !== 'function') throw new Error('人口损失账本不可用');
+    var mortality = global.HujiEngine.applyPopulationLoss({ cause:'historical-plague:' + String(cause || 'plague'), regionId:region && region !== 'national' ? region : '', mouths:scale });
+    if (!mortality || mortality.ok === false) throw new Error('历史瘟疫人口损失落账失败: ' + String(mortality && mortality.reason || 'unknown'));
     G.population.plagueEvents.push({
       turn: G.turn || 0,
-      scale: scale,
+      scale: mortality.mouths,
       region: region || 'national',
       cause: cause || '瘟疫',
-      deaths: scale
+      deaths: mortality.mouths
     });
-    G.population.national.mouths = Math.max(100000, G.population.national.mouths - scale);
-    if (global.addEB) global.addEB('瘟疫', (region || '各地') + '大疫，殒 ' + Math.round(scale) + ' 口');
+    if (global.addEB) global.addEB('瘟疫', (region || '各地') + '大疫，殒 ' + Math.round(mortality.mouths) + ' 口');
   }
 
   function recordWarCasualty(scale, warName, side) {
     _initPlagueWarFields();
     var G = global.GM;
+    if (!global.HujiEngine || typeof global.HujiEngine.applyPopulationLoss !== 'function') throw new Error('人口损失账本不可用');
+    var mortality = global.HujiEngine.applyPopulationLoss({ cause:'war-casualty:' + String(warName || 'unknown'), mouths:scale, ding:Math.round(scale * 0.6) });
+    if (!mortality || mortality.ok === false) throw new Error('战亡人口损失落账失败: ' + String(mortality && mortality.reason || 'unknown'));
     G.population.warCasualties.push({
       turn: G.turn || 0,
-      scale: scale,
+      scale: mortality.mouths,
       warName: warName || '',
       side: side || 'own'
     });
-    G.population.national.mouths = Math.max(100000, G.population.national.mouths - scale);
-    if (G.population.national.ding) G.population.national.ding = Math.max(0, G.population.national.ding - Math.round(scale * 0.6));
   }
 
   // ═══════════════════════════════════════════════════════════════════

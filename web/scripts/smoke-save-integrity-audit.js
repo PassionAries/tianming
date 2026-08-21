@@ -77,9 +77,11 @@ console.log('=== save integrity audit ===');
   const stableIdHelpers = [
     'function _tmStableIdMissing(',
     'function _tmStableIdHash(',
+    'function _tmStableIdentityParts(',
     'function _tmCollectAdminDivisionEntries(',
     'function _tmAssignMissingStableIds(',
     'function _tmUniqueEntityIdByName(',
+    'function _tmEntityIdSet(',
     'function _tmBackfillStableForeignKeys(',
     'function _tmMigrateCoreStableIds('
   ].map(function(marker) { return sliceFn(lifecycle, marker); }).join('\n');

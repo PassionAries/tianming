@@ -573,8 +573,10 @@
       var seasonMult = (profile.seasonBoost && profile.seasonBoost[season]) || 1.0;
       e.affected = Math.floor(e.affected * (1 + profile.spread * seasonMult * mr));
       var deaths = Math.floor(e.affected * profile.mortality * 0.05 * mr);
-      e.deaths = (e.deaths || 0) + deaths;
-      if (G.population.national) G.population.national.mouths = Math.max(0, G.population.national.mouths - deaths);
+      if (!global.HujiEngine || typeof global.HujiEngine.applyPopulationLoss !== 'function') throw new Error('人口损失账本不可用');
+      var mortality = global.HujiEngine.applyPopulationLoss({ cause:'disease-cycle:' + String(e.disease || 'unknown'), regionId:e.region || '', mouths:deaths });
+      if (!mortality || mortality.ok === false) throw new Error('疫病人口损失落账失败: ' + String(mortality && mortality.reason || 'unknown'));
+      e.deaths = (e.deaths || 0) + mortality.mouths;
       if ((G.turn - e.startTurn) > _turnsForMonthsLocal(24) || Math.random() < 0.02 * mr) e.status = 'ended';
     });
     // 新疫病触发（低概率）

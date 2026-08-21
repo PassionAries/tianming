@@ -81,7 +81,9 @@ console.log('— D2 · 叶级吏治连账(行为) —');
 console.log('— D1 · 人口三重错位根治(契约) —');
 var bridge = read('tm-integration-bridge.js');
 var huji = read('tm-huji-engine.js');
-ok(/function _allLeafDivisions\(G\)/.test(huji) && /IB\.getLeafDivisions\(ah, facId\)/.test(huji), '人口权威递归取得所有行政区叶子');
+ok(/function _walkAdminLeaves\(nodes, out, seen\)/.test(huji)
+  && /function _factionLeafGroups\(G\)/.test(huji)
+  && /_walkAdminLeaves\(roots, leaves, \[\]\)/.test(huji), '人口权威按 faction 递归取得行政区叶子');
 ok(/function _syncLeafPopulationMirrors\(leaf, detail\)/.test(huji)
   && /leaf\.population\.mouths = detail\.mouths/.test(huji), 'Huji 同步 population 与 populationDetail 双账');
 ok(/leafMouthsPerHousehold = Number\(pd\.households\) > 0 \? mouths \/ Number\(pd\.households\)/.test(huji)

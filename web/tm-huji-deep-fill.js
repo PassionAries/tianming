@@ -237,7 +237,7 @@
     if (!G.population) return;
     QIAOZHI_HISTORICAL.forEach(function(e) {
       if (G.population._qiaozhi_triggered && G.population._qiaozhi_triggered[e.id]) return;
-      var year = G.year || _yearFromTurn(ctx.turn || G.turn || 1);
+      var year = _yearFromTurn(ctx.turn || G.turn || 1);
       if (year >= e.year && year < e.year + 10 && G.unrest > 70) {
         // 触发
         if (!G.population._qiaozhi_triggered) G.population._qiaozhi_triggered = {};
@@ -714,7 +714,8 @@
       // 产粮降、死亡增
       if (G.guoku) G.guoku.grain = Math.max(0, G.guoku.grain - Math.round(G.population.national.mouths * 0.01 * mr / 12));
       var deaths = Math.round(G.population.national.mouths * 0.0005 * mr);
-      G.population.national.mouths = Math.max(100000, G.population.national.mouths - deaths);
+      if (!global.HujiEngine || typeof global.HujiEngine.applyPopulationLoss !== 'function') throw new Error('人口损失账本不可用');
+      global.HujiEngine.applyPopulationLoss({ cause:'climate:little-ice-age', mouths:deaths });
     } else if (phase === 'medieval_warm') {
       // 产粮升
       if (G.guoku) G.guoku.grain += Math.round(G.population.national.mouths * 0.005 * mr / 12);
@@ -734,7 +735,7 @@
     var G = global.GM;
     if (!G.population) return;
     if (!G.population.cropRevolutions) G.population.cropRevolutions = [];
-    var year = G.year || 1;
+    var year = _yearFromTurn(ctx.turn || G.turn || 1);
     CROP_REVOLUTIONS.forEach(function(c) {
       if (G.population.cropRevolutions.indexOf(c.id) >= 0) return;
       if (year >= c.year && year < c.year + 20) {
@@ -761,14 +762,15 @@
     var G = global.GM;
     if (!G.population) return;
     if (!G.population.plagueEvents) G.population.plagueEvents = [];
-    var year = G.year || 1;
+    var year = _yearFromTurn(ctx.turn || G.turn || 1);
     PLAGUE_CYCLES.forEach(function(p) {
       var phase = year % p.period;
       if (phase === 0 && Math.random() < 0.3) {
         var deaths = Math.round(G.population.national.mouths * p.baseMortality);
-        G.population.national.mouths = Math.max(100000, G.population.national.mouths - deaths);
-        G.population.plagueEvents.push({ turn: ctx.turn, deaths: deaths, region: p.regions[Math.floor(Math.random()*p.regions.length)] });
-        if (global.addEB) global.addEB('瘟疫', '疫病大作，死亡 ' + deaths);
+        if (!global.HujiEngine || typeof global.HujiEngine.applyPopulationLoss !== 'function') throw new Error('人口损失账本不可用');
+        var mortality = global.HujiEngine.applyPopulationLoss({ cause:'plague', mouths:deaths });
+        G.population.plagueEvents.push({ turn: ctx.turn, deaths: mortality.mouths, region: p.regions[Math.floor(Math.random()*p.regions.length)] });
+        if (global.addEB) global.addEB('瘟疫', '疫病大作，死亡 ' + mortality.mouths);
       }
     });
   }
@@ -860,30 +862,61 @@
   //  主 tick
   // ═══════════════════════════════════════════════════════════════════
 
+  function _isCanonicalYearBoundary(ctx) {
+    var turn = Number(ctx && ctx.turn) || 0;
+    try {
+      if (typeof global.calcDateFromTurn === 'function' && turn > 0) {
+        var current = global.calcDateFromTurn(turn) || {};
+        var previous = global.calcDateFromTurn(Math.max(1, turn - 1)) || {};
+        var currentYear = Number(current.adYear != null ? current.adYear : current.year);
+        var previousYear = Number(previous.adYear != null ? previous.adYear : previous.year);
+        if (isFinite(currentYear) && isFinite(previousYear)) return currentYear !== previousYear;
+      }
+    } catch (_) {}
+    var turns = (typeof global.turnsForMonths === 'function') ? Number(global.turnsForMonths(12)) : 12;
+    return turn > 0 && turn % Math.max(1, Math.round(turns) || 12) === 0;
+  }
+
   function tick(ctx) {
     ctx = ctx || {};
-    var mr = ctx.monthRatio || 1;
-    try { _tickClassMobility(mr); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'deep] mobility:') : console.error('[deep] mobility:', e); }
-    try { _tickLandlordAnnexation(mr); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
-    try { _tickMerchantCycle(mr); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
-    try { _tickGentryCycle(mr); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
-    try { _tickClergyCycle(mr); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
-    try { _checkQiaozhiTrigger(ctx); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
-    try { _tickJimiTusi(mr); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
-    try { _tickMilitaryFarms(mr); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
-    try { _tickMilitarySupply(mr); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
-    try { _tickTroopOrders(ctx); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
-    try { _tickHorsePolicy(mr); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
-    try { _assessMilitaryAllegiance(); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
-    try { _tickAgeLayers(mr); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
-    try { _tickGenderRatio(mr); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
-    try { _checkCorveeRevolt(ctx); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
-    try { _tickClimateCoupling(mr); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
-    try { _checkCropRevolution(ctx); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
-    if ((ctx.turn || 0) % 12 === 0) {
-      try { _tickPlague(ctx, mr); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
-      try { _aiGenerateMemorials(ctx); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-huji-deep-fill');}catch(_){}}
+    var rawMr = Number(ctx.monthRatio);
+    var mr = rawMr > 0 && isFinite(rawMr) ? rawMr : 1;
+    var strict = ctx.strict === true;
+    var failures = [];
+    function runStep(label, fn) {
+      try { return fn(); }
+      catch (error) {
+        try {
+          if (window.TM && TM.errors && TM.errors.capture) TM.errors.capture(error, 'huji-deep] ' + label + ':');
+          else console.error('[huji-deep] ' + label + ':', error);
+        } catch (_) {}
+        if (strict) throw error;
+        failures.push({ step:label, error:String(error && error.message || error) });
+        return null;
+      }
     }
+    runStep('class-mobility', function() { _tickClassMobility(mr); });
+    runStep('landlord-annexation', function() { _tickLandlordAnnexation(mr); });
+    runStep('merchant-cycle', function() { _tickMerchantCycle(mr); });
+    runStep('gentry-cycle', function() { _tickGentryCycle(mr); });
+    runStep('clergy-cycle', function() { _tickClergyCycle(mr); });
+    runStep('qiaozhi-trigger', function() { _checkQiaozhiTrigger(ctx); });
+    runStep('jimi-tusi', function() { _tickJimiTusi(mr); });
+    runStep('military-farms', function() { _tickMilitaryFarms(mr); });
+    runStep('military-supply', function() { _tickMilitarySupply(mr); });
+    runStep('troop-orders', function() { _tickTroopOrders(ctx); });
+    runStep('horse-policy', function() { _tickHorsePolicy(mr); });
+    runStep('military-allegiance', function() { _assessMilitaryAllegiance(); });
+    runStep('age-layers', function() { _tickAgeLayers(mr); });
+    runStep('gender-ratio', function() { _tickGenderRatio(mr); });
+    runStep('corvee-revolt', function() { _checkCorveeRevolt(ctx); });
+    runStep('climate-coupling', function() { _tickClimateCoupling(mr); });
+    runStep('crop-revolution', function() { _checkCropRevolution(ctx); });
+    if (_isCanonicalYearBoundary(ctx)) {
+      runStep('plague', function() { _tickPlague(ctx, mr); });
+      runStep('annual-memorials', function() { _aiGenerateMemorials(ctx); });
+    }
+    return { ok:failures.length === 0, failures:failures };
   }
 
   function init() {

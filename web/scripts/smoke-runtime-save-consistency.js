@@ -289,13 +289,16 @@ async function runDynamicLeaseSmokes() {
     const helpers = [
       sliceFn(lifecycle, 'function _tmStripSaveTransportMetadata('),
       sliceFn(lifecycle, 'function _tmStableIdMissing('),
+      sliceFn(lifecycle, 'function _tmStableIdentityParts('),
       sliceFn(lifecycle, 'function _tmCollectAdminDivisionEntries('),
+      sliceFn(lifecycle, 'function _tmEntityIdSet('),
       sliceFn(lifecycle, 'function _tmValidateUniqueStableIds('),
+      sliceFn(lifecycle, 'function _tmValidateStableForeignKeys('),
       sliceFn(lifecycle, 'function _tmValidateFiniteWorldNumbers('),
       sliceFn(lifecycle, 'function _tmValidateLoadedWorld(')
     ].join('\n');
     const ctx = {
-      Number, Object, Array, String, Error, WeakSet,
+      Number, Object, Array, String, Error, WeakSet, JSON,
       _tmEnsureTimelineIdentity(gm) { return !!gm._timelineId; }
     };
     vm.createContext(ctx); vm.runInContext(helpers, ctx);

@@ -453,8 +453,9 @@
         if (P) {
           var target = rid && P.byRegion[rid] ? P.byRegion[rid] : P.national;
           var deaths = Math.round(target.mouths * ef.deathRate);
-          target.mouths = Math.max(10000, target.mouths - deaths);
-          if (P.national !== target) P.national.mouths = Math.max(10000, P.national.mouths - deaths);
+          if (!global.HujiEngine || typeof global.HujiEngine.applyPopulationLoss !== 'function') throw new Error('人口损失账本不可用');
+          var mortality = global.HujiEngine.applyPopulationLoss({ cause:'environment-crisis:' + String(ev.id || 'unknown'), regionId:rid || '', mouths:deaths });
+          if (!mortality || mortality.ok === false) throw new Error('环境危机人口损失落账失败: ' + String(mortality && mortality.reason || 'unknown'));
         }
       }
       if (ef.unrest) {

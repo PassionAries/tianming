@@ -42,19 +42,28 @@ global.IntegrationBridge = {
 };
 
 function sigma() { return Rich.populationDetail.mouths + Poor.populationDetail.mouths + Fam.populationDetail.mouths + Cap.populationDetail.mouths; }
+function playerSigma() { return Rich.populationDetail.mouths + Cap.populationDetail.mouths; }
 var maxDrift = 0;
-for (var t = 1; t <= 12; t++) { GM.turn = t; HujiEngine.tick({ turn: t, monthRatio: 1, _monthRatio: 1 }); var dr = Math.abs(GM.population.national.mouths - sigma()); if (dr > maxDrift) maxDrift = dr; }
+var maxWorldDrift = 0;
+for (var t = 1; t <= 12; t++) {
+  GM.turn = t;
+  HujiEngine.tick({ turn: t, monthRatio: 1, _monthRatio: 1 });
+  var dr = Math.abs(GM.population.national.mouths - playerSigma());
+  var worldDr = Math.abs(GM.worldPopulationSummary.national.mouths - sigma());
+  if (dr > maxDrift) maxDrift = dr;
+  if (worldDr > maxWorldDrift) maxWorldDrift = worldDr;
+}
 var richNet = Rich.populationDetail.mouths - 400000;
 var poorNet = Poor.populationDetail.mouths - 400000; // NPC「军阀」faction
 var famNet = Fam.populationDetail.mouths - 300000;   // NPC「军阀」faction
 var capMig = Cap.yearlyNetMigration || 0;
-console.log('[S5·12回合·真实多faction] 富安(玩家)净=' + richNet + ' · 困苦(NPC军阀)净=' + poorNet + ' · 饥馑(NPC军阀)净=' + famNet + ' · 京师迁移=' + capMig + ' · 守恒漂移=' + maxDrift);
-var T1 = maxDrift <= 12;
+console.log('[S5·12回合·真实多faction] 富安(玩家)净=' + richNet + ' · 困苦(NPC军阀)净=' + poorNet + ' · 饥馑(NPC军阀)净=' + famNet + ' · 京师迁移=' + capMig + ' · 玩家漂移=' + maxDrift + ' · 世界漂移=' + maxWorldDrift);
+var T1 = maxDrift <= 12 && maxWorldDrift <= 12;
 var T2 = richNet > poorNet && poorNet > famNet;
 var T3 = famNet < 0;
 var T4 = capMig > 0;
 var T5 = (poorNet !== 0 && famNet !== 0); // 关键：NPC「军阀」faction 地块也被处理(取叶修复·非只玩家)
-console.log('  [S5a] 守恒不漂移：' + (T1 ? 'OK' : 'FAIL'));
+console.log('  [S5a] 玩家 national 与世界 summary 分口径守恒：' + (T1 ? 'OK' : 'FAIL'));
 console.log('  [S5b] 地方分化(富>困>饥)：' + (T2 ? 'OK' : 'FAIL'));
 console.log('  [S5c] 饥馑饥荒净减：' + (T3 ? 'OK' : 'FAIL'));
 console.log('  [S5d] 京师虹吸流入：' + (T4 ? 'OK' : 'FAIL'));

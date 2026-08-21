@@ -26,9 +26,11 @@ const functionNames = [
   '_tmHasOwn',
   '_tmStableIdMissing',
   '_tmStableIdHash',
+  '_tmStableIdentityParts',
   '_tmCollectAdminDivisionEntries',
   '_tmAssignMissingStableIds',
   '_tmUniqueEntityIdByName',
+  '_tmEntityIdSet',
   '_tmBackfillStableForeignKeys',
   '_tmMigrateCoreStableIds',
   '_tmValidateUniqueStableIds'

@@ -90,11 +90,13 @@ function makeRuntime(options = {}) {
   vm.runInContext(hujiSource, context, { filename: 'tm-huji-engine.js' });
   vm.runInContext(deepSource, context, { filename: 'tm-huji-deep-fill.js' });
   vm.runInContext(runtimeBridgeSource, context, { filename: 'tm-huji-runtime-bridge.js' });
+  vm.runInContext(historicalSource, context, { filename: 'tm-historical-presets.js' });
   context.HujiEngine.init(context.P);
   context.GM.population.corvee.enabled = false;
   context.GM.population.military.enabled = false;
   context.GM.population.meta.registrationCycle = 1000;
   context.HujiDeepFill.init();
+  context.HistoricalPresets.init();
   return { context, playerLeaves, npcLeaves };
 }
 
@@ -120,9 +122,9 @@ console.log('[smoke-population-faction-ledger]');
   ok(context.GM.population.national.mouths === playerAfter, 'player national contains only player faction leaves');
   ok(context.GM.population.dynamics._yearlyAccumBirths === expectedPlayerBirths,
     'player birth ledger excludes NPC births');
-  ok(context.GM.worldPopulationSummary.byFaction.npc.dynamics._yearlyAccumBirths === expectedNpcBirths,
+  ok(context.GM.worldPopulationSummary.byFaction['fac-npc'].dynamics._yearlyAccumBirths === expectedNpcBirths,
     'NPC births are retained in a separate faction ledger');
-  ok(context.GM.worldPopulationSummary.byFaction.npc.national.mouths === npcAfter
+  ok(context.GM.worldPopulationSummary.byFaction['fac-npc'].national.mouths === npcAfter
     && context.GM.worldPopulationSummary.national.mouths === playerAfter + npcAfter,
     'world summary is separate from player national while preserving every faction');
   ok(npcLeaves[1].populationDetail.mouths < npcSourceWithoutMigration
@@ -159,8 +161,67 @@ console.log('[smoke-population-faction-ledger]');
   ok(totals(playerLeaves).mouths === playerBefore
     && (context.GM.population.dynamics._yearlyAccumDeaths || 0) === playerDeathBefore,
   'NPC mortality never enters the player national or death accumulator');
-  ok(context.GM.worldPopulationSummary.byFaction.npc.mortalityLedger.some(row => row.cause === 'smoke-npc-region'),
+  ok(context.GM.worldPopulationSummary.byFaction['fac-npc'].mortalityLedger.some(row => row.cause === 'smoke-npc-region'),
     'NPC mortality is retained in the NPC faction ledger');
+}
+
+{
+  const { context, playerLeaves, npcLeaves } = makeRuntime();
+  const playerBefore = totals(playerLeaves);
+  const npcBefore = totals(npcLeaves);
+  const result = context.HujiEngine.applyPopulationLoss({
+    factionId: 'missing-faction', cause: 'smoke-unresolved-faction', mouths: 10000
+  });
+  ok(result.ok === false && result.reason === 'faction-not-found'
+    && JSON.stringify(totals(playerLeaves)) === JSON.stringify(playerBefore)
+    && JSON.stringify(totals(npcLeaves)) === JSON.stringify(npcBefore),
+  'an unresolved explicit faction fails closed without harming the player');
+}
+
+{
+  const baseline = makeRuntime();
+  baseline.context.HujiEngine.tick({ turn: 1, monthRatio: 1, strict: true });
+  const baselinePlayerDeaths = baseline.context.GM.population.dynamics._yearlyAccumDeaths;
+  const baselineNpcDeaths = baseline.context.GM.worldPopulationSummary.byFaction['fac-npc'].dynamics._yearlyAccumDeaths;
+
+  const npcWar = makeRuntime();
+  npcWar.context.GM.activeWars = [{ id:'npc-war', attacker:'fac-npc', defender:'fac-other' }];
+  npcWar.context.HujiEngine.tick({ turn: 1, monthRatio: 1, strict: true });
+  ok(npcWar.context.GM.population.dynamics._yearlyAccumDeaths === baselinePlayerDeaths
+    && npcWar.context.GM.worldPopulationSummary.byFaction['fac-npc'].dynamics._yearlyAccumDeaths > baselineNpcDeaths,
+  'an NPC-only war raises mortality only for the participating NPC faction');
+
+  const playerWar = makeRuntime();
+  playerWar.context.GM.activeWars = [{ id:'player-war', attackerId:'fac-player', defenderId:'fac-npc' }];
+  playerWar.context.HujiEngine.tick({ turn: 1, monthRatio: 1, strict: true });
+  ok(playerWar.context.GM.population.dynamics._yearlyAccumDeaths > baselinePlayerDeaths
+    && playerWar.context.GM.worldPopulationSummary.byFaction['fac-npc'].dynamics._yearlyAccumDeaths > baselineNpcDeaths,
+  'a player war raises mortality for both actual participants');
+}
+
+{
+  const { context, npcLeaves } = makeRuntime();
+  context.GM.adminHierarchy.player.divisions = [];
+  context.GM.population.national = { mouths:0, households:0, ding:0 };
+  context.HujiEngine.tick({ turn: 1, monthRatio: 1, strict: true });
+  ok(context.GM.population.national.mouths === 0
+    && context.GM.worldPopulationSummary.byFaction['fac-npc'].isPlayer === false
+    && context.GM.worldPopulationSummary.byFaction['fac-npc'].national.mouths === totals(npcLeaves).mouths,
+  'territorial extinction never reclassifies the sole remaining NPC faction as player');
+}
+
+{
+  const { context } = makeRuntime();
+  context.HujiEngine.tick({ turn: 1, monthRatio: 1, strict: true });
+  const entry = context.GM.worldPopulationSummary.byFaction['fac-npc'];
+  const births = entry.dynamics._yearlyAccumBirths;
+  context.GM.adminHierarchy.renamedNpcBranch = context.GM.adminHierarchy.npc;
+  delete context.GM.adminHierarchy.npc;
+  context.HujiEngine.tick({ turn: 2, monthRatio: 1, strict: true });
+  ok(context.GM.worldPopulationSummary.byFaction['fac-npc'] === entry
+    && entry.dynamics._yearlyAccumBirths > births
+    && !context.GM.worldPopulationSummary.byFaction.renamedNpcBranch,
+  'world population history is keyed by stable factionId across branch renames');
 }
 
 {
@@ -188,6 +249,8 @@ console.log('[smoke-population-faction-ledger]');
     dateForTurn(turn) { return { adYear: turn >= 2 ? 1200 : 1199 }; }
   });
   const before = totals(playerLeaves).mouths;
+  const capitalBefore = playerLeaves[0].populationDetail.mouths;
+  const southBefore = playerLeaves[1].populationDetail.mouths;
   context.HujiDeepFill.tick({ turn: 2, monthRatio: 1, strict: true });
   const after = totals(playerLeaves).mouths;
   context.TM.HujiRuntimeBridge.maintain(context.GM, { scenario: context.P, turn: 2 });
@@ -195,8 +258,79 @@ console.log('[smoke-population-faction-ledger]');
     .filter(row => row.cause === 'plague')
     .reduce((sum, row) => sum + row.mouths, 0);
   ok(plagueLoss > 0 && after === before - plagueLoss
-    && context.GM.population.national.mouths === after,
-  'plague deaths use the leaf ledger and cannot be erased by national aggregation');
+    && context.GM.population.national.mouths === after
+    && playerLeaves[0].populationDetail.mouths === capitalBefore
+    && playerLeaves[1].populationDetail.mouths === southBefore - plagueLoss
+    && context.GM.population.plagueEvents.every(event => event.regionId === 'player-south'),
+  'regional plague deaths hit the matched leaf only and survive national aggregation');
+}
+
+{
+  const { context, playerLeaves } = makeRuntime();
+  const before = totals(playerLeaves).mouths;
+  const mortality = context.HujiEngine.applyPopulationLoss({
+    factionId:'fac-player', regionId:'player-south', cause:'smoke-demographic-loss', mortalityRate:0.30
+  });
+  context.TM.HujiRuntimeBridge.maintain(context.GM, { scenario:context.P, turn:2 });
+  const region = context.GM.population.byRegion['player-south'];
+  const sum = object => Object.values(object || {}).reduce((total, value) => total + Number(value || 0), 0);
+  ok(mortality.ok && mortality.mouths === Math.round(400000 * 0.30)
+    && sum(region.byAge) === region.mouths
+    && sum(region.byGender) === region.mouths
+    && context.GM.population.national.ding === totals(playerLeaves).ding
+    && totals(playerLeaves).mouths === before - mortality.mouths,
+  'leaf mortality keeps age, gender, mouths and ding on one authoritative ledger');
+}
+
+{
+  const { context, playerLeaves } = makeRuntime({ year:1127 });
+  context.GM.unrest = 80;
+  playerLeaves[0].name = '京东路';
+  context.GM._capital = '京东路';
+  context.GM.facs[0].capital = '京东路';
+  const before = totals(playerLeaves).mouths;
+  context.HujiDeepFill.tick({ turn:2, monthRatio:1, strict:true });
+  context.TM.HujiRuntimeBridge.maintain(context.GM, { scenario:context.P, turn:2 });
+  const leaves = context.GM.adminHierarchy.player.divisions;
+  const qiaozhi = leaves.filter(leaf => leaf && leaf.isQiaozhi && leaf.parentHistoric === 'jingkang_qiao');
+  const qiaozhiMouths = totals(qiaozhi).mouths;
+  const materialized = qiaozhi.length === 3 && qiaozhiMouths > 0
+    && totals(leaves).mouths === before
+    && context.GM.population.national.mouths === before
+    && context.GM.population.byLegalStatus.qiaozhi.mouths === qiaozhiMouths
+    && context.GM.population._qiaozhi_triggered.jingkang_qiao === 2;
+  context.HujiEngine.tick({ turn:3, monthRatio:1, strict:true });
+  context.TM.HujiRuntimeBridge.maintain(context.GM, { scenario:context.P, turn:3 });
+  const qiaozhiAfterGrowth = totals(qiaozhi).mouths;
+  ok(materialized && context.GM.population.byLegalStatus.qiaozhi.mouths === qiaozhiAfterGrowth,
+  'qiaozhi creates authoritative leaves, transfers population, and survives RuntimeBridge');
+}
+
+{
+  const { context, playerLeaves, npcLeaves } = makeRuntime();
+  const playerBefore = totals(playerLeaves).mouths;
+  const npcBefore = totals(npcLeaves).mouths;
+  const unresolved = context.HistoricalPresets.recordWarCasualty(50000, '北境会战', 'enemy');
+  const applied = context.HistoricalPresets.recordWarCasualty({
+    mouths:50000, warName:'北境会战', factionId:'fac-npc', regionId:'npc-north'
+  });
+  ok(unresolved.ok === false && unresolved.reason === 'faction-target-required'
+    && totals(playerLeaves).mouths === playerBefore
+    && applied.ok && applied.factionId === 'fac-npc'
+    && totals(npcLeaves).mouths === npcBefore - 50000,
+  'war casualties require a stable side target and never default enemy losses to the player');
+}
+
+{
+  const { context } = makeRuntime();
+  const originalSync = context.HujiEngine.syncDemographicViews;
+  context.HujiEngine.syncDemographicViews = () => { throw new Error('injected historical demographic failure'); };
+  let strictFailure = null;
+  try { context.HistoricalPresets.tick({ turn:2, monthRatio:1, strict:true }); }
+  catch (error) { strictFailure = error; }
+  context.HujiEngine.syncDemographicViews = originalSync;
+  ok(strictFailure && /historical demographic failure/.test(strictFailure.message),
+    'strict historical demographic failures propagate to the end-turn transaction');
 }
 
 {
@@ -297,8 +431,8 @@ console.log('[smoke-population-faction-ledger]');
 ok(/HujiEngine\.applyPopulationLoss\(\{ cause:'environment-crisis:/.test(economySource)
   && !/target\.mouths\s*=\s*Math\.max\(10000/.test(economySource),
   'environment crisis mortality is routed through the leaf ledger');
-ok(/HujiEngine\.applyPopulationLoss\(\{ cause:'historical-plague:/.test(historicalSource)
-  && /HujiEngine\.applyPopulationLoss\(\{ cause:'war-casualty:/.test(historicalSource)
+ok(/HujiEngine\.applyPopulationLoss\(Object\.assign\(target/.test(historicalSource)
+  && /faction-target-required/.test(historicalSource)
   && !/population\.national\.mouths\s*=\s*Math\.max\(100000/.test(historicalSource),
   'historical plague and war casualties are routed through the leaf ledger');
 ok(/HujiEngine\.applyPopulationLoss\(\{ cause:'disease-cycle:/.test(regionEnrichSource)

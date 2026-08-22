@@ -227,9 +227,9 @@
   // ═══════════════════════════════════════════════════════════════════
 
   var QIAOZHI_HISTORICAL = [
-    { id:'yongjia_qiao', name:'永嘉侨置', year:317, scale:500000, newRegions:['侨豫州','侨徐州','侨荆州','侨青州'] },
-    { id:'anshi_qiao',   name:'安史侨置', year:755, scale:300000, newRegions:['侨河北','侨关中'] },
-    { id:'jingkang_qiao',name:'靖康侨置', year:1127,scale:1500000,newRegions:['侨京西','侨京东','侨河北'] }
+    { id:'yongjia_qiao', name:'永嘉侨置', year:317, scale:500000, sourceCandidates:['中原','河南','河北','北方','洛阳'], newRegions:['侨豫州','侨徐州','侨荆州','侨青州'] },
+    { id:'anshi_qiao',   name:'安史侨置', year:755, scale:300000, sourceCandidates:['河北','关中','中原','北方'], newRegions:['侨河北','侨关中'] },
+    { id:'jingkang_qiao',name:'靖康侨置', year:1127,scale:1500000,sourceCandidates:['京东','京西','河北','中原','北方'],newRegions:['侨京西','侨京东','侨河北'] }
   ];
 
   function _checkQiaozhiTrigger(ctx) {
@@ -239,28 +239,27 @@
       if (G.population._qiaozhi_triggered && G.population._qiaozhi_triggered[e.id]) return;
       var year = _yearFromTurn(ctx.turn || G.turn || 1);
       if (year >= e.year && year < e.year + 10 && G.unrest > 70) {
-        // 触发
+        if (!global.HujiEngine || typeof global.HujiEngine.materializeQiaozhiResettlement !== 'function') {
+          throw new Error('侨置人口权威账本不可用');
+        }
+        var result = global.HujiEngine.materializeQiaozhiResettlement({
+          eventId:e.id,
+          mouths:e.scale,
+          sourceCandidates:e.sourceCandidates,
+          targetNames:e.newRegions
+        });
+        if (!result || result.ok === false) {
+          G.population._qiaozhi_pending = G.population._qiaozhi_pending || {};
+          G.population._qiaozhi_pending[e.id] = {
+            turn:Number(ctx.turn || G.turn) || 0,
+            reason:String(result && result.reason || 'qiaozhi-materialization-failed')
+          };
+          return;
+        }
         if (!G.population._qiaozhi_triggered) G.population._qiaozhi_triggered = {};
         G.population._qiaozhi_triggered[e.id] = ctx.turn;
-        // 创建侨置 region
-        e.newRegions.forEach(function(rn) {
-          if (!G.population.byRegion[rn]) {
-            G.population.byRegion[rn] = {
-              households: Math.round(e.scale / e.newRegions.length / 5),
-              mouths: Math.round(e.scale / e.newRegions.length),
-              ding: Math.round(e.scale / e.newRegions.length * 0.3),
-              byCategory:{}, byLegalStatus:{}, byGrade:{},
-              fugitives:0, hidden:0, isQiaozhi: true, parentHistoric: e.id
-            };
-          }
-        });
-        // 加入 byLegalStatus.qiaozhi
-        if (G.population.byLegalStatus.qiaozhi) {
-          G.population.byLegalStatus.qiaozhi.households += Math.round(e.scale / 5);
-          G.population.byLegalStatus.qiaozhi.mouths += e.scale;
-          G.population.byLegalStatus.qiaozhi.ding += Math.round(e.scale * 0.3);
-        }
-        if (global.addEB) global.addEB('侨置', e.name + '：流民约 ' + (e.scale/10000).toFixed(0) + ' 万侨置于新区');
+        if (G.population._qiaozhi_pending) delete G.population._qiaozhi_pending[e.id];
+        if (global.addEB) global.addEB('侨置', e.name + '：流民约 ' + (result.scale/10000).toFixed(0) + ' 万迁置于新区');
       }
     });
   }
@@ -606,38 +605,18 @@
   // ═══════════════════════════════════════════════════════════════════
 
   function _initAgeLayers() {
-    var G = global.GM;
-    if (!G.population) return;
-    if (G.population.ageLayers) return;
-    G.population.ageLayers = {
-      age_0_10:   Math.round(G.population.national.mouths * 0.20),
-      age_11_20:  Math.round(G.population.national.mouths * 0.18),
-      age_21_30:  Math.round(G.population.national.mouths * 0.15),
-      age_31_40:  Math.round(G.population.national.mouths * 0.13),
-      age_41_50:  Math.round(G.population.national.mouths * 0.11),
-      age_51_60:  Math.round(G.population.national.mouths * 0.10),
-      age_61_70:  Math.round(G.population.national.mouths * 0.08),
-      age_71_plus:Math.round(G.population.national.mouths * 0.05)
-    };
+    _syncAuthoritativeDemographics();
   }
 
-  function _tickAgeLayers(mr) {
-    var G = global.GM;
-    if (!G.population || !G.population.ageLayers) return;
-    var al = G.population.ageLayers;
-    // 按年递增（简化：每月）
-    var fractionMove = mr / 120; // 10 年
-    var keys = ['age_0_10','age_11_20','age_21_30','age_31_40','age_41_50','age_51_60','age_61_70','age_71_plus'];
-    for (var i = keys.length - 1; i > 0; i--) {
-      var move = Math.round(al[keys[i-1]] * fractionMove);
-      al[keys[i]] += move;
-      al[keys[i-1]] -= move;
+  function _syncAuthoritativeDemographics() {
+    if (!global.HujiEngine || typeof global.HujiEngine.syncDemographicViews !== 'function') {
+      throw new Error('叶级人口结构账本不可用');
     }
-    // 71+ 衰减
-    al.age_71_plus = Math.max(0, al.age_71_plus - Math.round(al.age_71_plus * 0.001 * mr));
-    // 新生注入 age_0_10
-    var newBorn = Math.round(G.population.national.mouths * 0.035 * mr / 12);
-    al.age_0_10 += newBorn;
+    return global.HujiEngine.syncDemographicViews();
+  }
+
+  function _tickAgeLayers() {
+    _syncAuthoritativeDemographics();
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -645,36 +624,20 @@
   // ═══════════════════════════════════════════════════════════════════
 
   function _initGenderRatio() {
-    var G = global.GM;
-    if (!G.population) return;
-    if (G.population.gender) return;
-    G.population.gender = {
-      male: Math.round(G.population.national.mouths * 0.52),
-      female: Math.round(G.population.national.mouths * 0.48),
-      ratio: 52/48 // 男/女
-    };
+    _syncAuthoritativeDemographics();
   }
 
-  function _tickGenderRatio(mr) {
+  function _tickGenderRatio() {
     var G = global.GM;
-    if (!G.population || !G.population.gender) return;
-    var g = G.population.gender;
-    // 战争 → 男女比下降（男丁损失）
-    if (G.activeWars && G.activeWars.length > 0) {
-      var loss = Math.round(g.male * 0.002 * mr);
-      g.male = Math.max(0, g.male - loss);
-    }
-    // 溺女政策（明清某些地区）→ 男女比上升
-    if (G.policies && G.policies.preferMale) {
-      var femaleLoss = Math.round(g.female * 0.001 * mr);
-      g.female = Math.max(0, g.female - femaleLoss);
-    }
-    g.ratio = g.male / Math.max(1, g.female);
-    g.total = g.male + g.female;
+    var synced = _syncAuthoritativeDemographics();
+    var g = G.population && G.population.gender;
+    if (!g) return synced;
     // 男多于女 → 难以婚配 → 盗贼兴
     if (g.ratio > 1.15) {
+      var mr = arguments.length ? Number(arguments[0]) || 1 : 1;
       if (typeof G.unrest === 'number') G.unrest = Math.min(100, G.unrest + 0.3 * mr);
     }
+    return synced;
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -715,7 +678,8 @@
       if (G.guoku) G.guoku.grain = Math.max(0, G.guoku.grain - Math.round(G.population.national.mouths * 0.01 * mr / 12));
       var deaths = Math.round(G.population.national.mouths * 0.0005 * mr);
       if (!global.HujiEngine || typeof global.HujiEngine.applyPopulationLoss !== 'function') throw new Error('人口损失账本不可用');
-      global.HujiEngine.applyPopulationLoss({ cause:'climate:little-ice-age', mouths:deaths });
+      var mortality = global.HujiEngine.applyPopulationLoss({ cause:'climate:little-ice-age', mouths:deaths });
+      if (!mortality || mortality.ok === false) throw new Error('小冰期人口损失落账失败: ' + String(mortality && mortality.reason || 'unknown'));
     } else if (phase === 'medieval_warm') {
       // 产粮升
       if (G.guoku) G.guoku.grain += Math.round(G.population.national.mouths * 0.005 * mr / 12);
@@ -766,10 +730,27 @@
     PLAGUE_CYCLES.forEach(function(p) {
       var phase = year % p.period;
       if (phase === 0 && Math.random() < 0.3) {
-        var deaths = Math.round(G.population.national.mouths * p.baseMortality);
         if (!global.HujiEngine || typeof global.HujiEngine.applyPopulationLoss !== 'function') throw new Error('人口损失账本不可用');
-        var mortality = global.HujiEngine.applyPopulationLoss({ cause:'plague', mouths:deaths });
-        G.population.plagueEvents.push({ turn: ctx.turn, deaths: mortality.mouths, region: p.regions[Math.floor(Math.random()*p.regions.length)] });
+        var mortality = null;
+        for (var i = 0; i < p.regions.length; i++) {
+          var attempt = global.HujiEngine.applyPopulationLoss({
+            cause:'plague',
+            regionCandidates:[p.regions[i]],
+            mortalityRate:p.baseMortality
+          });
+          if (attempt && attempt.ok) {
+            mortality = attempt;
+            break;
+          }
+        }
+        if (!mortality || mortality.ok === false) return;
+        G.population.plagueEvents.push({
+          turn:ctx.turn,
+          deaths:mortality.mouths,
+          factionId:mortality.factionId,
+          regionId:mortality.regionId,
+          region:mortality.regionName || mortality.regionId
+        });
         if (global.addEB) global.addEB('瘟疫', '疫病大作，死亡 ' + mortality.mouths);
       }
     });

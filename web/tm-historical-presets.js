@@ -348,37 +348,15 @@
   function _initAgePyramidFine() {
     var G = global.GM;
     if (!G.population) return;
-    if (G.population.agePyramidFine) return;
-    var total = G.population.national.mouths;
-    // 11 层（0-10 / 11-20 / ... / 71+）
-    var distribution = [0.20, 0.18, 0.15, 0.13, 0.11, 0.10, 0.08, 0.05];
-    var layers = ['age_0_10','age_11_20','age_21_30','age_31_40','age_41_50','age_51_60','age_61_70','age_71_plus'];
-    G.population.agePyramidFine = {};
-    layers.forEach(function(k, i) { G.population.agePyramidFine[k] = Math.round(total * distribution[i]); });
-    G.population.agePyramidFine._newlyAdult = 0;   // 本回合新达丁龄
-    G.population.agePyramidFine._leavingDing = 0;  // 本回合满 60 脱丁
+    if (!global.HujiEngine || typeof global.HujiEngine.syncDemographicViews !== 'function') {
+      throw new Error('叶级人口结构账本不可用');
+    }
+    global.HujiEngine.syncDemographicViews();
   }
 
-  function tickAgePyramidFine(mr) {
+  function tickAgePyramidFine() {
     _initAgePyramidFine();
-    var G = global.GM;
-    var pyramid = G.population.agePyramidFine;
-    if (!pyramid) return;
-    // 0.5 岁 / 月（简化）
-    var totalMouths = G.population.national.mouths;
-    var dingAgeMin = (G.population.corvee && G.population.corvee.dingAgeMin) || 16;
-    // 计算新成丁（age_11_20 层中达到 dingAgeMin 的比例）
-    var newlyAdultRate = mr / 120;
-    var newlyAdult = Math.round(pyramid.age_11_20 * newlyAdultRate);
-    pyramid._newlyAdult = newlyAdult;
-    // 脱丁（age_51_60 层每月有部分满 60）
-    var leavingDing = Math.round(pyramid.age_51_60 * (mr / 120));
-    pyramid._leavingDing = leavingDing;
-    // 更新总丁（如 G.population.ding 存在）
-    if (G.population.national.ding !== undefined) {
-      G.population.national.ding += newlyAdult - leavingDing;
-      G.population.national.ding = Math.max(0, G.population.national.ding);
-    }
+    return global.GM.population.agePyramidFine;
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -443,30 +421,60 @@
     _initPlagueWarFields();
     var G = global.GM;
     if (!global.HujiEngine || typeof global.HujiEngine.applyPopulationLoss !== 'function') throw new Error('人口损失账本不可用');
-    var mortality = global.HujiEngine.applyPopulationLoss({ cause:'historical-plague:' + String(cause || 'plague'), regionId:region && region !== 'national' ? region : '', mouths:scale });
+    var target = region && typeof region === 'object' ? Object.assign({}, region) : {};
+    if (typeof region === 'string' && region && region !== 'national') target.regionCandidates = [region];
+    var mortality = global.HujiEngine.applyPopulationLoss(Object.assign(target, {
+      cause:'historical-plague:' + String(cause || 'plague'),
+      mouths:scale
+    }));
     if (!mortality || mortality.ok === false) throw new Error('历史瘟疫人口损失落账失败: ' + String(mortality && mortality.reason || 'unknown'));
     G.population.plagueEvents.push({
       turn: G.turn || 0,
       scale: mortality.mouths,
-      region: region || 'national',
+      factionId:mortality.factionId,
+      regionId:mortality.regionId || '',
+      region:mortality.regionName || (typeof region === 'string' ? region : 'national'),
       cause: cause || '瘟疫',
       deaths: mortality.mouths
     });
-    if (global.addEB) global.addEB('瘟疫', (region || '各地') + '大疫，殒 ' + Math.round(mortality.mouths) + ' 口');
+    if (global.addEB) global.addEB('瘟疫', (mortality.regionName || (typeof region === 'string' ? region : '各地')) + '大疫，殒 ' + Math.round(mortality.mouths) + ' 口');
+    return mortality;
   }
 
   function recordWarCasualty(scale, warName, side) {
     _initPlagueWarFields();
     var G = global.GM;
     if (!global.HujiEngine || typeof global.HujiEngine.applyPopulationLoss !== 'function') throw new Error('人口损失账本不可用');
-    var mortality = global.HujiEngine.applyPopulationLoss({ cause:'war-casualty:' + String(warName || 'unknown'), mouths:scale, ding:Math.round(scale * 0.6) });
+    var spec = scale && typeof scale === 'object' && !Array.isArray(scale)
+      ? Object.assign({}, scale)
+      : { mouths:scale, warName:warName, side:side };
+    var sideTarget = spec.side && typeof spec.side === 'object' && !Array.isArray(spec.side)
+      ? spec.side
+      : null;
+    var sideName = sideTarget ? '' : String(spec.side || 'own').trim().toLowerCase();
+    if (!sideTarget && sideName !== 'own' && sideName !== 'player' && sideName !== 'self') {
+      return { ok:false, reason:'faction-target-required', mouths:0, ding:0 };
+    }
+    var target = Object.assign({}, sideTarget || {}, {
+      factionId:spec.factionId != null ? spec.factionId : sideTarget && sideTarget.factionId,
+      regionId:spec.regionId != null ? spec.regionId : sideTarget && sideTarget.regionId,
+      cause:'war-casualty:' + String(spec.warName || warName || 'unknown'),
+      mouths:spec.mouths,
+      ding:spec.ding != null ? spec.ding : Math.round((Number(spec.mouths) || 0) * 0.6)
+    });
+    if (target.factionId == null) delete target.factionId;
+    if (target.regionId == null) delete target.regionId;
+    var mortality = global.HujiEngine.applyPopulationLoss(target);
     if (!mortality || mortality.ok === false) throw new Error('战亡人口损失落账失败: ' + String(mortality && mortality.reason || 'unknown'));
     G.population.warCasualties.push({
       turn: G.turn || 0,
       scale: mortality.mouths,
-      warName: warName || '',
-      side: side || 'own'
+      factionId:mortality.factionId,
+      regionId:mortality.regionId || '',
+      warName:spec.warName || warName || '',
+      side:spec.side && typeof spec.side !== 'object' ? spec.side : (mortality.factionId || 'own')
     });
+    return mortality;
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -502,8 +510,23 @@
   function tick(ctx) {
     ctx = ctx || {};
     var mr = ctx.monthRatio || 1;
-    try { tickAgePyramidFine(mr); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'hist] agePyramid:') : console.error('[hist] agePyramid:', e); }
-    try { _initPlagueWarFields(); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-historical-presets');}catch(_){}}
+    var strict = ctx.strict === true;
+    var failures = [];
+    function runStep(label, fn) {
+      try { return fn(); }
+      catch (error) {
+        try {
+          if (window.TM && TM.errors && TM.errors.capture) TM.errors.capture(error, 'hist] ' + label + ':');
+          else console.error('[hist] ' + label + ':', error);
+        } catch (_) {}
+        if (strict) throw error;
+        failures.push({ step:label, error:String(error && error.message || error) });
+        return null;
+      }
+    }
+    runStep('agePyramid', function() { tickAgePyramidFine(mr); });
+    runStep('plagueWarFields', _initPlagueWarFields);
+    return { ok:failures.length === 0, failures:failures };
   }
 
   function init() {

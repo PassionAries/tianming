@@ -248,7 +248,7 @@ async function _endTurn_updateSystems(timeRatio, zhengwen) {
   // 6.15 历史补完（年龄金字塔精细化+疫病战亡字段维护）
   try {
     if (typeof HistoricalPresets !== 'undefined') {
-      HistoricalPresets.tick({ turn: GM.turn, monthRatio: monthRatio, _monthRatio: monthRatio });
+      HistoricalPresets.tick({ turn: GM.turn, monthRatio: monthRatio, _monthRatio: monthRatio, strict: true });
     }
   } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'endTurn] HistoricalPresets.tick 失败:') : console.error('[endTurn] HistoricalPresets.tick 失败:', e); throw e; }
 

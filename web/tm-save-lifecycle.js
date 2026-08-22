@@ -1197,6 +1197,24 @@ function _tmCollectAdminDivisionEntries(targetGM) {
 
 function _tmAssignMissingStableIds(targetGM, kind, entries) {
   entries = Array.isArray(entries) ? entries : [];
+  var unresolvedFingerprints = Object.create(null);
+  entries.forEach(function(entry, index) {
+    var item = entry && entry.item;
+    if (!item || !_tmStableIdMissing(item.id)) return;
+    var parts = _tmStableIdentityParts(kind, item);
+    if (!parts.length) return;
+    var parentIdentity = '';
+    if (kind === 'division' && entry.identityPath) {
+      var identitySegments = String(entry.identityPath).split('/');
+      identitySegments.pop();
+      parentIdentity = identitySegments.join('/');
+    }
+    var fingerprint = parts.join('|') + (parentIdentity ? '|parent:' + parentIdentity : '');
+    if (_tmHasOwn(unresolvedFingerprints, fingerprint)) {
+      throw new Error('旧存档 ' + kind + ' 身份歧义：' + String(unresolvedFingerprints[fingerprint]) + ' 与 ' + String(entry.path || index) + ' 缺少可区分的稳定来源字段');
+    }
+    unresolvedFingerprints[fingerprint] = entry.path || index;
+  });
   var used = Object.create(null);
   entries.forEach(function(entry) {
     var item = entry && entry.item;
@@ -1333,9 +1351,9 @@ function _tmMigrateCoreStableIds(targetGM) {
   _tmBackfillStableForeignKeys(targetGM);
   if (result.total > 0) {
     if (!targetGM._stableIdMigration || typeof targetGM._stableIdMigration !== 'object') {
-      targetGM._stableIdMigration = { version: 2, totalAssigned: 0, byType: {} }; // arch-ok: schema 迁移收据
+      targetGM._stableIdMigration = { version: 3, totalAssigned: 0, byType: {} }; // arch-ok: schema 迁移收据
     }
-    targetGM._stableIdMigration.version = 2;
+    targetGM._stableIdMigration.version = 3;
     targetGM._stableIdMigration.totalAssigned = Number(targetGM._stableIdMigration.totalAssigned || 0) + result.total;
     Object.keys(result.byType).forEach(function(kind) {
       targetGM._stableIdMigration.byType[kind] = Number(targetGM._stableIdMigration.byType[kind] || 0) + result.byType[kind];

@@ -84,7 +84,7 @@ console.log('[smoke-stable-id-reference-integrity]');
     'legacy character IDs remain stable when array order changes');
   ok(regionsA['京畿'] === regionsB['京畿'] && regionsA['江南'] === regionsB['江南'],
     'legacy region IDs are based on semantic identity rather than array position');
-  ok(first._stableIdMigration.version === 2, 'order-independent migration records schema version 2');
+  ok(first._stableIdMigration.version === 3, 'order-independent migration records schema version 3');
 }
 
 {
@@ -155,6 +155,19 @@ console.log('[smoke-stable-id-reference-integrity]');
   try { context._tmValidateStableForeignKeys(world); }
   catch (error) { rejected = /spouseId.*不存在/.test(error.message); }
   ok(rejected, 'dangling kinship IDs are rejected before gameplay opens');
+}
+
+{
+  const world = legacyWorld(['甲', '乙']);
+  world.chars = [
+    { name:'张三', gender:'男', faction:'朝廷' },
+    { name:'张三', gender:'男', faction:'朝廷' }
+  ];
+  let rejected = false;
+  try { context._tmMigrateCoreStableIds(world); }
+  catch (error) { rejected = /身份歧义/.test(error.message); }
+  ok(rejected && world.chars.every(char => !char.id),
+    'indistinguishable legacy entities are rejected before path order can become identity');
 }
 
 console.log('\n[smoke-stable-id-reference-integrity] ' + pass + ' passed / ' + fail + ' failed');

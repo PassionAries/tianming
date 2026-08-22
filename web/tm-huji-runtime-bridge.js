@@ -45,6 +45,36 @@
     return Math.max(0, Math.round(number(v, 0)));
   }
 
+  // 最大余数法：所有人口分类统一从这里取得精确整数分配，避免小总量下
+  // 多个 Math.round() 使分项合计超过总数。
+  function allocateExact(total, weights) {
+    total = round(total);
+    weights = weights && typeof weights === 'object' ? weights : {};
+    var keys = Object.keys(weights);
+    var out = {};
+    keys.forEach(function(key) { out[key] = 0; });
+    if (!keys.length || !total) return out;
+    var weightTotal = keys.reduce(function(sum, key) {
+      return sum + Math.max(0, number(weights[key], 0));
+    }, 0);
+    if (!(weightTotal > 0)) {
+      keys.forEach(function(key) { weights[key] = 1; });
+      weightTotal = keys.length;
+    }
+    var ranked = [];
+    var assigned = 0;
+    keys.forEach(function(key, index) {
+      var quota = total * Math.max(0, number(weights[key], 0)) / weightTotal;
+      var value = Math.floor(quota);
+      out[key] = value;
+      assigned += value;
+      ranked.push({ key:key, index:index, fraction:quota - value });
+    });
+    ranked.sort(function(a, b) { return b.fraction - a.fraction || a.index - b.index; });
+    for (var i = 0; i < total - assigned; i++) out[ranked[i % ranked.length].key]++;
+    return out;
+  }
+
   function round2(v) {
     return Math.round(number(v, 0) * 100) / 100;
   }
@@ -325,8 +355,7 @@
       addNumericBuckets(byAge, d.byAge);
       addNumericBuckets(byGender, d.byGender);
       addPopulationBreakdown(byLegalStatus, d.byLegalStatus);
-      region.populationDetail = Object.assign({}, region.populationDetail || {}, d);
-      byRegion[id] = Object.assign({}, d, {
+      var canonical = Object.assign({}, region.populationDetail || {}, d, {
         id: id,
         name: region.name || id,
         regionType: region.regionType || region.type || region.kind || '',
@@ -339,10 +368,26 @@
         minxin: number(region.minxinLocal || region.minxin || (region.minxinDetail && region.minxinDetail.trueIndex), 0),
         corruption: number(region.corruptionLocal || region.corruption || (region.corruptionDetail && region.corruptionDetail.true), 0),
         taxLevel: region.taxLevel || '',
+        baojiaUnits: round(region.baojiaUnits || (region.populationDetail && region.populationDetail.baojiaUnits) || 0),
+        lijiaUnits: round(region.lijiaUnits || (region.populationDetail && region.populationDetail.lijiaUnits) || 0),
         fiscalDetail: clone(region.fiscalDetail || {}),
         corveeDetail: clone(region.corveeDetail || {}),
         militaryDetail: clone(region.militaryDetail || {})
       });
+      region.populationDetail = canonical;
+      region.byAge = canonical.byAge;
+      region.byGender = canonical.byGender;
+      region.byLegalStatus = canonical.byLegalStatus;
+      if (region.population && typeof region.population === 'object' && region.population !== canonical) {
+        region.population.mouths = canonical.mouths;
+        region.population.households = canonical.households;
+        region.population.ding = canonical.ding;
+        region.population.hiddenCount = canonical.hiddenCount;
+        region.population.fugitives = canonical.fugitives;
+      }
+      // byRegion 是叶级权威表；值与 division.populationDetail 保持同一引用，
+      // 任何保甲、逃户或人口治理修改都会真正落到行政区账本。
+      byRegion[id] = canonical;
     });
 
     var hasRegionalTotals = leaves.length > 0 || totals.households || totals.mouths || totals.ding;
@@ -353,8 +398,33 @@
     var scenarioHidden = round(initial.hiddenPopulation || initial.hiddenCount || initial.unregisteredPopulation || 0);
     var existingHidden = round(root.population && (root.population.hiddenCount || root.population.hiddenPopulation || root.population.unregisteredPopulation) || 0);
     var emptyAuthoritativePlayer = options.authoritativePlayerPopulation === true && leaves.length === 0;
-    var hiddenCount = emptyAuthoritativePlayer ? 0 : Math.max(totals.hiddenCount, scenarioHidden, existingHidden);
-    var fugitives = emptyAuthoritativePlayer ? 0 : Math.max(totals.fugitives, round(root.population && root.population.fugitives || 0), round(root.hukou && (root.hukou.refugees || root.hukou.fugitives) || 0));
+    var existingFugitives = Math.max(round(root.population && root.population.fugitives || 0), round(root.hukou && (root.hukou.refugees || root.hukou.fugitives) || 0));
+    if (options.authoritativePlayerPopulation === true && leaves.length && root.population._leafPopulationAuxAuthoritative !== true) {
+      var targetHidden = Math.max(totals.hiddenCount, scenarioHidden, existingHidden);
+      var targetFugitives = Math.max(totals.fugitives, existingFugitives);
+      var weights = {};
+      leaves.forEach(function(region, index) {
+        var id = String(region.id || region.name || ('region-' + index));
+        weights[id] = Math.max(0, number(byRegion[id] && byRegion[id].mouths, 0));
+      });
+      var hiddenAdditions = allocateExact(targetHidden - totals.hiddenCount, weights);
+      var fugitiveAdditions = allocateExact(targetFugitives - totals.fugitives, weights);
+      leaves.forEach(function(region, index) {
+        var id = String(region.id || region.name || ('region-' + index));
+        var row = byRegion[id];
+        row.hiddenCount = round(row.hiddenCount) + round(hiddenAdditions[id]);
+        row.hidden = row.hiddenCount;
+        row.fugitives = round(row.fugitives) + round(fugitiveAdditions[id]);
+        region.hiddenCount = row.hiddenCount;
+        region.hidden = row.hiddenCount;
+        region.fugitives = row.fugitives;
+      });
+      totals.hiddenCount = targetHidden;
+      totals.fugitives = targetFugitives;
+      root.population._leafPopulationAuxAuthoritative = true;
+    }
+    var hiddenCount = emptyAuthoritativePlayer ? 0 : (options.authoritativePlayerPopulation === true ? totals.hiddenCount : Math.max(totals.hiddenCount, scenarioHidden, existingHidden));
+    var fugitives = emptyAuthoritativePlayer ? 0 : (options.authoritativePlayerPopulation === true ? totals.fugitives : Math.max(totals.fugitives, existingFugitives));
     return {
       national: { households: households, mouths: mouths, ding: ding },
       hiddenCount: hiddenCount,
@@ -392,7 +462,7 @@
   function materializeCategories(root, config, aggregate) {
     var existing = root.population && root.population.byCategory || {};
     var descs = (config && config.categoryDescriptions) || {};
-    var enabled = unique((config && config.categoryEnabled) || Object.keys(existing));
+    var enabled = unique(((config && config.categoryEnabled) || Object.keys(existing)).concat(Object.keys(existing)));
     if (!enabled.length) enabled = ['bianhu', 'junhu', 'jianghu', 'sengdao', 'yuehu'];
     var rawShares = {};
     var totalShare = 0;
@@ -405,28 +475,21 @@
       totalShare = 0.98;
     }
     var out = {};
-    var assigned = { households: 0, mouths: 0, ding: 0 };
-    enabled.forEach(function(cat, idx) {
+    var allocations = {
+      households:allocateExact(aggregate.national.households, rawShares),
+      mouths:allocateExact(aggregate.national.mouths, rawShares),
+      ding:allocateExact(aggregate.national.ding, rawShares)
+    };
+    enabled.forEach(function(cat) {
       var desc = descs[cat] || (existing[cat] && (existing[cat].description || existing[cat].name)) || cat;
       var tmpl = templateForCategory(cat, desc);
-      var share = totalShare > 0 ? rawShares[cat] / totalShare : (1 / enabled.length);
-      var isLast = idx === enabled.length - 1;
-      var households = isLast ? Math.max(0, aggregate.national.households - assigned.households) : round(aggregate.national.households * share);
-      var mouths = isLast ? Math.max(0, aggregate.national.mouths - assigned.mouths) : round(aggregate.national.mouths * share);
-      var ding = isLast ? Math.max(0, aggregate.national.ding - assigned.ding) : round(aggregate.national.ding * share);
-      assigned.households += households;
-      assigned.mouths += mouths;
-      assigned.ding += ding;
-      out[cat] = Object.assign({}, tmpl, {
+      out[cat] = Object.assign({}, existing[cat] || {}, tmpl, {
         id: cat,
-        households: households,
-        mouths: mouths,
-        ding: ding,
+        households: allocations.households[cat] || 0,
+        mouths: allocations.mouths[cat] || 0,
+        ding: allocations.ding[cat] || 0,
         source: 'scenario-runtime-bridge'
       });
-    });
-    Object.keys(existing).forEach(function(cat) {
-      if (!out[cat]) out[cat] = clone(existing[cat]);
     });
     return out;
   }
@@ -442,37 +505,38 @@
     var fugitiveHouseholds = estimateHiddenHouseholds(aggregate.fugitives, national);
     var extras = clone(aggregate.byLegalStatus || {});
     ['huangji', 'baiji', 'taohu', 'yinhu'].forEach(function(key) { delete extras[key]; });
-    var classified = { households:0, mouths:0, ding:0 };
-    Object.keys(extras).forEach(function(key) {
-      classified.households += round(extras[key] && extras[key].households);
-      classified.mouths += round(extras[key] && extras[key].mouths);
-      classified.ding += round(extras[key] && extras[key].ding);
+    function legalWeights(field, total, hiddenValue, fugitiveValue) {
+      var weights = {};
+      var classified = 0;
+      Object.keys(extras).forEach(function(key) {
+        var value = round(extras[key] && extras[key][field]);
+        weights[key] = value;
+        classified += value;
+      });
+      hiddenValue = round(hiddenValue);
+      fugitiveValue = round(fugitiveValue);
+      var visible = Math.max(0, round(total) - hiddenValue - fugitiveValue - classified);
+      weights.huangji = visible * 0.94;
+      weights.baiji = visible * 0.06;
+      weights.taoohu = fugitiveValue;
+      weights.yinhu = hiddenValue;
+      return allocateExact(total, weights);
+    }
+    var allocations = {
+      households:legalWeights('households', national.households, hiddenHouseholds, fugitiveHouseholds),
+      mouths:legalWeights('mouths', national.mouths, aggregate.hiddenCount, aggregate.fugitives),
+      ding:legalWeights('ding', national.ding, round(aggregate.hiddenCount * 0.30), round(aggregate.fugitives * 0.30))
+    };
+    var out = {};
+    var keys = unique(Object.keys(extras).concat(['huangji', 'baiji', 'taoohu', 'yinhu']));
+    keys.forEach(function(key) {
+      out[key] = Object.assign({}, extras[key] || {}, {
+        households:allocations.households[key] || 0,
+        mouths:allocations.mouths[key] || 0,
+        ding:allocations.ding[key] || 0
+      });
     });
-    var visibleHouseholds = Math.max(0, national.households - hiddenHouseholds - fugitiveHouseholds - classified.households);
-    var visibleMouths = Math.max(0, national.mouths - aggregate.hiddenCount - aggregate.fugitives - classified.mouths);
-    var visibleDing = Math.max(0, national.ding - round((aggregate.hiddenCount + aggregate.fugitives) * 0.30) - classified.ding);
-    return Object.assign({}, extras, {
-      huangji: {
-        households: round(visibleHouseholds * 0.94),
-        mouths: round(visibleMouths * 0.94),
-        ding: round(visibleDing * 0.94)
-      },
-      baiji: {
-        households: round(visibleHouseholds * 0.06),
-        mouths: round(visibleMouths * 0.06),
-        ding: round(visibleDing * 0.06)
-      },
-      taoohu: {
-        households: fugitiveHouseholds,
-        mouths: round(aggregate.fugitives),
-        ding: round(aggregate.fugitives * 0.30)
-      },
-      yinhu: {
-        households: hiddenHouseholds,
-        mouths: round(aggregate.hiddenCount),
-        ding: round(aggregate.hiddenCount * 0.30)
-      }
-    });
+    return out;
   }
 
   function syncHukou(root, aggregate, options) {
@@ -493,6 +557,7 @@
     });
     root.population.hiddenCount = aggregate.hiddenCount;
     root.population.fugitives = aggregate.fugitives;
+    root.population.byLeafRegion = aggregate.byRegion;
     root.population.byRegion = aggregate.byRegion;
     root.population.byAge = clone(aggregate.byAge || {});
     root.population.ageLayers = clone(aggregate.byAge || {});

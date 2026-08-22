@@ -341,8 +341,9 @@
         dd: Math.floor(nationalMouths / divCount * 0.25),
         mx: avgMx
       });
-      // 尝试从旧 GM.population.byRegion[div.id 或 div.name] 迁移
-      var legacyPop = G.population && G.population.byRegion && (G.population.byRegion[div.id] || G.population.byRegion[div.name]);
+      // 顶级人口代理已从叶级 byRegion 拆到 byProvince；旧档仍兼容读取 byRegion。
+      var provincePopulation = G.population && (G.population.byProvince || G.population.byRegion);
+      var legacyPop = provincePopulation && (provincePopulation[div.id] || provincePopulation[div.name]);
       if (legacyPop && legacyPop.mouths && !div._migrated) {
         div.population.mouths = legacyPop.mouths;
         div.population.households = legacyPop.households || Math.floor(legacyPop.mouths / 5);
@@ -394,15 +395,18 @@
   }
 
   function _updateLegacyProxies(G) {
-    // 为旧代码兼容，把 byRegion 对象重建为当前 division 的代理。
+    // population.byRegion 永久保持叶级粒度并与 populationDetail 同一引用；
+    // 顶级省/路代理独立放在 byProvince，不能再让一个字段在两种形状间切换。
     // 必须每次构造新表并原子替换；在旧对象上增量写会让已删除、合并或改 ID
     // 的区划继续作为“幽灵地区”参与后续户籍与财政结算。
     var topLevel = getTopLevelDivisions(G.adminHierarchy, 'player');
+    var leaves = getLeafDivisions(G.adminHierarchy, 'player');
     if (!G.population) G.population = {};
     if (!G.minxin) G.minxin = {};
     if (!G.fiscal) G.fiscal = {};
     if (!G.environment) G.environment = {};
-    var nextPopulation = {};
+    var nextLeafPopulation = {};
+    var nextProvincePopulation = {};
     var nextMinxin = {};
     var nextFiscal = {};
     var nextEnvironment = {};
@@ -410,8 +414,7 @@
 
     topLevel.forEach(function(div) {
       var id = String(div.id);
-      // byRegion.<id> 指向 division
-      nextPopulation[id] = div.population;
+      nextProvincePopulation[id] = div.population;
       // minxin byRegion 必须包含 .index（热力图读此字段）
       if (div.minxinDetails) {
         if (div.minxinDetails.index === undefined) {
@@ -427,7 +430,30 @@
       nextRegionMap[id] = div;
     });
 
-    G.population.byRegion = nextPopulation;
+    leaves.forEach(function(div, index) {
+      var id = String(div.id || div.name || ('region-' + index));
+      var detail = div.populationDetail && typeof div.populationDetail === 'object'
+        ? div.populationDetail
+        : (div.population && typeof div.population === 'object' ? div.population : {});
+      if (!detail || typeof detail !== 'object') detail = {};
+      if (!isFinite(Number(detail.mouths))) {
+        detail.mouths = typeof div.population === 'number' ? Number(div.population) || 0 : Number(div.mouths) || 0;
+      }
+      if (!isFinite(Number(detail.households))) detail.households = Math.round((Number(detail.mouths) || 0) / 5);
+      if (!isFinite(Number(detail.ding))) detail.ding = Math.round((Number(detail.mouths) || 0) * 0.25);
+      detail.id = id;
+      detail.name = div.name || id;
+      detail.regionType = div.regionType || div.type || div.kind || detail.regionType || '';
+      detail.hiddenCount = Math.max(0, Math.round(Number(detail.hiddenCount != null ? detail.hiddenCount : detail.hidden) || 0));
+      detail.hidden = detail.hiddenCount;
+      detail.fugitives = Math.max(0, Math.round(Number(detail.fugitives) || 0));
+      div.populationDetail = detail;
+      nextLeafPopulation[id] = detail;
+    });
+
+    G.population.byLeafRegion = nextLeafPopulation;
+    G.population.byRegion = nextLeafPopulation;
+    G.population.byProvince = nextProvincePopulation;
     G.minxin.byRegion = nextMinxin;
     G.fiscal.regions = nextFiscal;
     G.environment.byRegion = nextEnvironment;
@@ -703,7 +729,7 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  反向：AI 改 byRegion → 同步到 division
+  //  反向：AI 改区域代理 → 同步到 division
   // ═══════════════════════════════════════════════════════════════════
 
   function syncDivisionFromByRegion(rid) {
@@ -712,8 +738,8 @@
     var topLevel = getTopLevelDivisions(G.adminHierarchy, 'player');
     var div = topLevel.find(function(d) { return d.id === rid || d.name === rid; });
     if (!div) return;
-    if (G.population && G.population.byRegion && G.population.byRegion[rid] && div.population !== G.population.byRegion[rid]) {
-      // 已经是同一引用（代理），无需复制
+    if (G.population && G.population.byProvince && G.population.byProvince[rid] && div.population !== G.population.byProvince[rid]) {
+      div.population = G.population.byProvince[rid];
     }
     if (G.minxin && G.minxin.byRegion && G.minxin.byRegion[rid]) {
       div.minxinDetails = G.minxin.byRegion[rid];

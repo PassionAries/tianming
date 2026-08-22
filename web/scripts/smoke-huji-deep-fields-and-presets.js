@@ -114,7 +114,7 @@ assert(P.deepFieldEffects.serviceAgeDing > 0, 'age/gender fields should compute 
 assert(P.deepFieldEffects.serviceAgeDing < before.serviceDing, 'service-age ding should constrain national ding/pool');
 assert(P.corvee.deepFieldEffects && P.corvee.deepFieldEffects.effectiveDing <= P.deepFieldEffects.serviceAgeDing, 'corvee should use service-age ding');
 assert(P.military.deepFieldEffects && P.military.totalPool <= P.deepFieldEffects.serviceAgeDing, 'military pool should use service-age ding');
-assert(P.byRegion.frontier.byGender.male < before.maleFrontier, 'active war should reduce male population through gender field');
+assert(P.byRegion.frontier.byGender.male === before.maleFrontier, 'legacy gender proxy must not become a second war-mortality producer');
 assert(P.byRegion.capital.hidden < before.hiddenCapital, 'baojia should reduce hidden households in covered region');
 assert(P.byRegion.capital.fugitives < before.fugitivesCapital, 'baojia should reduce fugitives in covered region');
 assert(P.byRegion.frontier.fugitives > before.fugitivesFrontier, 'low-trust heterogeneous frontier should create fugitive pressure');

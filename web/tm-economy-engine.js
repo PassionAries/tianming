@@ -645,19 +645,7 @@
     if (!E || !E.byRegion) return [];
     if (regionId && regionId !== 'all' && E.byRegion[regionId]) return [regionId];
     if (regionId && regionId !== 'all') return [];
-    return Object.keys(E.byRegion);
-  }
-
-  function _findEnvReceivingRegion(fromId) {
-    var E = global.GM && global.GM.environment;
-    if (!E || !E.byRegion) return null;
-    var best = null;
-    Object.keys(E.byRegion).forEach(function(rid) {
-      if (rid === fromId) return;
-      var reg = E.byRegion[rid] || {};
-      if (!best || _envFiniteNumber(reg.currentLoad, 0.5) < _envFiniteNumber(E.byRegion[best].currentLoad, 0.5)) best = rid;
-    });
-    return best;
+    return Object.keys(E.byRegion).sort();
   }
 
   function _pushEnvPolicyHistory(entry) {
@@ -677,27 +665,88 @@
     })[0];
   }
 
-  function _applyEnvironmentMigration(rid, share, destinationId) {
-    if (!global.HujiEngine || typeof global.HujiEngine.transferPopulation !== 'function') {
-      return { ok:false, reason:'population-transfer-ledger-unavailable' };
-    }
-    var source = _environmentPopulationScope(rid);
-    var destination = _environmentPopulationScope(destinationId);
-    if (!source.ok || !source.leafIds.length) return { ok:false, reason:'source-population-scope-not-found' };
-    if (!destination.ok || !destination.leafIds.length) return { ok:false, reason:'target-population-scope-not-found' };
-    var target = _pickEnvironmentMigrationTarget(destination);
-    if (!target) return { ok:false, reason:'target-region-not-found' };
-    var amount = Math.max(0, Math.min(source.mouths, Math.round(source.mouths * Math.max(0, Number(share) || 0))));
-    if (!amount) return { ok:true, mouths:0, households:0, ding:0, targetRegionId:target.id };
-    var result = global.HujiEngine.transferPopulation({
-      sourceRegionIds:source.leafIds,
-      targetRegionId:target.id,
-      mouths:amount,
-      cause:'environment-policy:migration-relief'
+  function _snapshotEnvironmentMigrationRows() {
+    var E = global.GM && global.GM.environment;
+    if (!E || !E.byRegion) return [];
+    return Object.keys(E.byRegion).sort().map(function(rid) {
+      var reg = E.byRegion[rid];
+      var scope = _environmentPopulationScope(rid);
+      if (!scope.ok || !scope.leafIds.length) {
+        throw new Error('环境政策地区无法解析人口层级: ' + rid);
+      }
+      var target = _pickEnvironmentMigrationTarget(scope);
+      if (!target) throw new Error('迁民减压缺少可用叶级地区: ' + rid);
+      return {
+        regionId:rid,
+        currentLoad:_envFiniteNumber(reg && reg.currentLoad, 0.5),
+        mouths:Math.max(0, Math.round(_envFiniteNumber(scope.mouths, 0))),
+        leafIds:scope.leafIds.slice(),
+        targetLeafRegionId:String(target.id)
+      };
     });
-    if (!result || result.ok === false) return result || { ok:false, reason:'population-transfer-failed' };
-    if (Number(result.mouths) !== amount) return { ok:false, reason:'population-transfer-incomplete' };
-    return result;
+  }
+
+  function _compareEnvironmentMigrationRows(a, b) {
+    return a.currentLoad - b.currentLoad
+      || a.mouths - b.mouths
+      || String(a.regionId).localeCompare(String(b.regionId));
+  }
+
+  function _planEnvironmentMigrations(regionIds, share, allRegions) {
+    var rows = _snapshotEnvironmentMigrationRows();
+    var selected = {};
+    (regionIds || []).forEach(function(rid) { selected[String(rid)] = true; });
+    var sources = rows.filter(function(row) { return !!selected[row.regionId]; });
+    var receiver = rows.slice().sort(_compareEnvironmentMigrationRows)[0] || null;
+    if (!receiver || rows.length < 2) throw new Error('迁民减压缺少接纳地区');
+    if (allRegions) {
+      sources = sources.filter(function(row) {
+        return row.regionId !== receiver.regionId
+          && row.currentLoad > 1
+          && row.currentLoad > receiver.currentLoad;
+      });
+    } else {
+      receiver = rows.filter(function(row) { return row.regionId !== sources[0].regionId; })
+        .sort(_compareEnvironmentMigrationRows)[0] || null;
+      if (!receiver) throw new Error('迁民减压缺少接纳地区: ' + (sources[0] && sources[0].regionId || 'unknown'));
+    }
+    var ratio = Math.max(0, Number(share) || 0);
+    return sources.slice().sort(function(a, b) {
+      return String(a.regionId).localeCompare(String(b.regionId));
+    }).map(function(source) {
+      return {
+        sourceRegionId:source.regionId,
+        sourceLeafIds:source.leafIds.slice(),
+        targetRegionId:receiver.regionId,
+        targetLeafRegionId:receiver.targetLeafRegionId,
+        mouths:Math.max(0, Math.min(source.mouths, Math.round(source.mouths * ratio)))
+      };
+    }).filter(function(item) { return item.mouths > 0; });
+  }
+
+  function _executeEnvironmentMigrationPlan(plan) {
+    if (!global.HujiEngine || typeof global.HujiEngine.transferPopulation !== 'function') {
+      throw new Error('迁民减压人口账本不可用');
+    }
+    var bySource = {};
+    var affected = {};
+    (plan || []).forEach(function(item) {
+      var result = global.HujiEngine.transferPopulation({
+        sourceRegionIds:item.sourceLeafIds,
+        targetRegionId:item.targetLeafRegionId,
+        mouths:item.mouths,
+        cause:'environment-policy:migration-relief'
+      });
+      if (!result || result.ok === false) {
+        throw new Error('迁民减压人口落账失败: ' + String(result && result.reason || 'unknown'));
+      }
+      if (Number(result.mouths) !== item.mouths) throw new Error('迁民减压人口落账不完整');
+      result.toRegionId = item.targetRegionId;
+      bySource[item.sourceRegionId] = result;
+      affected[item.sourceRegionId] = true;
+      affected[item.targetRegionId] = true;
+    });
+    return { bySource:bySource, affectedRegionIds:Object.keys(affected).sort() };
   }
 
   function _applyPolicyImmediateEffect(policy, policyId, regionId) {
@@ -706,21 +755,24 @@
     if (!G || !E || !E.byRegion || !policy) return { regions: [] };
     var effect = policy.effect || {};
     var summary = { regions: [], migrated: 0, techBoosted: 0, restored: 0 };
-    _envRegionIds(regionId).forEach(function(rid) {
+    var regionIds = _envRegionIds(regionId);
+    var migrationBatch = { bySource:{}, affectedRegionIds:[] };
+    if (effect.migrateShare) {
+      var migrationPlan = _planEnvironmentMigrations(regionIds, effect.migrateShare, regionId === 'all');
+      migrationBatch = _executeEnvironmentMigrationPlan(migrationPlan);
+    }
+    regionIds.forEach(function(rid) {
       var reg = E.byRegion[rid];
       if (!reg) return;
       if (!_environmentPopulationScope(rid).ok) throw new Error('环境政策地区无法解析人口层级: ' + rid);
       var row = { regionId: rid };
 
-      if (effect.migrateShare) {
-        var destId = _findEnvReceivingRegion(rid);
-        if (!destId) throw new Error('迁民减压缺少接纳地区: ' + rid);
-        var migration = _applyEnvironmentMigration(rid, effect.migrateShare, destId);
-        if (!migration || migration.ok === false) throw new Error('迁民减压人口落账失败: ' + String(migration && migration.reason || 'unknown'));
+      var migration = migrationBatch.bySource[rid];
+      if (migration) {
         row.migrated = Number(migration.mouths) || 0;
         row.migratedHouseholds = Number(migration.households) || 0;
         row.migratedDing = Number(migration.ding) || 0;
-        row.toRegionId = destId;
+        row.toRegionId = migration.toRegionId || '';
         row.toLeafRegionId = migration.targetRegionId || '';
         summary.migrated += row.migrated;
       }
@@ -775,8 +827,15 @@
         row.loadRelief = effect.loadRelief;
       }
 
-      _recomputeRegionCarrying(rid, reg);
       summary.regions.push(row);
+    });
+    var recomputeIds = {};
+    regionIds.concat(migrationBatch.affectedRegionIds || []).forEach(function(rid) {
+      recomputeIds[String(rid)] = true;
+    });
+    Object.keys(recomputeIds).sort().forEach(function(rid) {
+      var reg = E.byRegion[rid];
+      if (reg) _recomputeRegionCarrying(rid, reg);
     });
     _recomputeNationalCarrying();
     _pushEnvPolicyHistory({

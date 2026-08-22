@@ -2,7 +2,7 @@
   "type": "tianming-hot-update",
   "version": "1.3.4.11",
   "entry": "index.html",
-  "generatedAt": "2026-08-22T13:00:13.952Z",
+  "generatedAt": "2026-08-22T14:09:14.926Z",
   "files": [
     {
       "path": "_preview_map.json",
@@ -2161,8 +2161,8 @@
     },
     {
       "path": "index.html",
-      "sha256": "789cffb0d89a075f0f0d9cbb0957284edc3f6d06f0088f04a82dba9fff2d671f",
-      "size": 68643
+      "sha256": "b76c384e09305ad2f51427cb25adc58fc379057f7f5a6591c251da369357ef29",
+      "size": 68647
     },
     {
       "path": "INDEX.md",
@@ -3821,8 +3821,8 @@
     },
     {
       "path": "tm-economy-engine.js",
-      "sha256": "15665d9ff9198ffc984e77009dd3871da3fc3ab2ea34ba1b55d07ae47040f7f3",
-      "size": 118819
+      "sha256": "98f9bddf5ef736357f63cf1856d18a3812eb9c087716e25f4c680d55945211ce",
+      "size": 121718
     },
     {
       "path": "tm-economy.js",
@@ -4951,8 +4951,8 @@
     },
     {
       "path": "tm-patches-start.js",
-      "sha256": "c1df9437314f74a89364c1aea680851d94b2a82ade151f50b67e036e16db543a",
-      "size": 114927
+      "sha256": "107c06b6c280fab3a7cb097485a24986d89784b8b7469978f876690caa78a441",
+      "size": 115422
     },
     {
       "path": "tm-patches.js",

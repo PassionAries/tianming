@@ -43,6 +43,14 @@ function demographicTotal(leaves) {
   }, { mouths: 0, households: 0, ding: 0, byAge: {}, byGender: {} });
 }
 
+function sameDemographicTotals(a, b) {
+  if (a.mouths !== b.mouths || a.households !== b.households || a.ding !== b.ding) return false;
+  return ['byAge', 'byGender'].every(field => {
+    const keys = new Set(Object.keys(a[field] || {}).concat(Object.keys(b[field] || {})));
+    return Array.from(keys).every(key => Number(a[field] && a[field][key] || 0) === Number(b[field] && b[field][key] || 0));
+  });
+}
+
 const mountainLeaves = [
   makeLeaf('mountain-east', '东山县', 600000),
   makeLeaf('mountain-west', '西山县', 300000)
@@ -184,8 +192,15 @@ const afterPlain = demographicTotal(plainLeaves);
 const afterWorld = demographicTotal(allLeaves);
 assert(afterMountain.mouths < beforeMountain.mouths, 'migration relief should move people out of overloaded province leaves');
 assert(afterPlain.mouths > beforePlain.mouths, 'migration relief should settle people in a receiving province leaf');
-assert(JSON.stringify(afterWorld) === JSON.stringify(beforeWorld),
+assert(sameDemographicTotals(afterWorld, beforeWorld),
   'migration relief should conserve mouths households ding age and gender across provinces');
+const plainEnvironment = ctx.GM.environment.byRegion.plain;
+assert(Math.abs(plainEnvironment.currentLoad - afterPlain.mouths / plainEnvironment.carryingMax) < 1e-12,
+  'migration relief should immediately recompute the receiving province load');
+const expectedNationalLoad = Object.values(ctx.GM.environment.byRegion)
+  .reduce((sum, row) => sum + row.currentLoad, 0) / Object.keys(ctx.GM.environment.byRegion).length;
+assert(Math.abs(ctx.GM.environment.nationalLoad - expectedNationalLoad) < 1e-12,
+  'migration relief should recompute national load from fully refreshed source and target rows');
 assert(ctx.GM.environment.byRegion.mountain.techLevel.irrigation > beforeTech, 'tech investment should raise a real tech level');
 assert(ctx.GM.environment.byRegion.mountain.arableArea > beforeArable, 'disaster recovery should restore arable area');
 
@@ -210,6 +225,111 @@ assert(partialPayment && partialPayment.ok === false
     hierarchy: ctx.GM.adminHierarchy
   }) === partialSnapshot,
 'partial fiscal payment should roll treasury and all policy effects back atomically');
+
+function runAllRegionMigrationOrder(order) {
+  const specs = {
+    highA: { name: '高压甲省', mouths: 900000, load: 1.5 },
+    highB: { name: '高压乙省', mouths: 600000, load: 1.3 },
+    refuge: { name: '承接省', mouths: 300000, load: 0.4 }
+  };
+  const leaves = {};
+  Object.keys(specs).forEach(id => {
+    leaves[id] = makeLeaf(id + '-county', specs[id].name + '县', specs[id].mouths);
+  });
+  const orderMath = Object.create(Math);
+  orderMath.random = () => 1;
+  const orderCtx = {
+    console,
+    Math: orderMath, Date, JSON, RegExp, Error,
+    Array, Object, String, Number, Boolean,
+    parseInt, parseFloat, isFinite, isNaN,
+    setTimeout() { return 1; },
+    clearTimeout() {},
+    addEB() {},
+    toast() {}
+  };
+  orderCtx.window = orderCtx;
+  orderCtx.global = orderCtx;
+  orderCtx.globalThis = orderCtx;
+  orderCtx.TM = { errors: { capture() {}, captureSilent() {} } };
+  orderCtx.GM = {
+    sid: 'env-migration-order',
+    turn: 72,
+    regions: order.map(id => ({ id, name: specs[id].name, unrest: 20 })),
+    guoku: { money: 1000000, grain: 500000, cloth: 0 },
+    minxin: { trueIndex: 60 },
+    adminHierarchy: {
+      player: {
+        factionId: 'player-faction',
+        divisions: order.map(id => ({ id, name: specs[id].name, children: [leaves[id]] }))
+      }
+    },
+    population: {
+      national: { mouths: 1800000, households: 360000, ding: 540000 },
+      byRegion: order.reduce((out, id) => {
+        out[id + '-county'] = leaves[id].populationDetail;
+        return out;
+      }, {}),
+      dynamics: { yearlyLog: [] }
+    }
+  };
+  orderCtx.P = {
+    id: 'env-migration-order',
+    name: '迁民顺序烟测',
+    dynasty: '汉',
+    conf: {},
+    time: { daysPerTurn: 30 },
+    playerInfo: { factionName: 'player-faction' }
+  };
+  orderCtx.findScenarioById = () => orderCtx.P;
+  orderCtx.IntegrationBridge = {
+    getTopLevelDivisions(hierarchy) { return hierarchy.player.divisions; }
+  };
+  orderCtx.FiscalEngine = {
+    spendFromGuoku(cost) {
+      const deducted = {};
+      ['money', 'grain', 'cloth'].forEach(kind => {
+        const amount = Number(cost[kind]) || 0;
+        orderCtx.GM.guoku[kind] -= amount;
+        deducted[kind] = { deducted: amount, deficit: 0 };
+      });
+      return { ok: true, deducted };
+    }
+  };
+  vm.createContext(orderCtx);
+  load(orderCtx, 'tm-economy-engine-currency.js');
+  load(orderCtx, 'tm-economy-engine.js');
+  load(orderCtx, 'tm-huji-engine.js');
+  orderCtx.EnvCapacityEngine.init(orderCtx.P);
+  Object.keys(specs).forEach(id => {
+    orderCtx.GM.environment.byRegion[id].currentLoad = specs[id].load;
+  });
+  const before = demographicTotal(Object.values(leaves));
+  const result = orderCtx.EnvCapacityEngine.enactPolicy('migration_relief', 'all');
+  assert(result && result.ok, 'all-region migration relief should execute from a valid immutable plan');
+  const after = demographicTotal(Object.values(leaves));
+  assert(sameDemographicTotals(after, before),
+    'all-region migration should conserve the complete demographic world bundle');
+  assert(leaves.highA.populationDetail.mouths === 810000
+    && leaves.highB.populationDetail.mouths === 540000
+    && leaves.refuge.populationDetail.mouths === 450000,
+  'only pre-policy overloaded sources should move once into the pre-policy receiving province');
+  Object.keys(specs).forEach(id => {
+    const environment = orderCtx.GM.environment.byRegion[id];
+    assert(Math.abs(environment.currentLoad - leaves[id].populationDetail.mouths / environment.carryingMax) < 1e-12,
+      'all-region migration should refresh the final load for ' + id);
+  });
+  const byId = {};
+  Object.keys(specs).sort().forEach(id => {
+    byId[id] = JSON.parse(JSON.stringify(leaves[id].populationDetail));
+  });
+  return byId;
+}
+
+const forwardMigration = runAllRegionMigrationOrder(['highA', 'highB', 'refuge']);
+const reverseMigration = runAllRegionMigrationOrder(['refuge', 'highB', 'highA']);
+assert(JSON.stringify(forwardMigration) === JSON.stringify(reverseMigration),
+  'migration_relief(all) must be independent of environment object insertion order');
 
 ctx.EnvCapacityEngine.tick({ turn: 73, monthRatio: 12, _monthRatio: 12, strict: true });
 assert(ctx.GM.environment.byRegion.mountain.ecoScars.soilErosion < beforeScar, 'active policies should reduce scars through tick');

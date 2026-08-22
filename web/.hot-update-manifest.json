@@ -2,7 +2,7 @@
   "type": "tianming-hot-update",
   "version": "1.3.4.11",
   "entry": "index.html",
-  "generatedAt": "2026-08-22T11:35:20.537Z",
+  "generatedAt": "2026-08-22T14:09:14.926Z",
   "files": [
     {
       "path": "_preview_map.json",
@@ -2161,8 +2161,8 @@
     },
     {
       "path": "index.html",
-      "sha256": "1a2fb3b7e9b80cebdfa26408ced21a4e2ce28b9e546e0bbe19438e0393e4c0a4",
-      "size": 68643
+      "sha256": "b76c384e09305ad2f51427cb25adc58fc379057f7f5a6591c251da369357ef29",
+      "size": 68647
     },
     {
       "path": "INDEX.md",
@@ -3821,8 +3821,8 @@
     },
     {
       "path": "tm-economy-engine.js",
-      "sha256": "7619e6a9c583cd6fb8188fe8cb56e079b316789f2e5edf86da97486ae98e569f",
-      "size": 106183
+      "sha256": "98f9bddf5ef736357f63cf1856d18a3812eb9c087716e25f4c680d55945211ce",
+      "size": 121718
     },
     {
       "path": "tm-economy.js",
@@ -4016,8 +4016,8 @@
     },
     {
       "path": "tm-endturn-systems.js",
-      "sha256": "7b9dd289b65b694c94e1bf8cefac0764ded466dc582d6d3d9b5c9d4dafe2a715",
-      "size": 39504
+      "sha256": "d66e884b438f72ac5fa7b1145c42daa464daf10e2144cb19a9195e6129d53865",
+      "size": 39518
     },
     {
       "path": "tm-endturn-timing-ledger.js",
@@ -4326,8 +4326,8 @@
     },
     {
       "path": "tm-huji-runtime-bridge.js",
-      "sha256": "cba4532ad4619ab66b4145fff3d2a27e49f5c2fb1435ec3be2fd75471ce387ad",
-      "size": 66667
+      "sha256": "1c2f67cc510b3b7c7877f59e6a30f4a949703ea8b497bc40d1bc9498459955fd",
+      "size": 69040
     },
     {
       "path": "tm-indices.js",
@@ -4341,8 +4341,8 @@
     },
     {
       "path": "tm-integration-bridge.js",
-      "sha256": "cbd9d0d257fe19960215944d205aa6ba22ab2bb7f583b9cdfd31faaee1b68312",
-      "size": 40572
+      "sha256": "caddb856ca64331d846263a07d3bb47627b168c6af572e22aeabdb5ec683430d",
+      "size": 41054
     },
     {
       "path": "tm-invariants.js",
@@ -4951,8 +4951,8 @@
     },
     {
       "path": "tm-patches-start.js",
-      "sha256": "c1df9437314f74a89364c1aea680851d94b2a82ade151f50b67e036e16db543a",
-      "size": 114927
+      "sha256": "107c06b6c280fab3a7cb097485a24986d89784b8b7469978f876690caa78a441",
+      "size": 115422
     },
     {
       "path": "tm-patches.js",

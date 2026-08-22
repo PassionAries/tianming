@@ -214,22 +214,22 @@
       var customScars = (config.initialScars && config.initialScars.byRegion && config.initialScars.byRegion[r.id]) || {};
       out[r.id] = {
         carrying: {
-          farmlandSupport: custom.farmlandSupport || 1000000,
-          waterSupport:    custom.waterSupport    || 1500000,
-          fuelSupport:     custom.fuelSupport     || 800000,
-          housingSupport:  custom.housingSupport  || 1200000,
-          sanitationSupport: custom.sanitationSupport || 1000000
+          farmlandSupport: _envFiniteNumber(custom.farmlandSupport, 1000000),
+          waterSupport:    _envFiniteNumber(custom.waterSupport, 1500000),
+          fuelSupport:     _envFiniteNumber(custom.fuelSupport, 800000),
+          housingSupport:  _envFiniteNumber(custom.housingSupport, 1200000),
+          sanitationSupport: _envFiniteNumber(custom.sanitationSupport, 1000000)
         },
         carryingMax: 0,
         ecoScars: _defaultScars(customScars),
         currentLoad: 0.5,
         overloadYears: 0,
-        forestArea: custom.forestArea || 500000,
-        coalReserve: custom.coalReserve || 0,
-        aquiferLevel: custom.aquiferLevel || 1.0,
-        riverFlow: custom.riverFlow || 1.0,
-        arableArea: custom.arableArea || 500000,
-        soilFertility: custom.soilFertility || 0.85,
+        forestArea: _envFiniteNumber(custom.forestArea, 500000),
+        coalReserve: _envFiniteNumber(custom.coalReserve, 0),
+        aquiferLevel: _envFiniteNumber(custom.aquiferLevel, 1.0),
+        riverFlow: _envFiniteNumber(custom.riverFlow, 1.0),
+        arableArea: _envFiniteNumber(custom.arableArea, 500000),
+        soilFertility: _envFiniteNumber(custom.soilFertility, 0.85),
         techLevel: Object.assign({ agriculture: 1, irrigation: 1, fertilizer: 1, seedSelection: 1, toolImprovement: 1 }, custom.techLevel || {})
       };
       _recomputeRegionCarrying(r.id, out[r.id]);
@@ -243,28 +243,189 @@
     return s;
   }
 
+  function _envFiniteNumber(value, fallback) {
+    if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) return fallback;
+    var n = Number(value);
+    return isFinite(n) ? n : fallback;
+  }
+
+  function _envNodeChildren(node) {
+    if (!node || typeof node !== 'object') return [];
+    var fields = ['children', 'divisions', 'subdivisions', 'subs', 'items'];
+    for (var i = 0; i < fields.length; i++) {
+      var children = node[fields[i]];
+      if (Array.isArray(children) && children.length) return children;
+    }
+    return [];
+  }
+
+  function _collectEnvLeaves(node, out) {
+    if (!node || typeof node !== 'object') return;
+    var children = _envNodeChildren(node);
+    if (!children.length) {
+      out.push(node);
+      return;
+    }
+    children.forEach(function(child) { _collectEnvLeaves(child, out); });
+  }
+
+  function _envRegionAliases(node) {
+    return [node && node.id, node && node.name, node && node.mapRegionId, node && node.regionId]
+      .filter(function(value) { return value !== undefined && value !== null && String(value).trim() !== ''; })
+      .map(function(value) { return String(value); });
+  }
+
+  function _envPlayerTopLevel() {
+    var G = global.GM;
+    if (!G || !G.adminHierarchy) return [];
+    if (global.IntegrationBridge && typeof global.IntegrationBridge.getTopLevelDivisions === 'function') {
+      var bridged = global.IntegrationBridge.getTopLevelDivisions(G.adminHierarchy, 'player');
+      if (Array.isArray(bridged) && bridged.length) return bridged;
+    }
+    var hierarchy = G.adminHierarchy;
+    if (Array.isArray(hierarchy.divisions)) return hierarchy.divisions;
+    var branch = hierarchy.player;
+    if (!branch) {
+      var wanted = [G.playerFactionId, G._playerFactionId, G.factionId]
+        .filter(function(value) { return value !== undefined && value !== null; })
+        .map(String);
+      Object.keys(hierarchy).some(function(key) {
+        var candidate = hierarchy[key];
+        if (!candidate || (!Array.isArray(candidate) && !Array.isArray(candidate.divisions))) return false;
+        if (candidate.isPlayer || wanted.indexOf(String(key)) >= 0 || wanted.indexOf(String(candidate.factionId || '')) >= 0) {
+          branch = candidate;
+          return true;
+        }
+        return false;
+      });
+    }
+    if (Array.isArray(branch)) return branch;
+    return branch && Array.isArray(branch.divisions) ? branch.divisions : [];
+  }
+
+  // 环境仍以顶级省/路为单位；人口已是叶级真值。所有跨系统读取先解析
+  // “环境省 → 子叶级地区”，再聚合真实人口，禁止用固定默认人口兜底。
+  function _environmentPopulationScope(rid) {
+    var G = global.GM;
+    var population = G && G.population || {};
+    var byLeaf = population.byLeafRegion || population.byRegion || {};
+    var byProvince = population.byProvince || {};
+    var wanted = String(rid == null ? '' : rid);
+    var top = _envPlayerTopLevel();
+    var owner = top.find(function(node) { return _envRegionAliases(node).indexOf(wanted) >= 0; }) || null;
+    var leaves = [];
+    if (owner) _collectEnvLeaves(owner, leaves);
+    if (!leaves.length && byLeaf[wanted]) {
+      leaves.push({ id:wanted, name:wanted, populationDetail:byLeaf[wanted] });
+    }
+    var rows = [];
+    var seen = {};
+    leaves.forEach(function(leaf, index) {
+      var id = String(leaf.id || leaf.name || leaf.mapRegionId || leaf.regionId || ('env-leaf-' + index));
+      if (seen[id]) return;
+      seen[id] = true;
+      var detail = leaf.populationDetail && typeof leaf.populationDetail === 'object'
+        ? leaf.populationDetail
+        : (byLeaf[id] && typeof byLeaf[id] === 'object' ? byLeaf[id]
+          : (leaf.population && typeof leaf.population === 'object' ? leaf.population : null));
+      if (!detail) return;
+      rows.push({ id:id, leaf:leaf, detail:detail, mouths:Math.max(0, Math.round(_envFiniteNumber(detail.mouths, 0))) });
+    });
+    var mouths = rows.reduce(function(sum, row) { return sum + row.mouths; }, 0);
+    var provinceRow = byProvince[wanted];
+    var directRow = byLeaf[wanted];
+    var fallbackRow = provinceRow && typeof provinceRow === 'object' ? provinceRow
+      : (directRow && typeof directRow === 'object' ? directRow : null);
+    if (!rows.length && fallbackRow) mouths = Math.max(0, Math.round(_envFiniteNumber(fallbackRow.mouths, 0)));
+    return {
+      ok: rows.length > 0 || !!fallbackRow,
+      regionId:wanted,
+      owner:owner,
+      rows:rows,
+      leafIds:rows.map(function(row) { return row.id; }),
+      mouths:mouths,
+      fallbackRow:fallbackRow
+    };
+  }
+
+  function _allocateEnvironmentLoss(total, rows) {
+    total = Math.max(0, Math.round(Number(total) || 0));
+    var weights = rows.map(function(row) { return Math.max(0, Number(row.mouths) || 0); });
+    var weightTotal = weights.reduce(function(sum, value) { return sum + value; }, 0);
+    var out = rows.map(function() { return 0; });
+    if (!total || !rows.length || !weightTotal) return out;
+    total = Math.min(total, weightTotal);
+    var ranked = [];
+    var assigned = 0;
+    rows.forEach(function(row, index) {
+      var quota = total * weights[index] / weightTotal;
+      out[index] = Math.min(weights[index], Math.floor(quota));
+      assigned += out[index];
+      ranked.push({ index:index, fraction:quota - Math.floor(quota) });
+    });
+    ranked.sort(function(a, b) { return b.fraction - a.fraction || a.index - b.index; });
+    for (var remaining = total - assigned, cursor = 0; remaining > 0; cursor = (cursor + 1) % ranked.length) {
+      var idx = ranked[cursor].index;
+      if (out[idx] >= weights[idx]) continue;
+      out[idx]++;
+      remaining--;
+    }
+    return out;
+  }
+
+  function _applyEnvironmentPopulationLoss(rid, mouths, cause) {
+    if (!global.HujiEngine || typeof global.HujiEngine.applyPopulationLoss !== 'function') {
+      return { ok:false, reason:'population-ledger-unavailable', mouths:0 };
+    }
+    var scope = rid ? _environmentPopulationScope(rid) : null;
+    if (rid && (!scope || !scope.ok)) return { ok:false, reason:'environment-population-scope-not-found', mouths:0 };
+    var requested = Math.max(0, Math.round(Number(mouths) || 0));
+    if (!requested) return { ok:true, mouths:0, regionIds:scope ? scope.leafIds.slice() : [] };
+    if (scope && scope.rows.length) {
+      var allocations = _allocateEnvironmentLoss(requested, scope.rows);
+      var applied = 0;
+      for (var i = 0; i < scope.rows.length; i++) {
+        if (!allocations[i]) continue;
+        var result = global.HujiEngine.applyPopulationLoss({
+          cause:String(cause || 'environment'),
+          regionId:scope.rows[i].id,
+          mouths:allocations[i]
+        });
+        if (!result || result.ok === false || Number(result.mouths) !== allocations[i]) {
+          return { ok:false, reason:String(result && result.reason || 'population-loss-incomplete'), mouths:applied };
+        }
+        applied += Number(result.mouths) || 0;
+      }
+      return { ok:applied === Math.min(requested, scope.mouths), mouths:applied, regionIds:scope.leafIds.slice(), reason:applied === Math.min(requested, scope.mouths) ? '' : 'population-loss-incomplete' };
+    }
+    if (rid) return { ok:false, reason:'environment-leaf-population-not-found', mouths:0 };
+    var legacy = global.HujiEngine.applyPopulationLoss({ cause:String(cause || 'environment'), mouths:requested });
+    return legacy || { ok:false, reason:'population-loss-unavailable', mouths:0 };
+  }
+
   function _recomputeRegionCarrying(rid, reg) {
     // 1) 土地支撑
     var G = global.GM;
+    var popCount = _environmentPopulationScope(rid).mouths;
     var techEra = G.environment ? G.environment.techEra : '唐';
-    var yieldMult = _getTechEraMult('agriculture', techEra, 'yieldMult') || 1.0;
-    var irrigMult = _getTechEraMult('irrigation', techEra, 'capMult') || 1.0;
-    var seedMult = _getTechEraMult('seedSelection', techEra, 'yieldMult') || 1.0;
-    var farmland = (reg.arableArea || 500000) * (reg.soilFertility || 0.85) * yieldMult * seedMult * irrigMult
+    var yieldMult = _envFiniteNumber(_getTechEraMult('agriculture', techEra, 'yieldMult'), 1.0);
+    var irrigMult = _envFiniteNumber(_getTechEraMult('irrigation', techEra, 'capMult'), 1.0);
+    var seedMult = _envFiniteNumber(_getTechEraMult('seedSelection', techEra, 'yieldMult'), 1.0);
+    var farmland = _envFiniteNumber(reg.arableArea, 500000) * _envFiniteNumber(reg.soilFertility, 0.85) * yieldMult * seedMult * irrigMult
                    - (reg.ecoScars.salinization || 0) * 200000
                    - (reg.ecoScars.soilErosion || 0) * 150000;
     reg.carrying.farmlandSupport = Math.max(100000, farmland);
     // 2) 水
-    var water = (reg.aquiferLevel || 1.0) * 1500000 * (reg.riverFlow || 1.0)
+    var water = _envFiniteNumber(reg.aquiferLevel, 1.0) * 1500000 * _envFiniteNumber(reg.riverFlow, 1.0)
                 - (reg.ecoScars.waterTableDrop || 0) * 300000
                 - (reg.ecoScars.riverSilting || 0) * 200000;
     reg.carrying.waterSupport = Math.max(100000, water);
     // 3) 燃料
-    var fuel = (reg.forestArea || 500000) * 1.5 + (reg.coalReserve || 0) * 3
+    var fuel = _envFiniteNumber(reg.forestArea, 500000) * 1.5 + _envFiniteNumber(reg.coalReserve, 0) * 3
                - (reg.ecoScars.deforestation || 0) * 400000;
     reg.carrying.fuelSupport = Math.max(50000, fuel);
     // 4) 住房
-    reg.carrying.housingSupport = (reg.mouths || 1200000) * 1.1; // 简化估算
+    reg.carrying.housingSupport = Math.max(0, popCount * 1.1); // 简化估算·人口口径与省辖叶级合计一致
     // 5) 卫生
     var sani = 1000000 - (reg.ecoScars.urbanSewageOverload || 0) * 500000;
     reg.carrying.sanitationSupport = Math.max(100000, sani);
@@ -278,8 +439,6 @@
     );
 
     // 加载比
-    var pop = global.GM.population && global.GM.population.byRegion && global.GM.population.byRegion[rid];
-    var popCount = pop ? pop.mouths : 1000000;
     reg.currentLoad = popCount / Math.max(1, reg.carryingMax);
   }
 
@@ -288,7 +447,7 @@
     if (!levels) return 1.0;
     var lv = levels.find(function(l) { return l.era === era; });
     if (!lv) lv = levels[levels.length - 1];
-    return lv[key] || 1.0;
+    return _envFiniteNumber(lv[key], 1.0);
   }
 
   function _recomputeNationalCarrying() {
@@ -319,9 +478,10 @@
     var G = global.GM;
     Object.keys(E.byRegion).forEach(function(rid) {
       var reg = E.byRegion[rid];
-      var pop = G.population && G.population.byRegion && G.population.byRegion[rid];
-      var popCount = pop ? pop.mouths : 500000;
-      var load = reg.currentLoad || 0.5;
+      var populationScope = _environmentPopulationScope(rid);
+      if (!populationScope.ok) throw new Error('环境地区无法解析人口层级: ' + rid);
+      var popCount = populationScope.mouths;
+      var load = _envFiniteNumber(reg.currentLoad, 0.5);
       // 过载加速疤痕
       var overloadMult = Math.max(1.0, load);
       // 森林退化（按人口烧柴）
@@ -333,9 +493,11 @@
       // 河道淤积
       reg.ecoScars.riverSilting = Math.min(1, (reg.ecoScars.riverSilting || 0) + 0.0002 * mr);
       // 地力衰退（按技术）
-      var fertDecay = _getTechEraMult('fertilizer', E.techEra, 'fertilityDecay') || 0.03;
+      var fertDecay = _envFiniteNumber(_getTechEraMult('fertilizer', E.techEra, 'fertilityDecay'), 0.03);
       reg.ecoScars.soilFertilityLoss = Math.min(1, (reg.ecoScars.soilFertilityLoss || 0) + fertDecay / 12 * mr);
-      reg.soilFertility = Math.max(0.3, reg.soilFertility - fertDecay / 12 * mr);
+      var currentFertility = _envFiniteNumber(reg.soilFertility, 0.85);
+      var fertilityFloor = currentFertility >= 0.3 ? 0.3 : 0;
+      reg.soilFertility = Math.max(fertilityFloor, currentFertility - fertDecay / 12 * mr);
       // 盐碱化（灌溉过度）
       reg.ecoScars.salinization = Math.min(1, (reg.ecoScars.salinization || 0) + 0.0001 * overloadMult * mr);
       // 沙漠化（干旱+过伐）
@@ -361,7 +523,7 @@
           });
         }
         if (policy && policy.effect && policy.effect.loadRelief) {
-          reg.currentLoad = Math.max(0.05, (reg.currentLoad || 0.5) - policy.effect.loadRelief * mr / 24);
+          reg.currentLoad = Math.max(0.05, _envFiniteNumber(reg.currentLoad, 0.5) - policy.effect.loadRelief * mr / 24);
         }
       });
       _recomputeRegionCarrying(rid, reg);
@@ -379,28 +541,27 @@
     var G = global.GM;
     Object.keys(E.byRegion).forEach(function(rid) {
       var reg = E.byRegion[rid];
-      var load = reg.currentLoad || 0.5;
+      var load = _envFiniteNumber(reg.currentLoad, 0.5);
       if (load < 1.0) return;
       // 级别 1: 1.0-1.2 压力
       // 级别 2: 1.2-1.5 饥荒
       // 级别 3: >1.5 崩溃
       var level = load < 1.2 ? 1 : load < 1.5 ? 2 : 3;
-      var pop = G.population && G.population.byRegion && G.population.byRegion[rid];
-      if (!pop) return;
+      var scope = _environmentPopulationScope(rid);
+      if (!scope.ok || scope.mouths <= 0) return;
+      var deathRate = level === 1 ? 0.002 : level === 2 ? 0.008 : 0.02;
+      var deaths = Math.min(scope.mouths, Math.max(0, Math.round(scope.mouths * deathRate * mr / 12)));
+      var mortality = _applyEnvironmentPopulationLoss(rid, deaths, 'environment-overload:' + String(level));
+      if (!mortality || mortality.ok === false) throw new Error('环境过载人口损失落账失败: ' + String(mortality && mortality.reason || 'unknown'));
       if (level === 1) {
-        pop.yearlyDeaths = (pop.yearlyDeaths || 0) + pop.mouths * 0.002 * mr / 12;
-        pop.mouths = Math.max(10000, pop.mouths - pop.mouths * 0.002 * mr / 12);
+        // 轻度压力仅兑现对应死亡率；不得落入三级崩溃的社会惩罚。
       } else if (level === 2) {
-        pop.yearlyDeaths = (pop.yearlyDeaths || 0) + pop.mouths * 0.008 * mr / 12;
-        pop.mouths = Math.max(10000, pop.mouths - pop.mouths * 0.008 * mr / 12);
         var region = (G.regions || []).find(function(r) { return r.id === rid; });
-        if (region) region.unrest = Math.min(100, (region.unrest || 30) + 3 * mr);
+        if (region) region.unrest = Math.min(100, _envFiniteNumber(region.unrest, 30) + 3 * mr);
         if (global._adjAuthority) global._adjAuthority('minxin', -0.2 * mr);
       } else {
-        pop.yearlyDeaths = (pop.yearlyDeaths || 0) + pop.mouths * 0.02 * mr / 12;
-        pop.mouths = Math.max(10000, pop.mouths - pop.mouths * 0.02 * mr / 12);
         var region2 = (G.regions || []).find(function(r) { return r.id === rid; });
-        if (region2) { region2.unrest = Math.min(100, (region2.unrest || 30) + 8 * mr); region2.disasterLevel = Math.min(1, (region2.disasterLevel || 0) + 0.05 * mr); }
+        if (region2) { region2.unrest = Math.min(100, _envFiniteNumber(region2.unrest, 30) + 8 * mr); region2.disasterLevel = Math.min(1, _envFiniteNumber(region2.disasterLevel, 0) + 0.05 * mr); }
         if (global._adjAuthority) global._adjAuthority('minxin', -0.5 * mr);
       }
     });
@@ -443,26 +604,23 @@
 
   function _triggerCrisis(ev, rid) {
     var E = global.GM.environment;
-    E.crisisHistory.push({ id: ev.id, name: ev.name, turn: global.GM.turn, regionId: rid || 'national', severity: ev.severity });
-    if (E.crisisHistory.length > 60) E.crisisHistory.splice(0, E.crisisHistory.length - 60);
-    // 效果
+    // 先完成所有玩法效果，再写入危机历史。人口落账失败时不得留下
+    // “史书说死了人、叶级账本却没有变化”的半危机记录。
     if (ev.effect) {
       var ef = ev.effect;
       if (ef.deathRate) {
         var P = global.GM.population;
-        if (P) {
-          var target = rid && P.byRegion[rid] ? P.byRegion[rid] : P.national;
-          var deaths = Math.round(target.mouths * ef.deathRate);
-          if (!global.HujiEngine || typeof global.HujiEngine.applyPopulationLoss !== 'function') throw new Error('人口损失账本不可用');
-          var mortality = global.HujiEngine.applyPopulationLoss({ cause:'environment-crisis:' + String(ev.id || 'unknown'), regionId:rid || '', mouths:deaths });
-          if (!mortality || mortality.ok === false) throw new Error('环境危机人口损失落账失败: ' + String(mortality && mortality.reason || 'unknown'));
-        }
+        if (!P) throw new Error('环境危机人口账本不可用');
+        var targetMouths = rid ? _environmentPopulationScope(rid).mouths : _envFiniteNumber(P.national && P.national.mouths, 0);
+        var deaths = Math.round(Math.max(0, targetMouths) * ef.deathRate);
+        var mortality = _applyEnvironmentPopulationLoss(rid || '', deaths, 'environment-crisis:' + String(ev.id || 'unknown'));
+        if (!mortality || mortality.ok === false) throw new Error('环境危机人口损失落账失败: ' + String(mortality && mortality.reason || 'unknown'));
       }
       if (ef.unrest) {
         var G = global.GM;
         if (rid) {
           var reg = (G.regions || []).find(function(r) { return r.id === rid; });
-          if (reg) reg.unrest = Math.min(100, (reg.unrest || 30) + ef.unrest);
+          if (reg) reg.unrest = Math.min(100, _envFiniteNumber(reg.unrest, 30) + ef.unrest);
         } else {
           if (typeof G.unrest === 'number') G.unrest = Math.min(100, G.unrest + ef.unrest / 2);
         }
@@ -473,6 +631,8 @@
         }
       }
     }
+    E.crisisHistory.push({ id: ev.id, name: ev.name, turn: global.GM.turn, regionId: rid || 'national', severity: ev.severity });
+    if (E.crisisHistory.length > 60) E.crisisHistory.splice(0, E.crisisHistory.length - 60);
     if (global.addEB) global.addEB('环境', ev.name + (rid ? '（' + rid + '）' : '') + ' · ' + ev.severity);
   }
 
@@ -484,19 +644,8 @@
     var E = global.GM && global.GM.environment;
     if (!E || !E.byRegion) return [];
     if (regionId && regionId !== 'all' && E.byRegion[regionId]) return [regionId];
-    return Object.keys(E.byRegion);
-  }
-
-  function _findEnvReceivingRegion(fromId) {
-    var E = global.GM && global.GM.environment;
-    if (!E || !E.byRegion) return null;
-    var best = null;
-    Object.keys(E.byRegion).forEach(function(rid) {
-      if (rid === fromId) return;
-      var reg = E.byRegion[rid] || {};
-      if (!best || (reg.currentLoad || 0.5) < (E.byRegion[best].currentLoad || 0.5)) best = rid;
-    });
-    return best;
+    if (regionId && regionId !== 'all') return [];
+    return Object.keys(E.byRegion).sort();
   }
 
   function _pushEnvPolicyHistory(entry) {
@@ -507,35 +656,125 @@
     if (E.policyHistory.length > 120) E.policyHistory.splice(0, E.policyHistory.length - 120);
   }
 
+  function _pickEnvironmentMigrationTarget(scope) {
+    if (!scope || !scope.rows || !scope.rows.length) return null;
+    return scope.rows.slice().sort(function(a, b) {
+      var aLoad = _envFiniteNumber(a.leaf && a.leaf.environment && a.leaf.environment.currentLoad, 0.5);
+      var bLoad = _envFiniteNumber(b.leaf && b.leaf.environment && b.leaf.environment.currentLoad, 0.5);
+      return aLoad - bLoad || a.mouths - b.mouths || String(a.id).localeCompare(String(b.id));
+    })[0];
+  }
+
+  function _snapshotEnvironmentMigrationRows() {
+    var E = global.GM && global.GM.environment;
+    if (!E || !E.byRegion) return [];
+    return Object.keys(E.byRegion).sort().map(function(rid) {
+      var reg = E.byRegion[rid];
+      var scope = _environmentPopulationScope(rid);
+      if (!scope.ok || !scope.leafIds.length) {
+        throw new Error('环境政策地区无法解析人口层级: ' + rid);
+      }
+      var target = _pickEnvironmentMigrationTarget(scope);
+      if (!target) throw new Error('迁民减压缺少可用叶级地区: ' + rid);
+      return {
+        regionId:rid,
+        currentLoad:_envFiniteNumber(reg && reg.currentLoad, 0.5),
+        mouths:Math.max(0, Math.round(_envFiniteNumber(scope.mouths, 0))),
+        leafIds:scope.leafIds.slice(),
+        targetLeafRegionId:String(target.id)
+      };
+    });
+  }
+
+  function _compareEnvironmentMigrationRows(a, b) {
+    return a.currentLoad - b.currentLoad
+      || a.mouths - b.mouths
+      || String(a.regionId).localeCompare(String(b.regionId));
+  }
+
+  function _planEnvironmentMigrations(regionIds, share, allRegions) {
+    var rows = _snapshotEnvironmentMigrationRows();
+    var selected = {};
+    (regionIds || []).forEach(function(rid) { selected[String(rid)] = true; });
+    var sources = rows.filter(function(row) { return !!selected[row.regionId]; });
+    var receiver = rows.slice().sort(_compareEnvironmentMigrationRows)[0] || null;
+    if (!receiver || rows.length < 2) throw new Error('迁民减压缺少接纳地区');
+    if (allRegions) {
+      sources = sources.filter(function(row) {
+        return row.regionId !== receiver.regionId
+          && row.currentLoad > 1
+          && row.currentLoad > receiver.currentLoad;
+      });
+    } else {
+      receiver = rows.filter(function(row) { return row.regionId !== sources[0].regionId; })
+        .sort(_compareEnvironmentMigrationRows)[0] || null;
+      if (!receiver) throw new Error('迁民减压缺少接纳地区: ' + (sources[0] && sources[0].regionId || 'unknown'));
+    }
+    var ratio = Math.max(0, Number(share) || 0);
+    return sources.slice().sort(function(a, b) {
+      return String(a.regionId).localeCompare(String(b.regionId));
+    }).map(function(source) {
+      return {
+        sourceRegionId:source.regionId,
+        sourceLeafIds:source.leafIds.slice(),
+        targetRegionId:receiver.regionId,
+        targetLeafRegionId:receiver.targetLeafRegionId,
+        mouths:Math.max(0, Math.min(source.mouths, Math.round(source.mouths * ratio)))
+      };
+    }).filter(function(item) { return item.mouths > 0; });
+  }
+
+  function _executeEnvironmentMigrationPlan(plan) {
+    if (!global.HujiEngine || typeof global.HujiEngine.transferPopulation !== 'function') {
+      throw new Error('迁民减压人口账本不可用');
+    }
+    var bySource = {};
+    var affected = {};
+    (plan || []).forEach(function(item) {
+      var result = global.HujiEngine.transferPopulation({
+        sourceRegionIds:item.sourceLeafIds,
+        targetRegionId:item.targetLeafRegionId,
+        mouths:item.mouths,
+        cause:'environment-policy:migration-relief'
+      });
+      if (!result || result.ok === false) {
+        throw new Error('迁民减压人口落账失败: ' + String(result && result.reason || 'unknown'));
+      }
+      if (Number(result.mouths) !== item.mouths) throw new Error('迁民减压人口落账不完整');
+      result.toRegionId = item.targetRegionId;
+      bySource[item.sourceRegionId] = result;
+      affected[item.sourceRegionId] = true;
+      affected[item.targetRegionId] = true;
+    });
+    return { bySource:bySource, affectedRegionIds:Object.keys(affected).sort() };
+  }
+
   function _applyPolicyImmediateEffect(policy, policyId, regionId) {
     var G = global.GM;
     var E = G && G.environment;
     if (!G || !E || !E.byRegion || !policy) return { regions: [] };
     var effect = policy.effect || {};
     var summary = { regions: [], migrated: 0, techBoosted: 0, restored: 0 };
-    _envRegionIds(regionId).forEach(function(rid) {
+    var regionIds = _envRegionIds(regionId);
+    var migrationBatch = { bySource:{}, affectedRegionIds:[] };
+    if (effect.migrateShare) {
+      var migrationPlan = _planEnvironmentMigrations(regionIds, effect.migrateShare, regionId === 'all');
+      migrationBatch = _executeEnvironmentMigrationPlan(migrationPlan);
+    }
+    regionIds.forEach(function(rid) {
       var reg = E.byRegion[rid];
       if (!reg) return;
+      if (!_environmentPopulationScope(rid).ok) throw new Error('环境政策地区无法解析人口层级: ' + rid);
       var row = { regionId: rid };
 
-      if (effect.migrateShare && G.population && G.population.byRegion && G.population.byRegion[rid]) {
-        var pop = G.population.byRegion[rid];
-        var amount = Math.max(0, Math.round((pop.mouths || 0) * effect.migrateShare));
-        var destId = _findEnvReceivingRegion(rid);
-        if (amount > 0 && destId && G.population.byRegion[destId]) {
-          pop.mouths = Math.max(0, (pop.mouths || 0) - amount);
-          pop.households = Math.max(0, Math.round((pop.households || 0) - amount / 5));
-          pop.ding = Math.max(0, Math.round((pop.ding || 0) - amount * 0.3));
-          pop.yearlyNetMigration = (pop.yearlyNetMigration || 0) - amount;
-          var dst = G.population.byRegion[destId];
-          dst.mouths = (dst.mouths || 0) + amount;
-          dst.households = Math.round((dst.households || 0) + amount / 5);
-          dst.ding = Math.round((dst.ding || 0) + amount * 0.3);
-          dst.yearlyNetMigration = (dst.yearlyNetMigration || 0) + amount;
-          row.migrated = amount;
-          row.toRegionId = destId;
-          summary.migrated += amount;
-        }
+      var migration = migrationBatch.bySource[rid];
+      if (migration) {
+        row.migrated = Number(migration.mouths) || 0;
+        row.migratedHouseholds = Number(migration.households) || 0;
+        row.migratedDing = Number(migration.ding) || 0;
+        row.toRegionId = migration.toRegionId || '';
+        row.toLeafRegionId = migration.targetRegionId || '';
+        summary.migrated += row.migrated;
       }
 
       if (policy.scarReduce) {
@@ -557,20 +796,20 @@
       }
 
       if (effect.carryingBoost) {
-        reg.arableArea = (reg.arableArea || 500000) * (1 + effect.carryingBoost);
-        reg.forestArea = (reg.forestArea || 500000) * (1 + effect.carryingBoost / 2);
+        reg.arableArea = _envFiniteNumber(reg.arableArea, 500000) * (1 + effect.carryingBoost);
+        reg.forestArea = _envFiniteNumber(reg.forestArea, 500000) * (1 + effect.carryingBoost / 2);
         row.carryingBoost = effect.carryingBoost;
       }
 
       if (effect.arableRestore) {
-        var beforeArable = reg.arableArea || 500000;
+        var beforeArable = _envFiniteNumber(reg.arableArea, 500000);
         reg.arableArea = beforeArable * (1 + effect.arableRestore);
         row.arableRestored = Math.round(reg.arableArea - beforeArable);
         summary.restored += row.arableRestored;
       }
 
       if (effect.soilFertilityBoost) {
-        reg.soilFertility = Math.min(1.2, (reg.soilFertility || 0.85) + effect.soilFertilityBoost);
+        reg.soilFertility = Math.min(1.2, _envFiniteNumber(reg.soilFertility, 0.85) + effect.soilFertilityBoost);
         row.soilFertilityBoost = effect.soilFertilityBoost;
       }
 
@@ -584,12 +823,19 @@
       }
 
       if (effect.loadRelief) {
-        reg.currentLoad = Math.max(0.05, (reg.currentLoad || 0.5) - effect.loadRelief);
+        reg.currentLoad = Math.max(0.05, _envFiniteNumber(reg.currentLoad, 0.5) - effect.loadRelief);
         row.loadRelief = effect.loadRelief;
       }
 
-      _recomputeRegionCarrying(rid, reg);
       summary.regions.push(row);
+    });
+    var recomputeIds = {};
+    regionIds.concat(migrationBatch.affectedRegionIds || []).forEach(function(rid) {
+      recomputeIds[String(rid)] = true;
+    });
+    Object.keys(recomputeIds).sort().forEach(function(rid) {
+      var reg = E.byRegion[rid];
+      if (reg) _recomputeRegionCarrying(rid, reg);
     });
     _recomputeNationalCarrying();
     _pushEnvPolicyHistory({
@@ -603,31 +849,104 @@
     return summary;
   }
 
+  function _cloneEnvironmentPolicyState(value, seen) {
+    if (typeof global.structuredClone === 'function' && !seen) return global.structuredClone(value);
+    if (value === null || typeof value !== 'object') return value;
+    seen = seen || new WeakMap();
+    if (seen.has(value)) return seen.get(value);
+    var copy = Array.isArray(value) ? [] : {};
+    seen.set(value, copy);
+    Object.keys(value).forEach(function(key) {
+      copy[key] = _cloneEnvironmentPolicyState(value[key], seen);
+    });
+    return copy;
+  }
+
+  function _captureEnvironmentPolicyTransaction(G) {
+    var keys = ['guoku', 'environment', 'population', 'adminHierarchy', 'regions', 'worldPopulationSummary', 'hukou'];
+    var state = {};
+    var present = {};
+    keys.forEach(function(key) {
+      present[key] = Object.prototype.hasOwnProperty.call(G, key);
+      if (present[key]) state[key] = G[key];
+    });
+    return { keys:keys, present:present, state:_cloneEnvironmentPolicyState(state) };
+  }
+
+  function _restoreEnvironmentPolicyTransaction(G, txn) {
+    (txn.keys || []).forEach(function(key) {
+      if (txn.present[key]) G[key] = txn.state[key]; // arch-ok: 环政跨财政/环境/人口失败时恢复局部事务快照
+      else delete G[key]; // arch-ok: 环政局部事务恢复原本不存在的 GM 子树
+    });
+  }
+
+  function _availableGuokuResource(G, kind) {
+    if (!G || !G.guoku) return 0;
+    if (kind === 'money') return Math.max(0, _envFiniteNumber(G.guoku.money, _envFiniteNumber(G.guoku.balance, 0)));
+    return Math.max(0, _envFiniteNumber(G.guoku[kind], 0));
+  }
+
+  function _paymentCoversPolicyCost(payment, cost) {
+    if (!payment || payment.ok === false || !payment.deducted) return false;
+    return ['money', 'grain', 'cloth'].every(function(kind) {
+      var needed = Math.max(0, Number(cost[kind]) || 0);
+      if (!needed) return true;
+      var row = payment.deducted[kind];
+      return !!row && (Number(row.deficit) || 0) <= 0 && (Number(row.deducted) || 0) >= needed;
+    });
+  }
+
   function enactPolicy(policyId, regionId) {
     var policy = ENV_POLICIES.find(function(p) { return p.id === policyId; });
     if (!policy) return { ok: false, reason: 'unknown policy' };
     var E = global.GM.environment;
     if (!E) return { ok: false };
-    if (!Array.isArray(E.activePolicies)) E.activePolicies = [];
-    if (!Array.isArray(E.policyHistory)) E.policyHistory = [];
-    // 扣钱
     var cost = policy.cost || {};
-    if (cost.money && global.GM.guoku && (global.GM.guoku.money || 0) < cost.money) return { ok: false, reason: '帑廪不足' };
-    // 国库支出走 FiscalEngine 真账(2026-07-04 收口)
-    if ((cost.money || cost.grain) && global.FiscalEngine && global.FiscalEngine.spendFromGuoku) {
-      global.FiscalEngine.spendFromGuoku({ money: cost.money || 0, grain: cost.grain || 0 }, '经济政策');
+    var targetRegions = _envRegionIds(regionId || 'all');
+    if (!targetRegions.length) return { ok:false, reason:'环境地区不存在' };
+    var resourceLabels = { money:'帑廪', grain:'粮储', cloth:'布帛' };
+    var resourceKinds = ['money', 'grain', 'cloth'];
+    for (var i = 0; i < resourceKinds.length; i++) {
+      var kind = resourceKinds[i];
+      if ((Number(cost[kind]) || 0) > _availableGuokuResource(global.GM, kind)) {
+        return { ok:false, reason:resourceLabels[kind] + '不足' };
+      }
     }
-    var immediate = _applyPolicyImmediateEffect(policy, policyId, regionId || 'all');
-    // 加入活跃政策（默认持续 24 回合，重点政策可自定）
-    E.activePolicies.push({
-      id: policyId, regionId: regionId || 'all',
-      name: policy.name,
-      startTurn: global.GM.turn || 0, duration: policy.duration || 24,
-      cost: Object.assign({}, cost),
-      immediate: immediate
-    });
-    if (global.addEB) global.addEB('环政', '推行 ' + policy.name + (regionId ? '（' + regionId + '）' : '（全国）'));
-    return { ok: true, policyId: policyId, name: policy.name, regionId: regionId || 'all', immediate: immediate };
+    var hasCost = resourceKinds.some(function(resourceKind) { return (Number(cost[resourceKind]) || 0) > 0; });
+    if (hasCost && (!global.FiscalEngine || typeof global.FiscalEngine.spendFromGuoku !== 'function')) {
+      return { ok:false, reason:'财政账本不可用' };
+    }
+    var txn = null;
+    var outcome;
+    try {
+      txn = _captureEnvironmentPolicyTransaction(global.GM);
+      if (!Array.isArray(E.activePolicies)) E.activePolicies = [];
+      if (!Array.isArray(E.policyHistory)) E.policyHistory = [];
+      if (hasCost) {
+        var payment = global.FiscalEngine.spendFromGuoku({ money:cost.money || 0, grain:cost.grain || 0, cloth:cost.cloth || 0 }, '经济政策');
+        if (!_paymentCoversPolicyCost(payment, cost)) throw new Error('环境政策支付未足额完成');
+      }
+      var immediate = _applyPolicyImmediateEffect(policy, policyId, regionId || 'all');
+      E = global.GM.environment;
+      E.activePolicies.push({
+        id: policyId, regionId: regionId || 'all',
+        name: policy.name,
+        startTurn: global.GM.turn || 0, duration: policy.duration || 24,
+        cost: Object.assign({}, cost),
+        immediate: immediate
+      });
+      outcome = { ok:true, policyId:policyId, name:policy.name, regionId:regionId || 'all', immediate:immediate };
+    } catch (error) {
+      if (txn) _restoreEnvironmentPolicyTransaction(global.GM, txn);
+      if (global.TM && global.TM.errors && typeof global.TM.errors.capture === 'function') global.TM.errors.capture(error, 'env-policy] atomic rollback');
+      return { ok:false, reason:String(error && error.message || error || '环境政策执行失败') };
+    }
+    try {
+      if (global.addEB) global.addEB('环政', '推行 ' + policy.name + (regionId ? '（' + regionId + '）' : '（全国）'));
+    } catch (notificationError) {
+      if (global.TM && global.TM.errors && typeof global.TM.errors.captureSilent === 'function') global.TM.errors.captureSilent(notificationError, 'tm-env-policy-notice');
+    }
+    return outcome;
   }
 
   function _cleanExpiredPolicies(ctx) {
@@ -698,6 +1017,17 @@
   //  主 tick
   // ═══════════════════════════════════════════════════════════════════
 
+  function _runEnvironmentStep(label, fn, strict) {
+    try {
+      return fn();
+    } catch (error) {
+      if (global.TM && global.TM.errors && typeof global.TM.errors.capture === 'function') global.TM.errors.capture(error, label);
+      else console.error(label, error);
+      if (strict) throw error;
+      return null;
+    }
+  }
+
   function tick(ctx) {
     ctx = ctx || {};
     if (!global.GM || !global.GM.environment) {
@@ -705,11 +1035,13 @@
       init(sc);
     }
     var mr = ctx.monthRatio || 1;
-    try { _tickScarAccumulation(ctx, mr); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'env] scars:') : console.error('[env] scars:', e); }
-    try { _tickOverloadFeedback(ctx, mr); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'env] overload:') : console.error('[env] overload:', e); }
-    try { _tickCrisisEvents(ctx, mr); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'env] crises:') : console.error('[env] crises:', e); }
-    try { _cleanExpiredPolicies(ctx); } catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-env-capacity-engine');}catch(_){}}
-    try { _applyMinxinCoupling(mr); } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'env] minxin:') : console.error('[env] minxin:', e); }
+    var strict = ctx.strict === true;
+    _runEnvironmentStep('env] scars:', function() { return _tickScarAccumulation(ctx, mr); }, strict);
+    _runEnvironmentStep('env] overload:', function() { return _tickOverloadFeedback(ctx, mr); }, strict);
+    _runEnvironmentStep('env] crises:', function() { return _tickCrisisEvents(ctx, mr); }, strict);
+    _runEnvironmentStep('env] policies:', function() { return _cleanExpiredPolicies(ctx); }, strict);
+    _runEnvironmentStep('env] minxin:', function() { return _applyMinxinCoupling(mr); }, strict);
+    return { ok:true };
   }
 
   // ═══════════════════════════════════════════════════════════════════

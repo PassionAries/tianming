@@ -570,6 +570,107 @@ async function runMemorialInteractionGuardCase() {
   console.log('[smoke-start-game-data-integrity] player-body-edit-blocks-late-initial-memorials PASS');
 }
 
+async function runScenarioSourceIsolationCase() {
+  const sandbox = loadGame();
+  attachTianqiMap(sandbox);
+  vm.runInContext(`(function(){
+    var sc = findScenarioById('${SID}');
+    var fields = ['characters', 'factions', 'parties', 'classes', 'items', 'relations', 'events'];
+    fields.forEach(function(field){
+      if (!Array.isArray(sc[field]) || !sc[field].length) throw new Error('scenario isolation fixture missing ' + field);
+      sc[field][0].__scenarioAliasKey = field;
+      sc[field][0].__scenarioAliasNested = { value: 'source-' + field };
+    });
+    sc.rigidHistoryEvents = [{
+      id: 'scenario-alias-rigid',
+      name: '隔离烟测史事',
+      triggerTurn: 999999,
+      __scenarioAliasKey: 'rigidHistoryEvents',
+      __scenarioAliasNested: { value: 'source-rigidHistoryEvents' }
+    }];
+    sc.globalRules = [{
+      id: 'scenario-alias-rule',
+      nested: { value: 'source-globalRules' }
+    }];
+    window.__scenarioAliasFields = fields.concat(['rigidHistoryEvents']);
+    window.__scenarioAliasSource = sc;
+    window.__scenarioAliasSnapshot = JSON.stringify({
+      characters: sc.characters,
+      factions: sc.factions,
+      parties: sc.parties,
+      classes: sc.classes,
+      items: sc.items,
+      relations: sc.relations,
+      events: sc.events,
+      rigidHistoryEvents: sc.rigidHistoryEvents,
+      globalRules: sc.globalRules
+    });
+  })()`, sandbox);
+
+  vm.runInContext(`doActualStart('${SID}')`, sandbox, { timeout: START_VM_TIMEOUT_MS });
+  await delay(30);
+  const firstLoad = vm.runInContext(`(function(){
+    var sc = window.__scenarioAliasSource;
+    var refsDistinct = true;
+    var nestedDistinct = true;
+    window.__scenarioAliasFields.forEach(function(field){
+      var sourceRow = sc[field].filter(function(row){ return row && row.__scenarioAliasKey === field; })[0];
+      var runtimeRow = (P[field] || []).filter(function(row){ return row && row.sid === '${SID}' && row.__scenarioAliasKey === field; })[0];
+      if (!sourceRow || !runtimeRow || sourceRow === runtimeRow) refsDistinct = false;
+      if (!sourceRow || !runtimeRow || sourceRow.__scenarioAliasNested === runtimeRow.__scenarioAliasNested) nestedDistinct = false;
+      if (runtimeRow && runtimeRow.__scenarioAliasNested) runtimeRow.__scenarioAliasNested.value = 'runtime-' + field;
+    });
+    var rulesDistinct = P.globalRules !== sc.globalRules
+      && P.globalRules[0] !== sc.globalRules[0]
+      && P.globalRules[0].nested !== sc.globalRules[0].nested;
+    P.globalRules[0].nested.value = 'runtime-globalRules';
+    return {
+      refsDistinct: refsDistinct,
+      nestedDistinct: nestedDistinct,
+      rulesDistinct: rulesDistinct,
+      sourceUnchanged: JSON.stringify({
+        characters: sc.characters,
+        factions: sc.factions,
+        parties: sc.parties,
+        classes: sc.classes,
+        items: sc.items,
+        relations: sc.relations,
+        events: sc.events,
+        rigidHistoryEvents: sc.rigidHistoryEvents,
+        globalRules: sc.globalRules
+      }) === window.__scenarioAliasSnapshot
+    };
+  })()`, sandbox);
+  assert(firstLoad.refsDistinct && firstLoad.nestedDistinct && firstLoad.rulesDistinct,
+    'scenario rows and globalRules must cross sc-to-P through deep clones');
+  assert(firstLoad.sourceUnchanged,
+    'mutating P after start must not mutate the registered scenario source');
+
+  vm.runInContext(`doActualStart('${SID}')`, sandbox, { timeout: START_VM_TIMEOUT_MS });
+  await delay(30);
+  const secondLoad = vm.runInContext(`(function(){
+    var cleanRows = window.__scenarioAliasFields.every(function(field){
+      var row = (P[field] || []).filter(function(item){ return item && item.sid === '${SID}' && item.__scenarioAliasKey === field; })[0];
+      return row && row.__scenarioAliasNested && row.__scenarioAliasNested.value === 'source-' + field;
+    });
+    return cleanRows
+      && P.globalRules[0].nested.value === 'source-globalRules'
+      && JSON.stringify({
+        characters: window.__scenarioAliasSource.characters,
+        factions: window.__scenarioAliasSource.factions,
+        parties: window.__scenarioAliasSource.parties,
+        classes: window.__scenarioAliasSource.classes,
+        items: window.__scenarioAliasSource.items,
+        relations: window.__scenarioAliasSource.relations,
+        events: window.__scenarioAliasSource.events,
+        rigidHistoryEvents: window.__scenarioAliasSource.rigidHistoryEvents,
+        globalRules: window.__scenarioAliasSource.globalRules
+      }) === window.__scenarioAliasSnapshot;
+  })()`, sandbox);
+  assert(secondLoad, 'restarting the same scenario must hydrate clean rows from an unchanged source');
+  console.log('[smoke-start-game-data-integrity] scenario-source-isolation PASS');
+}
+
 (async function main() {
   await runCase('stale-map-choice-is-ignored', function (sandbox) {
     sandbox._pendingUseMap = false;
@@ -615,6 +716,7 @@ async function runMemorialInteractionGuardCase() {
   await runStrictHistoryFastPathCase();
   await runMemorialCandidateOrderingCase();
   await runMemorialInteractionGuardCase();
+  await runScenarioSourceIsolationCase();
   await runBackgroundPrewarmCase();
   await runDeepReadImmutableConfigCase();
   await runDeepReadStaleCallCase();

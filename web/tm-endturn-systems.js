@@ -197,7 +197,7 @@ async function _endTurn_updateSystems(timeRatio, zhengwen) {
   // 6.08 环境承载力（五维/疤痕/过载/危机/技术/政策）
   try {
     if (typeof EnvCapacityEngine !== 'undefined') {
-      EnvCapacityEngine.tick({ turn: GM.turn, monthRatio: monthRatio, _monthRatio: monthRatio });
+      EnvCapacityEngine.tick({ turn: GM.turn, monthRatio: monthRatio, _monthRatio: monthRatio, strict: true });
     }
   } catch(e) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(e, 'endTurn] EnvCapacityEngine.tick 失败:') : console.error('[endTurn] EnvCapacityEngine.tick 失败:', e); throw e; }
 

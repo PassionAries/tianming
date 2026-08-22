@@ -633,6 +633,51 @@ console.log('[smoke-population-faction-ledger]');
     && !context.GM.population.byRegion['province-a']
     && context.GM.population.byProvince['province-a'],
   'population.byRegion keeps stable leaf IDs while province proxies use population.byProvince');
+
+  [countyA, countyB].forEach((county, index) => {
+    county.populationDetail.mouths = 0;
+    county.populationDetail.households = 0;
+    county.populationDetail.ding = 0;
+    county.populationDetail.hiddenCount = 0;
+    county.populationDetail.fugitives = 0;
+    county.population = { mouths: 900000 + index, households: 180000, ding: 270000 };
+  });
+  context.GM.population.national = { mouths: 1000000, households: 200000, ding: 300000 };
+  context.TM.HujiRuntimeBridge.maintain(context.GM, { scenario:context.P, turn:2, applyHardEffects:false });
+  context.IntegrationBridge.tick({ strict:true });
+  ok(context.GM.population.national.mouths === 0
+    && context.GM.population.national.households === 0
+    && context.GM.population.national.ding === 0
+    && context.GM.population.byRegion['county-a'].mouths === 0
+    && context.GM.population.byProvince['province-a'].mouths === 0,
+  'authoritative zero leaf population survives both bridges despite stale nonzero legacy mirrors');
+}
+
+{
+  const { context, playerLeaves } = makeRuntime();
+  playerLeaves.forEach((leaf, index) => {
+    leaf.populationDetail.mouths = 0;
+    leaf.populationDetail.households = 0;
+    leaf.populationDetail.ding = 0;
+    leaf.populationDetail.hiddenCount = 0;
+    leaf.populationDetail.fugitives = 0;
+    leaf.mouths = 700000 + index;
+    leaf.hiddenCount = 5000;
+    leaf.fugitives = 3000;
+  });
+  context.GM.population.national = { mouths:1000000, households:200000, ding:300000 };
+  context.GM.population.hiddenCount = 10000;
+  context.GM.population.fugitives = 6000;
+  delete context.GM.population._leafPopulationAuxAuthoritative;
+  context.TM.HujiRuntimeBridge.maintain(context.GM, { scenario:context.P, turn:1, applyHardEffects:false });
+  context.IntegrationBridge.tick({ strict:true });
+  ok(context.GM.population.national.mouths === 0
+    && context.GM.population.hiddenCount === 0
+    && context.GM.population.fugitives === 0
+    && playerLeaves.every(leaf => leaf.populationDetail.mouths === 0
+      && leaf.populationDetail.hiddenCount === 0
+      && leaf.populationDetail.fugitives === 0),
+  'first bridge pass preserves explicit zero mouths hidden population and fugitives over stale legacy values');
 }
 
 {
@@ -696,8 +741,10 @@ console.log('[smoke-population-faction-ledger]');
   'large-corvee mortality survives the complete leaf-to-national bridge');
 }
 
-ok(/HujiEngine\.applyPopulationLoss\(\{ cause:'environment-crisis:/.test(economySource)
-  && !/target\.mouths\s*=\s*Math\.max\(10000/.test(economySource),
+ok(/function _applyEnvironmentPopulationLoss/.test(economySource)
+  && /HujiEngine\.applyPopulationLoss/.test(economySource)
+  && !/pop\.mouths\s*=/.test(economySource)
+  && !/Math\.max\(10000\s*,/.test(economySource),
   'environment crisis mortality is routed through the leaf ledger');
 ok(/HujiEngine\.applyPopulationLoss\(Object\.assign\(target/.test(historicalSource)
   && /faction-target-required/.test(historicalSource)

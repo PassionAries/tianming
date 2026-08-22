@@ -60,6 +60,7 @@ function resetWorld(extra) {
   delete ctx.CorruptionEngine;
   delete ctx.HujiEngine;
   delete ctx.HujiDeepFill;
+  delete ctx.EnvCapacityEngine;
   delete ctx.updateProvinceEconomy;
   delete ctx.IntegrationBridge;
   delete ctx.TMArmory;
@@ -150,6 +151,23 @@ async function main() {
   ok(await expectFailure(ctx._endTurn_updateSystems(1, ''), 'guoku-ledger-failure'), 'treasury failure propagates after an intermediate turn increment');
   ctx._tmRollbackEndTurnTransaction(txn, new Error('guoku-ledger-failure'));
   ok(ctx.GM.treasury === 50 && ctx.GM.turn === 4, 'partial treasury mutation and turn increment roll back atomically');
+
+  resetWorld({ environment: { byRegion: { first: { scar: 0 } }, crisisHistory: [] } });
+  txn = ctx._tmCaptureEndTurnTransaction();
+  let environmentStrict = false;
+  ctx.EnvCapacityEngine = {
+    tick(options) {
+      environmentStrict = options && options.strict === true;
+      ctx.GM.environment.byRegion.first.scar = 0.75;
+      ctx.GM.environment.crisisHistory.push({ id: 'partial-environment-crisis' });
+      throw new Error('environment-ledger-failure');
+    }
+  };
+  ok(await expectFailure(ctx._endTurn_updateSystems(1, ''), 'environment-ledger-failure') && environmentStrict,
+    'strict environment failure propagates out of systems after partial state writes');
+  ctx._tmRollbackEndTurnTransaction(txn, new Error('environment-ledger-failure'));
+  ok(ctx.GM.environment.byRegion.first.scar === 0 && ctx.GM.environment.crisisHistory.length === 0,
+    'partial environment and crisis history writes roll back atomically');
 
   resetWorld({
     environment: { nationalLoad: 0.5 }, vars: { disasterLevel: 0 }, activeWars: [],

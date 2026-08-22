@@ -2,7 +2,7 @@
   "type": "tianming-hot-update",
   "version": "1.3.4.11",
   "entry": "index.html",
-  "generatedAt": "2026-08-21T06:40:39.570Z",
+  "generatedAt": "2026-08-22T08:29:33.572Z",
   "files": [
     {
       "path": "_preview_map.json",
@@ -2161,7 +2161,7 @@
     },
     {
       "path": "index.html",
-      "sha256": "c13a5ec36578cc38fb99151434d122335b785c071517c51f0462569aa80d15e9",
+      "sha256": "e8ac0c577eceb55d2c6fcd60132e90c6339e42299878cfdf117964dc89a698c0",
       "size": 68641
     },
     {
@@ -4016,8 +4016,8 @@
     },
     {
       "path": "tm-endturn-systems.js",
-      "sha256": "1cb854076f35146fda5f60c94b778c2852df8cd2e7fc3718e8d126b1fef38759",
-      "size": 39490
+      "sha256": "7b9dd289b65b694c94e1bf8cefac0764ded466dc582d6d3d9b5c9d4dafe2a715",
+      "size": 39504
     },
     {
       "path": "tm-endturn-timing-ledger.js",
@@ -4261,8 +4261,8 @@
     },
     {
       "path": "tm-historical-presets.js",
-      "sha256": "532d33cb203f8017c3441ac1e90bc7c83d2af100545080cea367c74fc69601b5",
-      "size": 46386
+      "sha256": "113111a061ed2a4496f178007538feb5830e99ad697f13e8867dfee7add7ad03",
+      "size": 47077
     },
     {
       "path": "tm-history-advisor.js",
@@ -4311,13 +4311,13 @@
     },
     {
       "path": "tm-huji-deep-fill.js",
-      "sha256": "1118a453d002547a12eb95bf415946cb3ed7f9cd9f040fca76aa9f2e904ee439",
-      "size": 49446
+      "sha256": "401eaca24df793a1b44d62eb2cf50188568fe32787ca5a72a060682b3c30aa4e",
+      "size": 48443
     },
     {
       "path": "tm-huji-engine.js",
-      "sha256": "9ed88151000358dd506800755239994d6324bd1941fd39d589e7b8e86a7eff68",
-      "size": 89733
+      "sha256": "02dda09004299fab809094e8b3c1ceacd80093cca5c21633d3cd3649a2d34ffa",
+      "size": 111835
     },
     {
       "path": "tm-huji-governance-loop.js",
@@ -4326,8 +4326,8 @@
     },
     {
       "path": "tm-huji-runtime-bridge.js",
-      "sha256": "aecb7e09e3b0c29c21f83f0ae5001601a9e457043c10c53986c3e1208148d393",
-      "size": 58145
+      "sha256": "4868c879c2e322eb1ea6286df4eecba33ecd4e97bea32f8eb21c2b0cf19b482e",
+      "size": 60911
     },
     {
       "path": "tm-indices.js",
@@ -5096,8 +5096,8 @@
     },
     {
       "path": "tm-save-lifecycle.js",
-      "sha256": "3da2cf564ffda2ec39a2fdbab51e96c3b3c2167be1183ac9e26b778dd39898fd",
-      "size": 142328
+      "sha256": "87bd2c826108fca5c191227ee8aea115f599f37817d8741fd31139b620eedd8f",
+      "size": 143250
     },
     {
       "path": "tm-save-manager.js",

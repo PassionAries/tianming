@@ -324,16 +324,18 @@
     return out;
   }
 
+  var AGE_BUCKET_TEMPLATE = {
+    age_0_10:0.20, age_11_20:0.18, age_21_30:0.15, age_31_40:0.13,
+    age_41_50:0.11, age_51_60:0.10, age_61_70:0.08, age_71_plus:0.05
+  };
+  var GENDER_BUCKET_TEMPLATE = { male:0.52, female:0.48 };
+
   function _ensureRegionDeepFields(r) {
     if (!r) return;
     var mouths = Math.max(0, Math.round(r.mouths || 0));
-    var ageTemplate = {
-      age_0_10:0.20, age_11_20:0.18, age_21_30:0.15, age_31_40:0.13,
-      age_41_50:0.11, age_51_60:0.10, age_61_70:0.08, age_71_plus:0.05
-    };
-    r.byAge = _scaleBucketsToTotal(r.byAge || r.ageLayers, mouths, ageTemplate);
+    r.byAge = _scaleBucketsToTotal(r.byAge || r.ageLayers, mouths, AGE_BUCKET_TEMPLATE);
     var gender = r.byGender || r.gender || {};
-    r.byGender = _scaleBucketsToTotal(gender, mouths, { male:0.52, female:0.48 });
+    r.byGender = _scaleBucketsToTotal(gender, mouths, GENDER_BUCKET_TEMPLATE);
     if (!r.byEthnicity || !Object.keys(r.byEthnicity).length) r.byEthnicity = Object.assign({}, r.ethnicity || { han:0.95, other:0.05 });
     if (!r.byFaith || !Object.keys(r.byFaith).length) r.byFaith = Object.assign({}, r.religion || r.byReligion || { confucian:0.6, buddhist:0.2, taoist:0.15, folk:0.05 });
     r.ethnicity = Object.assign({}, r.byEthnicity);
@@ -368,11 +370,8 @@
       Object.keys(r.byGender || {}).forEach(function(k) { byGender[k] = (byGender[k] || 0) + (r.byGender[k] || 0); });
     });
     if (!Object.keys(byAge).length && P.national) {
-      byAge = _scaleBucketsToTotal({}, P.national.mouths || 0, {
-        age_0_10:0.20, age_11_20:0.18, age_21_30:0.15, age_31_40:0.13,
-        age_41_50:0.11, age_51_60:0.10, age_61_70:0.08, age_71_plus:0.05
-      });
-      byGender = _scaleBucketsToTotal({}, P.national.mouths || 0, { male:0.52, female:0.48 });
+      byAge = _scaleBucketsToTotal({}, P.national.mouths || 0, AGE_BUCKET_TEMPLATE);
+      byGender = _scaleBucketsToTotal({}, P.national.mouths || 0, GENDER_BUCKET_TEMPLATE);
     }
     P.byAge = byAge;
     P.byGender = byGender;
@@ -662,7 +661,6 @@
         });
       }
     }
-    if (groups.length === 1 && !groups[0].isPlayer) groups[0].isPlayer = true;
     return groups;
   }
 
@@ -699,13 +697,33 @@
     return G.worldPopulationSummary;
   }
 
+  function _factionSummaryKey(group) {
+    return String(group && (group.factionId || group.key) || 'unknown');
+  }
+
   function _factionPopulationEntry(G, group) {
     var world = _ensureWorldPopulationSummary(G);
-    var key = String(group && group.key || 'unknown');
+    var key = _factionSummaryKey(group);
     var entry = world.byFaction[key];
+    var legacyKey = String(group && group.key || '');
+    if (!entry && legacyKey && legacyKey !== key && world.byFaction[legacyKey]) {
+      entry = world.byFaction[legacyKey];
+      delete world.byFaction[legacyKey];
+    }
+    if (!entry) {
+      Object.keys(world.byFaction).some(function(existingKey) {
+        var existing = world.byFaction[existingKey];
+        if (!existing || _normPopulationName(existing.factionId) !== _normPopulationName(group && group.factionId)) return false;
+        entry = existing;
+        if (existingKey !== key) delete world.byFaction[existingKey];
+        return true;
+      });
+    }
     if (!entry || typeof entry !== 'object') entry = world.byFaction[key] = {};
+    else world.byFaction[key] = entry;
     entry.factionId = group.factionId;
     entry.factionName = group.factionName;
+    entry.branchKey = group.key;
     if (!entry.dynamics || typeof entry.dynamics !== 'object') entry.dynamics = _defaultDynamics();
     return entry;
   }
@@ -717,9 +735,12 @@
     (groups || []).forEach(function(group) {
       var entry = _factionPopulationEntry(G, group);
       var national = _leafPopulationTotals(group.leaves);
+      var demographic = _leafDemographicTotals(group.leaves);
       entry.national = national;
+      entry.byAge = demographic.byAge;
+      entry.byGender = demographic.byGender;
       entry.isPlayer = !!group.isPlayer;
-      aliveKeys[group.key] = true;
+      aliveKeys[_factionSummaryKey(group)] = true;
       total.mouths += national.mouths;
       total.households += national.households;
       total.ding += national.ding;
@@ -743,6 +764,15 @@
       leaf.population.households = detail.households;
       leaf.population.ding = detail.ding;
     }
+    if (leaf.isQiaozhi || leaf.regionType === 'qiaozhi') {
+      leaf.byLegalStatus = leaf.byLegalStatus && typeof leaf.byLegalStatus === 'object' ? leaf.byLegalStatus : {};
+      leaf.byLegalStatus.qiaozhi = {
+        households:detail.households,
+        mouths:detail.mouths,
+        ding:detail.ding
+      };
+      detail.byLegalStatus = leaf.byLegalStatus;
+    }
     var env = leaf.environment && typeof leaf.environment === 'object' ? leaf.environment : null;
     var carrying = leaf.carryingCapacity;
     var cap = Number(env && env.carrying) ||
@@ -753,6 +783,148 @@
       if (env) env.currentLoad = load;
       if (carrying && typeof carrying === 'object') carrying.currentLoad = load;
     }
+  }
+
+  function _legacyPopulationRowForLeaf(P, leaf) {
+    if (!P || !P.byRegion || !leaf) return null;
+    var aliases = [leaf.id, leaf.name, leaf.mapRegionId, leaf.regionId].filter(function(value) {
+      return value !== undefined && value !== null && String(value) !== '';
+    });
+    for (var i = 0; i < aliases.length; i++) {
+      if (P.byRegion[String(aliases[i])]) return P.byRegion[String(aliases[i])];
+    }
+    return null;
+  }
+
+  function _ensureLeafDemographicBuckets(leaf, detail) {
+    detail = detail || (leaf && leaf.populationDetail);
+    if (!leaf || !detail) return { byAge:{}, byGender:{} };
+    var mouths = Math.max(0, Math.round(Number(detail.mouths) || 0));
+    var legacy = _legacyPopulationRowForLeaf(global.GM && global.GM.population, leaf);
+    var byAge = _scaleBucketsToTotal(
+      detail.byAge || leaf.byAge || (legacy && legacy.byAge) || {},
+      mouths,
+      AGE_BUCKET_TEMPLATE
+    );
+    var byGender = _scaleBucketsToTotal(
+      detail.byGender || leaf.byGender || (legacy && legacy.byGender) || {},
+      mouths,
+      GENDER_BUCKET_TEMPLATE
+    );
+    detail.byAge = byAge;
+    detail.byGender = byGender;
+    leaf.byAge = byAge;
+    leaf.byGender = byGender;
+    if (legacy) {
+      legacy.byAge = byAge;
+      legacy.byGender = byGender;
+    }
+    return { byAge:byAge, byGender:byGender };
+  }
+
+  function _resizeLeafDemographicBuckets(leaf, detail, mouths) {
+    var buckets = _ensureLeafDemographicBuckets(leaf, detail);
+    var nextAge = _scaleBucketsToTotal(buckets.byAge, mouths, AGE_BUCKET_TEMPLATE);
+    var nextGender = _scaleBucketsToTotal(buckets.byGender, mouths, GENDER_BUCKET_TEMPLATE);
+    detail.byAge = nextAge;
+    detail.byGender = nextGender;
+    leaf.byAge = nextAge;
+    leaf.byGender = nextGender;
+    var legacy = _legacyPopulationRowForLeaf(global.GM && global.GM.population, leaf);
+    if (legacy) {
+      legacy.byAge = nextAge;
+      legacy.byGender = nextGender;
+    }
+    return { byAge:nextAge, byGender:nextGender };
+  }
+
+  function _advanceLeafDemographicBuckets(leaf, detail, births, deaths, mr) {
+    // The caller has already normalized these buckets against the pre-growth
+    // population. Do not normalize them again after detail.mouths changes or
+    // births would be counted once by resizing and a second time below.
+    var age = Object.assign({}, detail.byAge || leaf.byAge || {});
+    var gender = Object.assign({}, detail.byGender || leaf.byGender || {});
+    var ageKeys = Object.keys(AGE_BUCKET_TEMPLATE);
+    var fractionMove = Math.max(0, Number(mr) || 0) / 120;
+    var newlyAdult = Math.round((Number(age.age_11_20) || 0) * fractionMove);
+    var leavingDing = Math.round((Number(age.age_51_60) || 0) * fractionMove);
+    for (var i = ageKeys.length - 1; i > 0; i--) {
+      var move = Math.min(Number(age[ageKeys[i - 1]]) || 0, Math.round((Number(age[ageKeys[i - 1]]) || 0) * fractionMove));
+      age[ageKeys[i - 1]] = Math.max(0, (Number(age[ageKeys[i - 1]]) || 0) - move);
+      age[ageKeys[i]] = (Number(age[ageKeys[i]]) || 0) + move;
+    }
+    age.age_0_10 = (Number(age.age_0_10) || 0) + Math.max(0, Math.round(Number(births) || 0));
+    var maleBirths = Math.round(Math.max(0, Number(births) || 0) * 0.52);
+    gender.male = (Number(gender.male) || 0) + maleBirths;
+    gender.female = (Number(gender.female) || 0) + Math.max(0, Math.round(Number(births) || 0)) - maleBirths;
+    // Natural and explicit mortality already changed detail.mouths. Scaling the
+    // buckets to that authoritative total removes deaths without inventing a
+    // second population producer.
+    age = _scaleBucketsToTotal(age, detail.mouths, AGE_BUCKET_TEMPLATE);
+    gender = _scaleBucketsToTotal(gender, detail.mouths, GENDER_BUCKET_TEMPLATE);
+    var maleShare = (Number(gender.male) || 0) / Math.max(1, _sumObj(gender));
+    detail.ding = Math.max(0, Math.min(detail.mouths,
+      Math.round((Number(detail.ding) || 0) + (newlyAdult - leavingDing) * maleShare)));
+    detail.byAge = age;
+    detail.byGender = gender;
+    leaf.byAge = age;
+    leaf.byGender = gender;
+    leaf._newlyAdult = newlyAdult;
+    leaf._leavingDing = leavingDing;
+    var legacy = _legacyPopulationRowForLeaf(global.GM && global.GM.population, leaf);
+    if (legacy) {
+      legacy.byAge = age;
+      legacy.byGender = gender;
+      legacy.ding = detail.ding;
+    }
+  }
+
+  function _leafDemographicTotals(leaves) {
+    var out = { byAge:{}, byGender:{}, newlyAdult:0, leavingDing:0 };
+    (leaves || []).forEach(function(leaf) {
+      if (!leaf || !leaf.populationDetail) return;
+      var buckets = _ensureLeafDemographicBuckets(leaf, leaf.populationDetail);
+      Object.keys(buckets.byAge).forEach(function(key) {
+        out.byAge[key] = (Number(out.byAge[key]) || 0) + (Number(buckets.byAge[key]) || 0);
+      });
+      Object.keys(buckets.byGender).forEach(function(key) {
+        out.byGender[key] = (Number(out.byGender[key]) || 0) + (Number(buckets.byGender[key]) || 0);
+      });
+      out.newlyAdult += Number(leaf._newlyAdult) || 0;
+      out.leavingDing += Number(leaf._leavingDing) || 0;
+    });
+    return out;
+  }
+
+  function syncDemographicViews() {
+    var G = global.GM;
+    var P = G && G.population;
+    if (!P) return { ok:false, reason:'population-unavailable' };
+    var groups = _factionLeafGroups(G);
+    var playerGroup = groups.find(function(group) { return group.isPlayer; });
+    if (!playerGroup) {
+      _ensureDeepDemographics(P);
+      return { ok:true, legacy:true };
+    }
+    var totals = _leafPopulationTotals(playerGroup.leaves);
+    var demographic = _leafDemographicTotals(playerGroup.leaves);
+    P.national.mouths = totals.mouths; // arch-ok: 叶级人口结构聚合玩家全国人口
+    P.national.households = totals.households; // arch-ok: 叶级人口结构聚合玩家全国户数
+    P.national.ding = totals.ding; // arch-ok: 叶级人口结构聚合玩家全国丁口
+    P.byAge = demographic.byAge; // arch-ok: 叶级人口结构派生全国年龄视图
+    P.ageLayers = Object.assign({}, demographic.byAge); // arch-ok: 叶级人口结构派生兼容年龄视图
+    P.agePyramidFine = Object.assign({}, demographic.byAge, { // arch-ok: 叶级人口结构派生精细年龄视图
+      _newlyAdult:demographic.newlyAdult,
+      _leavingDing:demographic.leavingDing
+    }); // arch-ok: 叶级人口结构派生精细年龄视图
+    P.byGender = demographic.byGender; // arch-ok: 叶级人口结构派生全国性别视图
+    P.gender = { // arch-ok: 叶级人口结构派生兼容性别视图
+      male:Number(demographic.byGender.male) || 0,
+      female:Number(demographic.byGender.female) || 0,
+      total:_sumObj(demographic.byGender),
+      ratio:(Number(demographic.byGender.male) || 0) / Math.max(1, Number(demographic.byGender.female) || 0)
+    }; // arch-ok: 叶级人口结构派生兼容性别视图
+    return { ok:true, national:totals, byAge:demographic.byAge, byGender:demographic.byGender };
   }
 
   function _recordPopulationDynamics(d, ctx, G, births, deaths, mr) {
@@ -824,10 +996,7 @@
       var disaster = Number(group.branch && group.branch.disasterLevel);
       if (!isFinite(disaster)) disaster = group.isPlayer ? Number(G.vars && G.vars.disasterLevel) || 0 : 0;
       var war = (G.activeWars || []).filter(function(activeWar) {
-        if (!activeWar || group.isPlayer) return group.isPlayer;
-        var refs = [activeWar.factionId, activeWar.attackerId, activeWar.defenderId, activeWar.sourceFactionId, activeWar.targetFactionId]
-          .map(String);
-        return refs.indexOf(group.factionId) >= 0;
+        return _warAffectsFaction(activeWar, group);
       }).length;
       var baseBirth = Number(d.birthRateBase); if (!isFinite(baseBirth)) baseBirth = 0.035;
       baseBirth += Number(d.prosperityBonus) || 0;
@@ -845,6 +1014,7 @@
         if (!pd) return;
         var mouths = Number(pd.mouths) || 0;
         if (mouths <= 0) return;
+        _ensureLeafDemographicBuckets(leaf, pd);
         var minxin = Number(leaf.minxin);
         if (!isFinite(minxin)) minxin = Number(leaf.minxinLocal);
         if (!isFinite(minxin)) minxin = 50;
@@ -882,6 +1052,7 @@
         pd.mouths = Math.max(0, mouths + births - deaths);
         pd.households = Math.round(pd.mouths / Math.max(1, leafMouthsPerHousehold));
         pd.ding = Math.round(pd.mouths * leafDingRatio);
+        _advanceLeafDemographicBuckets(leaf, pd, births, deaths, mr);
         _syncLeafPopulationMirrors(leaf, pd);
         if (group.isPlayer) _syncPlayerLegacyRow(P, leaf, pd);
         leaf.yearlyBirths = (Number(leaf.yearlyBirths) || 0) + births;
@@ -903,32 +1074,105 @@
       }
     });
     _refreshWorldPopulationSummary(G, groups);
+    syncDemographicViews();
   }
 
-  function _findFactionPopulationGroup(G, options, groups) {
+  function _populationGroupAliases(group) {
+    return [group && group.key, group && group.factionId, group && group.factionName,
+      group && group.faction && group.faction.key, group && group.faction && group.faction.id,
+      group && group.faction && group.faction.name]
+      .map(_normPopulationName).filter(Boolean);
+  }
+
+  function _appendWarParticipantRefs(out, value) {
+    if (value === undefined || value === null || value === '') return;
+    if (Array.isArray(value)) {
+      value.forEach(function(item) { _appendWarParticipantRefs(out, item); });
+      return;
+    }
+    if (typeof value === 'object') {
+      [value.id, value.key, value.name, value.factionId, value.factionName].forEach(function(item) {
+        _appendWarParticipantRefs(out, item);
+      });
+      return;
+    }
+    var normalized = _normPopulationName(value);
+    if (normalized && out.indexOf(normalized) < 0) out.push(normalized);
+  }
+
+  function _warAffectsFaction(activeWar, group) {
+    if (!activeWar || !group) return false;
+    var refs = [];
+    ['factionId', 'attackerId', 'defenderId', 'sourceFactionId', 'targetFactionId',
+      'attacker', 'defender', 'sourceFaction', 'targetFaction', 'attackerFaction',
+      'defenderFaction', 'faction', 'participants', 'participantIds'].forEach(function(field) {
+      _appendWarParticipantRefs(refs, activeWar[field]);
+    });
+    var aliases = _populationGroupAliases(group);
+    if (refs.some(function(ref) { return aliases.indexOf(ref) >= 0; })) return true;
+    // A small set of legacy player-war rows stored only an enemy/opponent label.
+    // Treat those as player wars only when no participant fields exist; never
+    // turn an explicitly NPC-vs-NPC war into a player war.
+    return !!(group.isPlayer && refs.length === 0 && (activeWar.enemy || activeWar.opponent));
+  }
+
+  function _hasExplicitFactionTarget(options) {
+    return ['factionKey', 'factionId', 'factionName'].some(function(field) {
+      return options && options[field] !== undefined && options[field] !== null && String(options[field]).trim() !== '';
+    });
+  }
+
+  function _leafPopulationAliases(leaf) {
+    return [leaf && leaf.id, leaf && leaf.name, leaf && leaf.mapRegionId, leaf && leaf.regionId]
+      .map(_normPopulationName).filter(Boolean);
+  }
+
+  function _resolvePopulationTarget(G, options, groups) {
     options = options || {};
     groups = groups || _factionLeafGroups(G);
-    var regionId = _normPopulationName(options.regionId || options.regionName);
-    if (regionId) {
-      for (var regionGroupIndex = 0; regionGroupIndex < groups.length; regionGroupIndex++) {
-        var regionGroup = groups[regionGroupIndex];
-        var ownsRegion = (regionGroup.leaves || []).some(function(leaf) {
-          return [leaf && leaf.id, leaf && leaf.name, leaf && leaf.mapRegionId, leaf && leaf.regionId]
-            .map(_normPopulationName).some(function(alias) { return alias && alias === regionId; });
-        });
-        if (ownsRegion) return regionGroup;
-      }
-      return null;
-    }
+    var explicitFaction = _hasExplicitFactionTarget(options);
     var wanted = [_normPopulationName(options.factionKey), _normPopulationName(options.factionId), _normPopulationName(options.factionName)].filter(Boolean);
+    var factionGroup = null;
     if (wanted.length) {
-      for (var i = 0; i < groups.length; i++) {
-        var group = groups[i];
-        var aliases = [group.key, group.factionId, group.factionName].map(_normPopulationName);
-        if (aliases.some(function(alias) { return alias && wanted.indexOf(alias) >= 0; })) return group;
-      }
+      factionGroup = groups.find(function(group) {
+        return _populationGroupAliases(group).some(function(alias) { return wanted.indexOf(alias) >= 0; });
+      }) || null;
+      if (!factionGroup) return { ok:false, reason:'faction-not-found', group:null, leaf:null };
     }
-    return groups.find(function(group) { return group.isPlayer; }) || null;
+
+    var directRegion = _normPopulationName(options.regionId || options.regionName);
+    var candidateRegions = (Array.isArray(options.regionCandidates) ? options.regionCandidates : [])
+      .map(_normPopulationName).filter(Boolean);
+    if (directRegion || candidateRegions.length) {
+      var searchGroups = factionGroup ? [factionGroup] : groups;
+      var matches = [];
+      searchGroups.forEach(function(regionGroup) {
+        (regionGroup.leaves || []).forEach(function(leaf) {
+          var aliases = _leafPopulationAliases(leaf);
+          var exact = directRegion && aliases.indexOf(directRegion) >= 0;
+          var candidate = candidateRegions.some(function(wantedRegion) {
+            return aliases.some(function(alias) {
+              return alias === wantedRegion || alias.indexOf(wantedRegion) >= 0 || wantedRegion.indexOf(alias) >= 0;
+            });
+          });
+          if (exact || candidate) matches.push({ group:regionGroup, leaf:leaf });
+        });
+      });
+      if (!matches.length) return { ok:false, reason:'region-not-found', group:factionGroup, leaf:null };
+      if (matches.length > 1) {
+        var exactMatches = directRegion ? matches.filter(function(match) {
+          return _leafPopulationAliases(match.leaf).indexOf(directRegion) >= 0;
+        }) : [];
+        if (exactMatches.length === 1) matches = exactMatches;
+        else return { ok:false, reason:'region-ambiguous', group:factionGroup, leaf:null };
+      }
+      return { ok:true, group:matches[0].group, leaf:matches[0].leaf };
+    }
+    if (factionGroup) return { ok:true, group:factionGroup, leaf:null };
+    var playerGroup = groups.find(function(group) { return group.isPlayer; }) || null;
+    if (playerGroup) return { ok:true, group:playerGroup, leaf:null };
+    if (explicitFaction) return { ok:false, reason:'faction-not-found', group:null, leaf:null };
+    return { ok:groups.length === 0, reason:groups.length ? 'player-faction-not-found' : '', group:null, leaf:null };
   }
 
   function _applyPopulationLossToLeaves(group, mouthsRequested, dingRequested, cause, regionId) {
@@ -972,6 +1216,7 @@
       detail.mouths = Math.max(0, mouthsBefore - mouthLoss);
       detail.ding = Math.max(0, dingBefore - dingLoss);
       detail.households = detail.mouths > 0 ? Math.round(detail.mouths / Math.max(1, mouthsPerHousehold)) : 0;
+      _resizeLeafDemographicBuckets(leaf, detail, detail.mouths);
       leaf.yearlyDeaths = (Number(leaf.yearlyDeaths) || 0) + mouthLoss;
       if (!Array.isArray(leaf.populationLossLedger)) leaf.populationLossLedger = [];
       if (mouthLoss || dingLoss) {
@@ -1020,14 +1265,22 @@
     var P = G && G.population;
     if (!P || !P.national) return { ok:false, reason:'population-unavailable', mouths:0, ding:0 };
     var groups = _factionLeafGroups(G);
-    var group = _findFactionPopulationGroup(G, options, groups);
-    if ((options.regionId || options.regionName) && !group) {
-      return { ok:false, reason:'region-not-found', mouths:0, ding:0 };
+    var target = _resolvePopulationTarget(G, options, groups);
+    if (!target.ok) return { ok:false, reason:target.reason || 'population-target-not-found', mouths:0, ding:0 };
+    var group = target.group;
+    var regionLeaf = target.leaf;
+    var requestedMouths = options.mouths;
+    if (!(Number(requestedMouths) >= 0) && Number(options.mortalityRate) >= 0) {
+      var baseMouths = regionLeaf && regionLeaf.populationDetail
+        ? Number(regionLeaf.populationDetail.mouths) || 0
+        : (group ? _leafPopulationTotals(group.leaves).mouths : Number(P.national.mouths) || 0);
+      requestedMouths = Math.round(baseMouths * Math.max(0, Number(options.mortalityRate) || 0));
     }
     var applied;
     var entry = null;
     if (group && group.leaves.length) {
-      applied = _applyPopulationLossToLeaves(group, options.mouths, options.ding, options.cause, options.regionId || options.regionName);
+      var resolvedRegion = regionLeaf && (regionLeaf.id || regionLeaf.name || regionLeaf.mapRegionId || regionLeaf.regionId);
+      applied = _applyPopulationLossToLeaves(group, requestedMouths, options.ding, options.cause, resolvedRegion || options.regionId || options.regionName);
       var totals = _leafPopulationTotals(group.leaves);
       entry = _factionPopulationEntry(G, group);
       entry.national = totals;
@@ -1040,8 +1293,9 @@
         entry.dynamics._yearlyAccumDeaths = (Number(entry.dynamics._yearlyAccumDeaths) || 0) + applied.mouths;
       }
       _refreshWorldPopulationSummary(G, groups);
+      syncDemographicViews();
     } else {
-      applied = _applyPopulationLossLegacy(P, options.mouths, options.ding);
+      applied = _applyPopulationLossLegacy(P, requestedMouths, options.ding);
       if (P.dynamics) P.dynamics._yearlyAccumDeaths = (Number(P.dynamics._yearlyAccumDeaths) || 0) + applied.mouths; // arch-ok: 旧档死亡账本同步玩家年度死亡统计
     }
     var ledgerRow = {
@@ -1052,7 +1306,14 @@
       ding:applied.ding
     };
     _appendPopulationLossLedger(group && !group.isPlayer ? entry : P, ledgerRow);
-    return { ok:true, mouths:applied.mouths, ding:applied.ding, factionId:group && group.factionId };
+    return {
+      ok:true,
+      mouths:applied.mouths,
+      ding:applied.ding,
+      factionId:group && group.factionId,
+      regionId:regionLeaf && String(regionLeaf.id || regionLeaf.name || ''),
+      regionName:regionLeaf && String(regionLeaf.name || regionLeaf.id || '')
+    };
   }
 
   function _deepFieldDiversityPressure(r) {
@@ -1081,20 +1342,9 @@
     var _rlSeeded = (function(){ var rl = _renli(); return (rl && rl.seededRegionKeySet) ? rl.seededRegionKeySet() : {}; })(); // 已种子地域逃亡归 Renli·deep-field 此处让出（A2a）
     var minxin = G.minxin && typeof G.minxin === 'object' ? (G.minxin.trueIndex || G.minxin.index || 50) : (G.minxin || 50);
     var huangquan = G.huangquan && typeof G.huangquan === 'object' ? (G.huangquan.index || 50) : (G.huangquan || 50);
-    var activeWar = Array.isArray(G.activeWars) && G.activeWars.length > 0;
-
     Object.keys(P.byRegion).forEach(function(rid) {
       var r = P.byRegion[rid];
       _ensureRegionDeepFields(r);
-
-      if (activeWar && r.byGender && typeof r.byGender.male === 'number') {
-        var maleLoss = Math.round(r.byGender.male * 0.002 * mr);
-        if (maleLoss > 0) {
-          r.byGender.male = Math.max(0, r.byGender.male - maleLoss);
-          r.yearlyDeaths = (r.yearlyDeaths || 0) + maleLoss;
-          ledger.push({ kind:'gender-war-loss', regionId:rid, maleLoss:maleLoss });
-        }
-      }
 
       var households = Math.max(1, r.households || Math.round((r.mouths || 0) / 5));
       var baojiaCoverage = Math.max(0, Math.min(1, (r.baojiaUnits || 0) * 10 / households));
@@ -1457,6 +1707,7 @@
           detail.mouths = mouths - flow;
           detail.households = Math.round(detail.mouths / Math.max(1, localMphh));
           detail.ding = Math.round(detail.mouths * localDingRatio);
+          _resizeLeafDemographicBuckets(leaf, detail, detail.mouths);
           _syncLeafPopulationMirrors(leaf, detail);
           if (group.isPlayer) _syncPlayerLegacyRow(P, leaf, detail);
           leaf.yearlyNetMigration = (Number(leaf.yearlyNetMigration) || 0) - flow;
@@ -1471,6 +1722,7 @@
         capitalDetail.mouths = capitalMouths + totalFlow;
         capitalDetail.households = Math.round(capitalDetail.mouths / Math.max(1, capitalMphh));
         capitalDetail.ding = Math.round(capitalDetail.mouths * capitalDingRatio);
+        _resizeLeafDemographicBuckets(capLeaf, capitalDetail, capitalDetail.mouths);
         _syncLeafPopulationMirrors(capLeaf, capitalDetail);
         if (group.isPlayer) _syncPlayerLegacyRow(P, capLeaf, capitalDetail);
         capLeaf.yearlyNetMigration = (Number(capLeaf.yearlyNetMigration) || 0) + totalFlow;
@@ -1484,6 +1736,216 @@
       P.national.ding = playerTotals.ding; // arch-ok: 户籍权威写口由玩家叶级真值聚合全国丁口
     }
     _refreshWorldPopulationSummary(G, groups);
+    syncDemographicViews();
+  }
+
+  function _leafMatchesPopulationCandidates(leaf, candidates) {
+    var aliases = _leafPopulationAliases(leaf);
+    return (candidates || []).map(_normPopulationName).filter(Boolean).some(function(candidate) {
+      return aliases.some(function(alias) {
+        return alias === candidate || alias.indexOf(candidate) >= 0 || candidate.indexOf(alias) >= 0;
+      });
+    });
+  }
+
+  function _populationDivisionContainer(group) {
+    if (!group) return null;
+    if (Array.isArray(group.branch)) return group.branch;
+    if (group.branch && Array.isArray(group.branch.divisions)) return group.branch.divisions;
+    return null;
+  }
+
+  function _emptyPopulationBundle() {
+    return { mouths:0, households:0, ding:0, byAge:{}, byGender:{} };
+  }
+
+  function _addBucketDelta(target, before, after) {
+    Object.keys(before || {}).forEach(function(key) {
+      var delta = Math.max(0, (Number(before[key]) || 0) - (Number(after && after[key]) || 0));
+      target[key] = (Number(target[key]) || 0) + delta;
+    });
+  }
+
+  function _removePopulationForTransfer(leaves, requested) {
+    var bundle = _emptyPopulationBundle();
+    var total = _leafPopulationTotals(leaves).mouths;
+    var remaining = Math.min(Math.max(0, Math.round(Number(requested) || 0)), total);
+    var remainingPool = total;
+    (leaves || []).forEach(function(leaf, index) {
+      var detail = leaf && leaf.populationDetail;
+      if (!detail || remaining <= 0) return;
+      var mouthsBefore = Math.max(0, Math.round(Number(detail.mouths) || 0));
+      if (!mouthsBefore) return;
+      var householdsBefore = Math.max(0, Math.round(Number(detail.households) || 0));
+      var dingBefore = Math.max(0, Math.round(Number(detail.ding) || 0));
+      var bucketsBefore = _ensureLeafDemographicBuckets(leaf, detail);
+      var ageBefore = Object.assign({}, bucketsBefore.byAge);
+      var genderBefore = Object.assign({}, bucketsBefore.byGender);
+      var flow = index === leaves.length - 1
+        ? Math.min(mouthsBefore, remaining)
+        : Math.min(mouthsBefore, Math.round(remaining * mouthsBefore / Math.max(1, remainingPool)));
+      var householdFlow = Math.min(householdsBefore, Math.round(householdsBefore * flow / Math.max(1, mouthsBefore)));
+      var dingFlow = Math.min(dingBefore, Math.round(dingBefore * flow / Math.max(1, mouthsBefore)));
+      detail.mouths = mouthsBefore - flow;
+      detail.households = householdsBefore - householdFlow;
+      detail.ding = dingBefore - dingFlow;
+      var resized = _resizeLeafDemographicBuckets(leaf, detail, detail.mouths);
+      _syncLeafPopulationMirrors(leaf, detail);
+      if (leaf.yearlyNetMigration !== undefined) leaf.yearlyNetMigration = (Number(leaf.yearlyNetMigration) || 0) - flow;
+      bundle.mouths += flow;
+      bundle.households += householdFlow;
+      bundle.ding += dingFlow;
+      _addBucketDelta(bundle.byAge, ageBefore, resized.byAge);
+      _addBucketDelta(bundle.byGender, genderBefore, resized.byGender);
+      remaining -= flow;
+      remainingPool -= mouthsBefore;
+    });
+    bundle.byAge = _scaleBucketsToTotal(bundle.byAge, bundle.mouths, AGE_BUCKET_TEMPLATE);
+    bundle.byGender = _scaleBucketsToTotal(bundle.byGender, bundle.mouths, GENDER_BUCKET_TEMPLATE);
+    return bundle;
+  }
+
+  function _takeExactBucketShare(state, total) {
+    total = Math.max(0, Math.min(Math.round(Number(total) || 0), state.total));
+    var keys = Object.keys(state.values);
+    var out = {};
+    if (!keys.length || !state.total || !total) {
+      keys.forEach(function(key) { out[key] = 0; });
+      return out;
+    }
+    var ranked = [];
+    var assigned = 0;
+    keys.forEach(function(key) {
+      var available = Math.max(0, Math.round(Number(state.values[key]) || 0));
+      var quota = available * total / state.total;
+      var value = Math.min(available, Math.floor(quota));
+      out[key] = value;
+      assigned += value;
+      ranked.push({ key:key, fraction:quota - value, available:available });
+    });
+    ranked.sort(function(a, b) { return b.fraction - a.fraction || String(a.key).localeCompare(String(b.key)); });
+    var remaining = total - assigned;
+    for (var i = 0; remaining > 0 && ranked.length; i = (i + 1) % ranked.length) {
+      var row = ranked[i];
+      if (out[row.key] >= row.available) continue;
+      out[row.key]++;
+      remaining--;
+    }
+    keys.forEach(function(key) { state.values[key] = Math.max(0, Number(state.values[key]) - out[key]); });
+    state.total -= total;
+    return out;
+  }
+
+  function _bundleShare(bundle, index, count, assigned, bucketState) {
+    var last = index === count - 1;
+    var share = {};
+    ['mouths', 'households', 'ding'].forEach(function(field) {
+      share[field] = last
+        ? Math.max(0, Number(bundle[field]) - Number(assigned[field]))
+        : Math.round(Number(bundle[field]) / count);
+      assigned[field] += share[field];
+    });
+    share.byAge = _takeExactBucketShare(bucketState.byAge, share.mouths);
+    share.byGender = _takeExactBucketShare(bucketState.byGender, share.mouths);
+    return share;
+  }
+
+  function materializeQiaozhiResettlement(options) {
+    options = options || {};
+    var G = global.GM;
+    var groups = _factionLeafGroups(G);
+    var target = _resolvePopulationTarget(G, options, groups);
+    if (!target.ok || !target.group) return { ok:false, reason:target.reason || 'player-faction-not-found' };
+    var group = target.group;
+    var container = _populationDivisionContainer(group);
+    if (!container) return { ok:false, reason:'division-container-unavailable' };
+    var eventId = String(options.eventId || '').trim();
+    var targetNames = (Array.isArray(options.targetNames) ? options.targetNames : [])
+      .map(function(value) { return String(value || '').trim(); }).filter(Boolean);
+    if (!eventId || !targetNames.length) return { ok:false, reason:'qiaozhi-spec-invalid' };
+    var existing = group.leaves.filter(function(leaf) {
+      return leaf && (leaf.parentHistoric === eventId || targetNames.indexOf(String(leaf.name || '')) >= 0);
+    });
+    if (existing.length === targetNames.length) {
+      return { ok:true, alreadyMaterialized:true, scale:_leafPopulationTotals(existing).mouths, factionId:group.factionId };
+    }
+    if (existing.length) return { ok:false, reason:'qiaozhi-target-conflict' };
+    var sourceCandidates = Array.isArray(options.sourceCandidates) ? options.sourceCandidates : [];
+    var sourceLeaves = group.leaves.filter(function(leaf) {
+      return leaf && leaf.populationDetail && Number(leaf.populationDetail.mouths) > 0 &&
+        (!sourceCandidates.length || _leafMatchesPopulationCandidates(leaf, sourceCandidates));
+    });
+    if (!sourceLeaves.length) return { ok:false, reason:'source-region-not-found' };
+    var sourceTotal = _leafPopulationTotals(sourceLeaves).mouths;
+    var requested = Math.min(Math.max(0, Math.round(Number(options.mouths) || 0)), Math.round(sourceTotal * 0.3));
+    if (!requested) return { ok:false, reason:'source-population-empty' };
+    var existingIds = Object.create(null);
+    groups.forEach(function(populationGroup) {
+      populationGroup.leaves.forEach(function(leaf) {
+        if (leaf && leaf.id != null) existingIds[String(leaf.id)] = true;
+      });
+    });
+    var plannedIds = targetNames.map(function(name) {
+      var stableId = 'tm_qiaozhi_' + _tmPopulationHash(String(group.factionId || group.key) + '|' + eventId + '|' + name);
+      if (existingIds[stableId]) throw new Error('侨置行政区稳定 ID 冲突: ' + stableId);
+      existingIds[stableId] = true;
+      return stableId;
+    });
+    var bundle = _removePopulationForTransfer(sourceLeaves, requested);
+    if (!bundle.mouths) return { ok:false, reason:'source-population-empty' };
+    var assigned = { mouths:0, households:0, ding:0, byAge:{}, byGender:{} };
+    var bucketState = {
+      byAge:{ values:Object.assign({}, bundle.byAge), total:bundle.mouths },
+      byGender:{ values:Object.assign({}, bundle.byGender), total:bundle.mouths }
+    };
+    var created = targetNames.map(function(name, index) {
+      var share = _bundleShare(bundle, index, targetNames.length, assigned, bucketState);
+      var stableId = plannedIds[index];
+      var detail = {
+        households:share.households,
+        mouths:share.mouths,
+        ding:share.ding,
+        byAge:share.byAge,
+        byGender:share.byGender
+      };
+      return {
+        id:stableId,
+        name:name,
+        level:'qiaozhi',
+        regionType:'qiaozhi',
+        isQiaozhi:true,
+        parentHistoric:eventId,
+        factionId:group.factionId,
+        populationDetail:detail,
+        population:{ households:detail.households, mouths:detail.mouths, ding:detail.ding },
+        byAge:detail.byAge,
+        byGender:detail.byGender,
+        byLegalStatus:{ qiaozhi:{ households:detail.households, mouths:detail.mouths, ding:detail.ding } },
+        yearlyNetMigration:detail.mouths
+      };
+    });
+    created.forEach(function(division) { container.push(division); }); // arch-ok: 户籍权威写口创建侨置叶级行政区
+    groups = _factionLeafGroups(G);
+    _refreshWorldPopulationSummary(G, groups);
+    syncDemographicViews();
+    return {
+      ok:true,
+      scale:bundle.mouths,
+      households:bundle.households,
+      ding:bundle.ding,
+      factionId:group.factionId,
+      regionIds:created.map(function(division) { return division.id; })
+    };
+  }
+
+  function _tmPopulationHash(text) {
+    var hash = 2166136261;
+    text = String(text || '');
+    for (var i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash = typeof Math.imul === 'function' ? Math.imul(hash, 16777619) : hash * 16777619;
+    }
+    return ('00000000' + (hash >>> 0).toString(16)).slice(-8);
   }
 
   function _executeMigrationEvent(e, suppliedGroups) {
@@ -1646,6 +2108,8 @@
     init: init,
     tick: tick,
     applyPopulationLoss: applyPopulationLoss,
+    materializeQiaozhiResettlement: materializeQiaozhiResettlement,
+    syncDemographicViews: syncDemographicViews,
     startLargeCorvee: startLargeCorvee,
     getAIContext: getAIContext,
     CATEGORY_TEMPLATES: CATEGORY_TEMPLATES,

@@ -131,9 +131,14 @@ console.log('[smoke-population-single-authority]');
   const afterBridge = world.leaves.map(leaf => leaf.populationDetail.mouths);
   ok(JSON.stringify(afterBridge) === JSON.stringify(afterHuji), 'IntegrationBridge does not advance leaf population after Huji');
   ok(JSON.stringify(ctx.GM.corruption.byDept) === corruptionAfterHuji, 'IntegrationBridge does not apply a second corruption tick');
+  const sumBuckets = buckets => Object.values(buckets || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+  const leafDing = world.leaves.reduce((sum, leaf) => sum + leaf.populationDetail.ding, 0);
   ok(Math.abs(world.leaves[1].populationDetail.households / world.leaves[1].populationDetail.mouths - leafHouseholdRatio) < 0.000001
-    && Math.abs(world.leaves[1].populationDetail.ding / world.leaves[1].populationDetail.mouths - leafDingRatio) < 0.000001,
-  'leaf household and ding ratios remain local instead of being replaced by national defaults');
+    && Math.abs(world.leaves[1].populationDetail.ding / world.leaves[1].populationDetail.mouths - leafDingRatio) > 0
+    && ctx.GM.population.national.ding === leafDing
+    && world.leaves.every(leaf => sumBuckets(leaf.populationDetail.byAge) === leaf.populationDetail.mouths
+      && sumBuckets(leaf.populationDetail.byGender) === leaf.populationDetail.mouths),
+  'leaf household ratios stay local while age transitions update leaf-authoritative ding and demographics');
   ok(!Object.prototype.hasOwnProperty.call(ctx.GM.population.byRegion, 'ghost')
     && !Object.prototype.hasOwnProperty.call(ctx.GM.minxin.byRegion, 'ghost')
     && !Object.prototype.hasOwnProperty.call(ctx.GM.fiscal.regions, 'ghost')

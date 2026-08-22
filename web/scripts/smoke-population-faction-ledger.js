@@ -9,6 +9,7 @@ const ROOT = path.resolve(__dirname, '..');
 const hujiSource = fs.readFileSync(path.join(ROOT, 'tm-huji-engine.js'), 'utf8');
 const deepSource = fs.readFileSync(path.join(ROOT, 'tm-huji-deep-fill.js'), 'utf8');
 const runtimeBridgeSource = fs.readFileSync(path.join(ROOT, 'tm-huji-runtime-bridge.js'), 'utf8');
+const integrationBridgeSource = fs.readFileSync(path.join(ROOT, 'tm-integration-bridge.js'), 'utf8');
 const economySource = fs.readFileSync(path.join(ROOT, 'tm-economy-engine.js'), 'utf8');
 const historicalSource = fs.readFileSync(path.join(ROOT, 'tm-historical-presets.js'), 'utf8');
 const regionEnrichSource = fs.readFileSync(path.join(ROOT, 'tm-region-enrich.js'), 'utf8');
@@ -104,6 +105,7 @@ function makeRuntime(options = {}) {
   vm.runInContext(hujiSource, context, { filename: 'tm-huji-engine.js' });
   vm.runInContext(deepSource, context, { filename: 'tm-huji-deep-fill.js' });
   vm.runInContext(runtimeBridgeSource, context, { filename: 'tm-huji-runtime-bridge.js' });
+  vm.runInContext(integrationBridgeSource, context, { filename: 'tm-integration-bridge.js' });
   vm.runInContext(historicalSource, context, { filename: 'tm-historical-presets.js' });
   context.HujiEngine.init(context.P);
   context.GM.population.corvee.enabled = false;
@@ -554,6 +556,102 @@ console.log('[smoke-population-faction-ledger]');
   });
   ok(triggerResults.every(result => result.premature === 0 && result.triggered === result.cycleTurns),
     'registration cycles use canonical elapsed months for every daysPerTurn scale');
+}
+
+{
+  const { context, playerLeaves } = makeRuntime();
+  context.GM.turn = 12;
+  context.GM.population.meta.registrationCycle = 1;
+  context.GM.population.meta.lastRegistrationTurn = 0;
+  playerLeaves[0].populationDetail.hiddenCount = 300000;
+  playerLeaves[1].populationDetail.hiddenCount = 200000;
+  context.GM.population.hiddenCount = 500000;
+  context.HujiEngine.tick({ turn:12, monthRatio:1, strict:true });
+  const leafHiddenAfter = playerLeaves.reduce((sum, leaf) => sum + Number(leaf.populationDetail.hiddenCount || 0), 0);
+  const leafHuangji = playerLeaves.reduce((sum, leaf) => sum + Number(leaf.populationDetail.byLegalStatus.huangji.households || 0), 0);
+  context.TM.HujiRuntimeBridge.maintain(context.GM, { scenario:context.P, turn:12, applyHardEffects:false });
+  ok(leafHiddenAfter === 350000
+    && context.GM.population.hiddenCount === 350000
+    && context.GM.hukou.estimatedHidden === 350000,
+  'census registration removes discovered mouths from authoritative leaves and RuntimeBridge cannot restore them');
+  ok(leafHuangji === 30000
+    && context.GM.population.meta.registrationLedger.slice(-1)[0].mouths === 150000
+    && context.GM.population.meta.registrationLedger.slice(-1)[0].households === 30000,
+  '150,000 discovered hidden mouths become about 30,000 registered households, never 150,000 households');
+}
+
+{
+  const { context, playerLeaves } = makeRuntime();
+  context.GM.turn = 12;
+  context.GM.population.meta.registrationCycle = 1;
+  context.GM.population.meta.lastRegistrationTurn = 0;
+  playerLeaves[0].populationDetail.hiddenCount = 300000;
+  playerLeaves[1].populationDetail.hiddenCount = 200000;
+  context.GM.population.hiddenCount = 500000;
+  const hiddenBefore = playerLeaves.map(leaf => leaf.populationDetail.hiddenCount);
+  const legalBefore = playerLeaves.map(leaf => clone(leaf.populationDetail.byLegalStatus || {}));
+  context.FiscalEngine.spendFromGuoku = () => { throw new Error('injected census payment failure'); };
+  let failure = null;
+  try { context.HujiEngine.tick({ turn:12, monthRatio:1, strict:true }); }
+  catch (error) { failure = error; }
+  ok(failure && /census payment failure/.test(failure.message)
+    && context.GM.population.meta.lastRegistrationTurn === 0
+    && JSON.stringify(playerLeaves.map(leaf => leaf.populationDetail.hiddenCount)) === JSON.stringify(hiddenBefore)
+    && JSON.stringify(playerLeaves.map(leaf => leaf.populationDetail.byLegalStatus || {})) === JSON.stringify(legalBefore),
+  'failed census payment propagates before registration metadata or leaf ledgers change');
+}
+
+{
+  const { context } = makeRuntime();
+  const countyA = makeLeaf('county-a', '甲县', 600000, true);
+  const countyB = makeLeaf('county-b', '乙县', 400000, false);
+  countyA.populationDetail.hiddenCount = 10000;
+  countyB.populationDetail.hiddenCount = 5000;
+  context.GM.adminHierarchy.player.divisions = [{
+    id:'province-a', name:'甲省', children:[{
+      id:'prefecture-a', name:'甲府', children:[countyA, countyB]
+    }]
+  }];
+  context.GM.population.hiddenCount = 15000;
+  context.TM.HujiRuntimeBridge.maintain(context.GM, { scenario:context.P, turn:1, applyHardEffects:false });
+  context.IntegrationBridge.tick({ strict:true });
+  context.GM.population.byRegion['county-a'].baojiaUnits = 100000;
+  const hiddenBefore = countyA.populationDetail.hiddenCount;
+  context.GM.population.dynamics.birthRateBase = 0;
+  context.GM.population.dynamics.deathRateBase = 0;
+  context.HujiEngine.tick({ turn:1, monthRatio:12, strict:true });
+  const reduced = countyA.populationDetail.hiddenCount;
+  context.TM.HujiRuntimeBridge.maintain(context.GM, { scenario:context.P, turn:1, applyHardEffects:false });
+  context.IntegrationBridge.tick({ strict:true });
+  context.TM.HujiRuntimeBridge.maintain(context.GM, { scenario:context.P, turn:1, applyHardEffects:false });
+  const keys = Object.keys(context.GM.population.byRegion).sort();
+  ok(reduced < hiddenBefore
+    && countyA.populationDetail.hiddenCount === reduced
+    && context.GM.population.byRegion['county-a'] === countyA.populationDetail,
+  'multi-level baojia changes remain on the authoritative leaf after both runtime bridges');
+  ok(JSON.stringify(keys) === JSON.stringify(['county-a', 'county-b'])
+    && !context.GM.population.byRegion['province-a']
+    && context.GM.population.byProvince['province-a'],
+  'population.byRegion keeps stable leaf IDs while province proxies use population.byProvince');
+}
+
+{
+  const { context, playerLeaves } = makeRuntime();
+  const source = playerLeaves[0];
+  source.populationDetail.mouths = 10;
+  source.populationDetail.households = 5;
+  source.populationDetail.ding = 5;
+  source.populationDetail.byAge = { age_21_30:10 };
+  source.populationDetail.byGender = { male:5, female:5 };
+  const result = context.HujiEngine.materializeQiaozhiResettlement({
+    eventId:'tiny-four-way-qiaozhi', mouths:3, sourceCandidates:['京城'],
+    targetNames:['侨甲', '侨乙', '侨丙', '侨丁']
+  });
+  const created = context.GM.adminHierarchy.player.divisions.filter(leaf => leaf.parentHistoric === 'tiny-four-way-qiaozhi');
+  ok(result.ok && result.households === 2 && result.ding === 2
+    && created.reduce((sum, leaf) => sum + leaf.populationDetail.households, 0) === 2
+    && created.reduce((sum, leaf) => sum + leaf.populationDetail.ding, 0) === 2,
+  'four-way qiaozhi distributes two households and two ding exactly without rounding inflation');
 }
 
 {

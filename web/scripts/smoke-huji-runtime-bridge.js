@@ -165,6 +165,10 @@ assert(sandbox.GM.population.byCategory.tusi_custom, 'scenario-specific tusi cat
 assert(/灶户|盐场/.test(sandbox.GM.population.byCategory.daohu.name + sandbox.GM.population.byCategory.daohu.description), 'custom category should preserve description');
 assert(sandbox.GM.population.byRegion.capital && sandbox.GM.population.byRegion.capital.mouths === 26000, 'capital region should be indexed from adminHierarchy');
 assert(sandbox.GM.population.byRegion.tusi.regionType === 'tusi', 'region type should be preserved');
+assert(sandbox.GM.population.byRegion.capital === sandbox.GM.adminHierarchy.player.divisions[0].populationDetail,
+  'byRegion rows should be the authoritative leaf populationDetail objects');
+assert(sandbox.GM.population.byLeafRegion === sandbox.GM.population.byRegion,
+  'byLeafRegion and legacy byRegion should expose the same leaf-granularity table');
 
 assert(sandbox.GM.corvee && sandbox.GM.corvee.ledger, 'corvee ledger should be exposed');
 assert(sandbox.GM.corvee.ledger.summary.totalDemandDays > 0, 'corvee ledger should calculate demand days');
@@ -212,6 +216,33 @@ assert(/playerHujiOperations/.test(prompt), 'prompt should include player operat
 
 const snap = Bridge.snapshot(sandbox.GM, { limit: 5 });
 assert(snap.hukou && snap.corvee && snap.military && snap.operations.length >= 2, 'snapshot should expose all bridge sections');
+
+let exactSmallBreakdowns = true;
+for (let total = 0; total <= 100; total++) {
+  sandbox.GM.adminHierarchy.player.divisions.forEach((region, index) => {
+    region.populationDetail.mouths = index === 0 ? total : 0;
+    region.populationDetail.households = index === 0 ? total : 0;
+    region.populationDetail.ding = index === 0 ? total : 0;
+    region.populationDetail.hiddenCount = 0;
+    region.populationDetail.hidden = 0;
+    region.populationDetail.fugitives = 0;
+    region.populationDetail.byAge = {};
+    region.populationDetail.byGender = {};
+    region.populationDetail.byLegalStatus = {};
+  });
+  sandbox.GM.population.hiddenCount = 0;
+  sandbox.GM.population.fugitives = 0;
+  sandbox.GM.population._leafPopulationAuxAuthoritative = true;
+  Bridge.maintain(sandbox.GM, { scenario, turn: 90 + total, source:'smoke-exact-small', applyHardEffects:false });
+  ['households', 'mouths', 'ding'].forEach(field => {
+    const categorySum = Object.values(sandbox.GM.population.byCategory || {})
+      .reduce((sum, row) => sum + Number(row && row[field] || 0), 0);
+    const legalSum = Object.values(sandbox.GM.population.byLegalStatus || {})
+      .reduce((sum, row) => sum + Number(row && row[field] || 0), 0);
+    exactSmallBreakdowns = exactSmallBreakdowns && categorySum === total && legalSum === total;
+  });
+}
+assert(exactSmallBreakdowns, 'category and legal-status allocations should conserve mouths households and ding for totals 0 through 100');
 
 const src = name => fs.readFileSync(path.join(ROOT, name), 'utf8');
 const index = src('index.html');

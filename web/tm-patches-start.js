@@ -70,9 +70,10 @@ function _tmStartFirstFiniteNumber() {
   return null;
 }
 
-// 玩家行政树解析：显式 player 优先，其次按玩家势力名/玩家角色/势力标记匹配；
-// 只有唯一树时才可兜底。多树而无法确认时返回 null，禁止静默把敌方第一项当玩家。
-function _tmResolvePlayerAdminKey(adminHierarchy, sc) {
+// 玩家行政树解析：运行期只接受显式 player 或稳定玩家身份匹配。
+// “唯一树即玩家”仅允许由一次性旧档/开局迁移显式开启，禁止日常聚合把唯一 NPC 认成玩家。
+function _tmResolvePlayerAdminKey(adminHierarchy, sc, options) {
+  options = options || {};
   if (!adminHierarchy || typeof adminHierarchy !== 'object' || Array.isArray(adminHierarchy)) return null;
   if (adminHierarchy.player && (Array.isArray(adminHierarchy.player) || Array.isArray(adminHierarchy.player.divisions))) return 'player';
   if (Array.isArray(adminHierarchy.divisions)) return 'divisions';
@@ -88,14 +89,19 @@ function _tmResolvePlayerAdminKey(adminHierarchy, sc) {
   }
   try {
     if (typeof P !== 'undefined' && P) {
+      add(P.playerInfo && P.playerInfo.factionId);
       add(P.playerInfo && P.playerInfo.factionName);
+      add(P.playerFactionId);
       add(P.playerFaction);
     }
   } catch (_) {}
+  add(sc && sc.playerInfo && sc.playerInfo.factionId);
   add(sc && sc.playerInfo && sc.playerInfo.factionName);
+  add(sc && sc.playerFactionId);
   add(sc && sc.playerFaction);
   try {
     var G = (typeof GM !== 'undefined' && GM) ? GM : null;
+    add(G && G.playerFactionId);
     add(G && G.playerFaction);
     (G && Array.isArray(G.facs) ? G.facs : []).forEach(function(f) {
       if (f && f.isPlayer) { add(f.name); add(f.id); add(f.key); }
@@ -109,11 +115,11 @@ function _tmResolvePlayerAdminKey(adminHierarchy, sc) {
     var want = norm(candidates[i]);
     for (var j = 0; j < keys.length; j++) {
       var key = keys[j], tree = adminHierarchy[key] || {};
-      var aliases = [key, tree && tree.name, tree && tree.faction, tree && tree.factionName, tree && tree.id, tree && tree.key, tree && tree.owner];
+      var aliases = [key, tree && tree.name, tree && tree.faction, tree && tree.factionId, tree && tree.factionName, tree && tree.id, tree && tree.key, tree && tree.owner];
       if (aliases.some(function(v) { return norm(v) === want; })) return key;
     }
   }
-  return keys.length === 1 ? keys[0] : null;
+  return options.allowSoleBranchFallback === true && keys.length === 1 ? keys[0] : null;
 }
 
 function _tmStartLoadVars(sid, sc) {
@@ -168,7 +174,7 @@ function _tmStartPinMinxinFromVars(sc) {
     pin = Math.max(0, Math.min(100, pin));
     function _pinLeaves(ah) {
       if (!ah || typeof ah !== 'object') return 0;
-      var key = _tmResolvePlayerAdminKey(ah, sc);
+      var key = _tmResolvePlayerAdminKey(ah, sc, { allowSoleBranchFallback:true });
       var fac = Array.isArray(ah.divisions) ? ah : (key ? ah[key] : null);
       if (!fac) return 0;
       var leaves = [];

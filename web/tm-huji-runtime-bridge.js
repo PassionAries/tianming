@@ -180,6 +180,68 @@
     return (scenario && scenario.populationConfig) || (root && root.populationConfig) || {};
   }
 
+  function normalizedIdentity(value) {
+    return String(value == null ? '' : value).replace(/[\s·（）()\-—_]/g, '').toLowerCase();
+  }
+
+  function playerIdentityAliases(root) {
+    var aliases = [];
+    function add(value) {
+      var normalized = normalizedIdentity(value);
+      if (normalized && aliases.indexOf(normalized) < 0) aliases.push(normalized);
+    }
+    add(global.P && global.P.playerInfo && global.P.playerInfo.factionId);
+    add(global.P && global.P.playerInfo && global.P.playerInfo.factionName);
+    add(global.P && global.P.playerFactionId);
+    add(global.P && global.P.playerFaction);
+    add(root && root.playerFactionId);
+    add(root && root.playerFaction);
+    (root && Array.isArray(root.facs) ? root.facs : []).forEach(function(faction) {
+      if (faction && faction.isPlayer) {
+        add(faction.id); add(faction.name); add(faction.key); add(faction.factionName);
+      }
+    });
+    return aliases;
+  }
+
+  function strictPlayerAdminKey(root, hierarchy) {
+    if (!hierarchy || typeof hierarchy !== 'object') return null;
+    if (Object.prototype.hasOwnProperty.call(hierarchy, 'player')) return 'player';
+    if (Array.isArray(hierarchy.divisions)) return 'divisions';
+    try {
+      if (typeof global._tmResolvePlayerAdminKey === 'function') {
+        var resolved = global._tmResolvePlayerAdminKey(hierarchy, global.P || null, { allowSoleBranchFallback:false });
+        if (resolved) return resolved;
+      }
+    } catch (_) {}
+    var wanted = playerIdentityAliases(root);
+    var keys = Object.keys(hierarchy).filter(function(key) {
+      var branch = hierarchy[key];
+      return Array.isArray(branch) || (branch && Array.isArray(branch.divisions));
+    });
+    for (var i = 0; i < keys.length; i++) {
+      var branch = hierarchy[keys[i]] || {};
+      if (branch && branch.isPlayer) return keys[i];
+      var values = [keys[i], branch.id, branch.key, branch.factionId, branch.factionName, branch.name]
+        .map(normalizedIdentity).filter(Boolean);
+      if (values.some(function(value) { return wanted.indexOf(value) >= 0; })) return keys[i];
+    }
+    return null;
+  }
+
+  function hasAuthoritativePlayerPopulation(root) {
+    var hierarchy = root && root.adminHierarchy;
+    if (!hierarchy || typeof hierarchy !== 'object') return false;
+    if (Array.isArray(hierarchy.divisions)) return true;
+    var branchKeys = Object.keys(hierarchy).filter(function(key) {
+      var branch = hierarchy[key];
+      return Array.isArray(branch) || (branch && Array.isArray(branch.divisions));
+    });
+    if (!branchKeys.length) return false;
+    if (strictPlayerAdminKey(root, hierarchy)) return true;
+    return playerIdentityAliases(root).length > 0;
+  }
+
   function walkAdminNode(node, out) {
     if (!node) return;
     if (Array.isArray(node)) {
@@ -198,33 +260,18 @@
   function getLeafRegions(root) {
     root = pickRoot(root);
     var leaves = [];
+    var authoritativePlayerPopulation = hasAuthoritativePlayerPopulation(root);
     if (root.adminHierarchy) {
-      if (global.IntegrationBridge && typeof global.IntegrationBridge.getLeafDivisions === 'function') {
-        try { leaves = global.IntegrationBridge.getLeafDivisions(root.adminHierarchy) || []; } catch (_) { leaves = []; }
+      var hierarchy = root.adminHierarchy || {};
+      var playerKey = strictPlayerAdminKey(root, hierarchy);
+      if (playerKey === 'divisions') {
+        walkAdminNode(hierarchy.divisions, leaves);
+      } else if (playerKey && global.IntegrationBridge && typeof global.IntegrationBridge.getLeafDivisions === 'function') {
+        try { leaves = global.IntegrationBridge.getLeafDivisions(hierarchy, playerKey) || []; } catch (_) { leaves = []; }
       }
-      if (!leaves.length) {
-        var hierarchy = root.adminHierarchy || {};
-        var playerKey = null;
-        if (typeof global._tmResolvePlayerAdminKey === 'function') {
-          try { playerKey = global._tmResolvePlayerAdminKey(hierarchy) || null; } catch (_) {}
-        }
-        if (!playerKey && Object.prototype.hasOwnProperty.call(hierarchy, 'player')) playerKey = 'player';
-        if (!playerKey && Array.isArray(hierarchy.divisions)) {
-          walkAdminNode(hierarchy.divisions, leaves);
-        } else if (!playerKey) {
-          var candidateKeys = Object.keys(hierarchy).filter(function(k) {
-            var branch = hierarchy[k];
-            return Array.isArray(branch) || (branch && Array.isArray(branch.divisions));
-          });
-          if (candidateKeys.length === 1) playerKey = candidateKeys[0];
-        }
-        // Compatibility aggregation must never silently turn a multi-faction
-        // world into the player's national ledger. If ownership is ambiguous,
-        // leave the fallback empty instead of summing every faction together.
-        if (playerKey) walkAdminNode(hierarchy[playerKey], leaves);
-      }
+      if (!leaves.length && playerKey && playerKey !== 'divisions') walkAdminNode(hierarchy[playerKey], leaves);
     }
-    if (!leaves.length && Array.isArray(root.regions)) leaves = root.regions.slice();
+    if (!leaves.length && !authoritativePlayerPopulation && Array.isArray(root.regions)) leaves = root.regions.slice();
     var seen = {};
     return leaves.filter(function(row, idx) {
       if (!row || typeof row !== 'object') return false;
@@ -259,7 +306,8 @@
     };
   }
 
-  function aggregatePopulation(root, config, leaves) {
+  function aggregatePopulation(root, config, leaves, options) {
+    options = options || {};
     var initial = (config && config.initial) || {};
     var byRegion = {};
     var totals = { households: 0, mouths: 0, ding: 0, hiddenCount: 0, fugitives: 0 };
@@ -297,14 +345,16 @@
       });
     });
 
-    var hasRegionalTotals = totals.households || totals.mouths || totals.ding;
-    var households = hasRegionalTotals ? totals.households : round(initial.nationalHouseholds || (root.population && root.population.national && root.population.national.households) || 0);
-    var mouths = hasRegionalTotals ? totals.mouths : round(initial.nationalMouths || (root.population && root.population.national && root.population.national.mouths) || households * DEFAULT_MOUTHS_PER_HOUSEHOLD);
-    var ding = hasRegionalTotals ? totals.ding : round(initial.nationalDing || (root.population && root.population.national && root.population.national.ding) || mouths * 0.30);
+    var hasRegionalTotals = leaves.length > 0 || totals.households || totals.mouths || totals.ding;
+    var useRegionalTruth = options.authoritativePlayerPopulation === true || !!hasRegionalTotals;
+    var households = useRegionalTruth ? totals.households : round(initial.nationalHouseholds || (root.population && root.population.national && root.population.national.households) || 0);
+    var mouths = useRegionalTruth ? totals.mouths : round(initial.nationalMouths || (root.population && root.population.national && root.population.national.mouths) || households * DEFAULT_MOUTHS_PER_HOUSEHOLD);
+    var ding = useRegionalTruth ? totals.ding : round(initial.nationalDing || (root.population && root.population.national && root.population.national.ding) || mouths * 0.30);
     var scenarioHidden = round(initial.hiddenPopulation || initial.hiddenCount || initial.unregisteredPopulation || 0);
     var existingHidden = round(root.population && (root.population.hiddenCount || root.population.hiddenPopulation || root.population.unregisteredPopulation) || 0);
-    var hiddenCount = Math.max(totals.hiddenCount, scenarioHidden, existingHidden);
-    var fugitives = Math.max(totals.fugitives, round(root.population && root.population.fugitives || 0), round(root.hukou && (root.hukou.refugees || root.hukou.fugitives) || 0));
+    var emptyAuthoritativePlayer = options.authoritativePlayerPopulation === true && leaves.length === 0;
+    var hiddenCount = emptyAuthoritativePlayer ? 0 : Math.max(totals.hiddenCount, scenarioHidden, existingHidden);
+    var fugitives = emptyAuthoritativePlayer ? 0 : Math.max(totals.fugitives, round(root.population && root.population.fugitives || 0), round(root.hukou && (root.hukou.refugees || root.hukou.fugitives) || 0));
     return {
       national: { households: households, mouths: mouths, ding: ding },
       hiddenCount: hiddenCount,
@@ -1190,7 +1240,9 @@
     var store = ensureStore(root);
     var config = getPopulationConfig(root, options);
     var leaves = getLeafRegions(root);
-    var aggregate = aggregatePopulation(root, config, leaves);
+    var aggregate = aggregatePopulation(root, config, leaves, {
+      authoritativePlayerPopulation:hasAuthoritativePlayerPopulation(root)
+    });
     var hukouLedger = syncHukou(root, aggregate, options);
     var corveeLedger = buildCorveeLedger(root, config, aggregate, options);
     var militaryServicePool = buildMilitaryPool(root, config, aggregate, options);

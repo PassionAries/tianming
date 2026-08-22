@@ -310,17 +310,37 @@
   function _scaleBucketsToTotal(obj, total, template) {
     obj = obj || {};
     total = Math.max(0, Math.round(total || 0));
-    var keys = Object.keys(template || obj || {});
+    var keys = Object.keys(template || {});
+    Object.keys(obj || {}).forEach(function(key) {
+      if (keys.indexOf(key) < 0) keys.push(key);
+    });
     if (!keys.length) return {};
     var current = _sumObj(obj);
+    var weights = {};
+    var weightTotal = 0;
+    keys.forEach(function(key) {
+      var weight = current > 0 ? Math.max(0, Number(obj[key]) || 0) : Math.max(0, Number(template && template[key]) || 0);
+      weights[key] = weight;
+      weightTotal += weight;
+    });
+    if (!(weightTotal > 0)) {
+      keys.forEach(function(key) { weights[key] = key === keys[0] ? 1 : 0; });
+      weightTotal = 1;
+    }
     var out = {};
     var assigned = 0;
-    keys.forEach(function(k, idx) {
-      var base = current > 0 ? Number(obj[k] || 0) / current : Number(template[k] || 0);
-      var val = idx === keys.length - 1 ? Math.max(0, total - assigned) : Math.round(total * base);
-      out[k] = val;
-      assigned += val;
+    var ranked = [];
+    keys.forEach(function(key, index) {
+      var quota = total * weights[key] / weightTotal;
+      var value = Math.floor(quota);
+      out[key] = value;
+      assigned += value;
+      ranked.push({ key:key, fraction:quota - value, index:index });
     });
+    ranked.sort(function(a, b) { return b.fraction - a.fraction || a.index - b.index; });
+    for (var remaining = total - assigned, i = 0; remaining > 0; remaining--, i++) {
+      out[ranked[i % ranked.length].key]++;
+    }
     return out;
   }
 
@@ -577,33 +597,55 @@
     return String(value == null ? '' : value).replace(/[\s·（）()\-—_]/g, '').toLowerCase();
   }
 
+  function _playerPopulationAliases(G) {
+    var aliases = [];
+    function add(value) {
+      var normalized = _normPopulationName(value);
+      if (normalized && aliases.indexOf(normalized) < 0) aliases.push(normalized);
+    }
+    add(global.P && global.P.playerInfo && global.P.playerInfo.factionId);
+    add(global.P && global.P.playerInfo && global.P.playerInfo.factionName);
+    add(global.P && global.P.playerFactionId);
+    add(global.P && global.P.playerFaction);
+    add(G && G.playerFactionId);
+    add(G && G.playerFaction);
+    (G && Array.isArray(G.facs) ? G.facs : []).forEach(function(faction) {
+      if (faction && faction.isPlayer) {
+        add(faction.id); add(faction.name); add(faction.key); add(faction.factionName);
+      }
+    });
+    return aliases;
+  }
+
+  function _hasExplicitPlayerIdentity(G, hierarchy) {
+    if (!hierarchy || typeof hierarchy !== 'object') return false;
+    if (Array.isArray(hierarchy.divisions)) return true;
+    var branchKeys = Object.keys(hierarchy).filter(function(key) {
+      var branch = hierarchy[key];
+      return Array.isArray(branch) || (branch && Array.isArray(branch.divisions));
+    });
+    if (!branchKeys.length) return false;
+    if (Object.prototype.hasOwnProperty.call(hierarchy, 'player')) return true;
+    return _playerPopulationAliases(G).length > 0;
+  }
+
   function _playerAdminKey(G, hierarchy) {
+    if (hierarchy && Object.prototype.hasOwnProperty.call(hierarchy, 'player')) return 'player';
     try {
       if (typeof global._tmResolvePlayerAdminKey === 'function') {
-        var resolved = global._tmResolvePlayerAdminKey(hierarchy, global.P || null);
+        var resolved = global._tmResolvePlayerAdminKey(hierarchy, global.P || null, { allowSoleBranchFallback:false });
         if (resolved && resolved !== 'divisions') return resolved;
       }
     } catch (_) {}
-    if (hierarchy && hierarchy.player) return 'player';
     var keys = Object.keys(hierarchy || {}).filter(function(key) {
       var branch = hierarchy[key];
       return Array.isArray(branch) || (branch && Array.isArray(branch.divisions));
     });
-    if (keys.length === 1) return keys[0];
-    var playerNames = [];
-    function add(value) {
-      var normalized = _normPopulationName(value);
-      if (normalized && playerNames.indexOf(normalized) < 0) playerNames.push(normalized);
-    }
-    add(global.P && global.P.playerInfo && global.P.playerInfo.factionName);
-    add(global.P && global.P.playerFaction);
-    add(G && G.playerFaction);
-    (G && Array.isArray(G.facs) ? G.facs : []).forEach(function(faction) {
-      if (faction && faction.isPlayer) { add(faction.id); add(faction.name); add(faction.key); }
-    });
+    var playerNames = _playerPopulationAliases(G);
     for (var i = 0; i < keys.length; i++) {
       var branch = hierarchy[keys[i]] || {};
-      var aliases = [keys[i], branch.factionId, branch.factionName, branch.name, branch.key];
+      if (branch && branch.isPlayer) return keys[i];
+      var aliases = [keys[i], branch.factionId, branch.factionName, branch.name, branch.key, branch.id];
       if (aliases.some(function(alias) { return playerNames.indexOf(_normPopulationName(alias)) >= 0; })) return keys[i];
     }
     return null;
@@ -635,7 +677,7 @@
       if (!Array.isArray(roots)) return;
       var leaves = [];
       _walkAdminLeaves(roots, leaves, []);
-      if (!leaves.length) return;
+      if (!leaves.length && key !== playerKey) return;
       var faction = _factionForAdminBranch(G, key, branch || {});
       groups.push({
         key: key,
@@ -903,8 +945,18 @@
     var groups = _factionLeafGroups(G);
     var playerGroup = groups.find(function(group) { return group.isPlayer; });
     if (!playerGroup) {
+      if (_hasExplicitPlayerIdentity(G, G && G.adminHierarchy)) {
+        _zeroPlayerPopulationViews(P);
+        _refreshWorldPopulationSummary(G, groups);
+        return { ok:true, national:{ mouths:0, households:0, ding:0 }, byAge:{}, byGender:{}, territorialExtinction:true };
+      }
       _ensureDeepDemographics(P);
       return { ok:true, legacy:true };
+    }
+    if (!playerGroup.leaves.length) {
+      _zeroPlayerPopulationViews(P);
+      _refreshWorldPopulationSummary(G, groups);
+      return { ok:true, national:{ mouths:0, households:0, ding:0 }, byAge:{}, byGender:{}, territorialExtinction:true };
     }
     var totals = _leafPopulationTotals(playerGroup.leaves);
     var demographic = _leafDemographicTotals(playerGroup.leaves);
@@ -925,6 +977,21 @@
       ratio:(Number(demographic.byGender.male) || 0) / Math.max(1, Number(demographic.byGender.female) || 0)
     }; // arch-ok: 叶级人口结构派生兼容性别视图
     return { ok:true, national:totals, byAge:demographic.byAge, byGender:demographic.byGender };
+  }
+
+  function _zeroPlayerPopulationViews(P) {
+    if (!P.national || typeof P.national !== 'object') P.national = {};
+    P.national.mouths = 0; // arch-ok: 领土灭失时清零玩家全国人口真值
+    P.national.households = 0; // arch-ok: 领土灭失时清零玩家全国户数真值
+    P.national.ding = 0; // arch-ok: 领土灭失时清零玩家全国丁口真值
+    P.byRegion = {}; // arch-ok: 领土灭失时清除旧地区人口代理
+    P.byAge = {}; // arch-ok: 领土灭失时清零玩家年龄视图
+    P.ageLayers = {}; // arch-ok: 领土灭失时清零兼容年龄视图
+    P.agePyramidFine = { _newlyAdult:0, _leavingDing:0 }; // arch-ok: 领土灭失时清零精细年龄视图
+    P.byGender = {}; // arch-ok: 领土灭失时清零玩家性别视图
+    P.gender = { male:0, female:0, total:0, ratio:0 }; // arch-ok: 领土灭失时清零兼容性别视图
+    if (!P.deepFieldEffects || typeof P.deepFieldEffects !== 'object') P.deepFieldEffects = {};
+    P.deepFieldEffects.serviceAgeDing = 0;
   }
 
   function _recordPopulationDynamics(d, ctx, G, births, deaths, mr) {
@@ -1609,10 +1676,7 @@
         var pullRate = 0.0001 * mr; // 月千分之一流入京畿
         var flow = Math.round(r.mouths * pullRate);
         if (flow > 0 && r.mouths > 10000) {
-          r.mouths -= flow;
-          P.byRegion[capital].mouths += flow;
-          r.yearlyNetMigration -= flow;
-          P.byRegion[capital].yearlyNetMigration = (P.byRegion[capital].yearlyNetMigration || 0) + flow;
+          _transferLegacyPopulationRows(r, P.byRegion[capital], flow, rid, capital);
         }
       });
       }
@@ -1689,11 +1753,7 @@
     groups.forEach(function(group) {
       var capLeaf = _findCapitalLeaf(group);
       if (!capLeaf || !capLeaf.populationDetail) return;
-      var totals = _leafPopulationTotals(group.leaves);
-      var dingRatio = totals.ding / Math.max(1, totals.mouths);
-      var mphh = totals.mouths / Math.max(1, totals.households);
       var pullRate = 0.0001 * mr;
-      var totalFlow = 0;
       group.leaves.forEach(function(leaf) {
         if (leaf === capLeaf) return;
         var detail = leaf && leaf.populationDetail;
@@ -1702,31 +1762,9 @@
         if (mouths <= 10000) return;
         var flow = Math.round(mouths * pullRate);
         if (flow > 0) {
-          var localDingRatio = Number(detail.ding) > 0 ? Number(detail.ding) / mouths : dingRatio;
-          var localMphh = Number(detail.households) > 0 ? mouths / Number(detail.households) : mphh;
-          detail.mouths = mouths - flow;
-          detail.households = Math.round(detail.mouths / Math.max(1, localMphh));
-          detail.ding = Math.round(detail.mouths * localDingRatio);
-          _resizeLeafDemographicBuckets(leaf, detail, detail.mouths);
-          _syncLeafPopulationMirrors(leaf, detail);
-          if (group.isPlayer) _syncPlayerLegacyRow(P, leaf, detail);
-          leaf.yearlyNetMigration = (Number(leaf.yearlyNetMigration) || 0) - flow;
-          totalFlow += flow;
+          _transferPopulationBetweenLeaves(group, [leaf], capLeaf, flow, 'capital-pull');
         }
       });
-      if (totalFlow > 0) {
-        var capitalDetail = capLeaf.populationDetail;
-        var capitalMouths = Number(capitalDetail.mouths) || 0;
-        var capitalDingRatio = Number(capitalDetail.ding) > 0 ? Number(capitalDetail.ding) / Math.max(1, capitalMouths) : dingRatio;
-        var capitalMphh = Number(capitalDetail.households) > 0 ? capitalMouths / Number(capitalDetail.households) : mphh;
-        capitalDetail.mouths = capitalMouths + totalFlow;
-        capitalDetail.households = Math.round(capitalDetail.mouths / Math.max(1, capitalMphh));
-        capitalDetail.ding = Math.round(capitalDetail.mouths * capitalDingRatio);
-        _resizeLeafDemographicBuckets(capLeaf, capitalDetail, capitalDetail.mouths);
-        _syncLeafPopulationMirrors(capLeaf, capitalDetail);
-        if (group.isPlayer) _syncPlayerLegacyRow(P, capLeaf, capitalDetail);
-        capLeaf.yearlyNetMigration = (Number(capLeaf.yearlyNetMigration) || 0) + totalFlow;
-      }
     });
     var playerGroup = groups.find(function(group) { return group.isPlayer; });
     if (playerGroup) {
@@ -1791,7 +1829,7 @@
       detail.ding = dingBefore - dingFlow;
       var resized = _resizeLeafDemographicBuckets(leaf, detail, detail.mouths);
       _syncLeafPopulationMirrors(leaf, detail);
-      if (leaf.yearlyNetMigration !== undefined) leaf.yearlyNetMigration = (Number(leaf.yearlyNetMigration) || 0) - flow;
+      leaf.yearlyNetMigration = (Number(leaf.yearlyNetMigration) || 0) - flow;
       bundle.mouths += flow;
       bundle.households += householdFlow;
       bundle.ding += dingFlow;
@@ -1803,6 +1841,89 @@
     bundle.byAge = _scaleBucketsToTotal(bundle.byAge, bundle.mouths, AGE_BUCKET_TEMPLATE);
     bundle.byGender = _scaleBucketsToTotal(bundle.byGender, bundle.mouths, GENDER_BUCKET_TEMPLATE);
     return bundle;
+  }
+
+  function _addPopulationBundleToLeaf(leaf, bundle) {
+    var detail = leaf && leaf.populationDetail;
+    if (!detail || !bundle) return { ok:false, reason:'target-region-invalid' };
+    var buckets = _ensureLeafDemographicBuckets(leaf, detail);
+    var bundleAge = _scaleBucketsToTotal(bundle.byAge || {}, bundle.mouths, AGE_BUCKET_TEMPLATE);
+    var bundleGender = _scaleBucketsToTotal(bundle.byGender || {}, bundle.mouths, GENDER_BUCKET_TEMPLATE);
+    detail.mouths = Math.max(0, Math.round(Number(detail.mouths) || 0)) + Math.max(0, Math.round(Number(bundle.mouths) || 0));
+    detail.households = Math.max(0, Math.round(Number(detail.households) || 0)) + Math.max(0, Math.round(Number(bundle.households) || 0));
+    detail.ding = Math.max(0, Math.round(Number(detail.ding) || 0)) + Math.max(0, Math.round(Number(bundle.ding) || 0));
+    detail.byAge = Object.assign({}, buckets.byAge);
+    detail.byGender = Object.assign({}, buckets.byGender);
+    Object.keys(bundleAge).forEach(function(key) { detail.byAge[key] = (Number(detail.byAge[key]) || 0) + bundleAge[key]; });
+    Object.keys(bundleGender).forEach(function(key) { detail.byGender[key] = (Number(detail.byGender[key]) || 0) + bundleGender[key]; });
+    leaf.byAge = detail.byAge;
+    leaf.byGender = detail.byGender;
+    _syncLeafPopulationMirrors(leaf, detail);
+    return { ok:true, detail:detail };
+  }
+
+  function _transferPopulationBetweenLeaves(group, sourceLeaves, targetLeaf, requested, cause) {
+    sourceLeaves = (sourceLeaves || []).filter(function(leaf) {
+      return leaf && leaf !== targetLeaf && leaf.populationDetail && Number(leaf.populationDetail.mouths) > 0;
+    });
+    if (!targetLeaf || !targetLeaf.populationDetail) return { ok:false, reason:'target-region-not-found' };
+    if (!sourceLeaves.length) return { ok:false, reason:'source-region-not-found' };
+    var bundle = _removePopulationForTransfer(sourceLeaves, requested);
+    if (!bundle.mouths) return { ok:false, reason:'source-population-empty' };
+    var added = _addPopulationBundleToLeaf(targetLeaf, bundle);
+    if (!added.ok) return added;
+    sourceLeaves.forEach(function(leaf) {
+      if (group && group.isPlayer) _syncPlayerLegacyRow(global.GM.population, leaf, leaf.populationDetail);
+    });
+    if (group && group.isPlayer) _syncPlayerLegacyRow(global.GM.population, targetLeaf, targetLeaf.populationDetail);
+    targetLeaf.yearlyNetMigration = (Number(targetLeaf.yearlyNetMigration) || 0) + bundle.mouths;
+    return {
+      ok:true,
+      cause:String(cause || 'migration'),
+      factionId:group && group.factionId,
+      targetRegionId:String(targetLeaf.id || targetLeaf.name || ''),
+      mouths:bundle.mouths,
+      households:bundle.households,
+      ding:bundle.ding,
+      byAge:bundle.byAge,
+      byGender:bundle.byGender
+    };
+  }
+
+  function _transferLegacyPopulationRows(source, target, requested, sourceId, targetId) {
+    if (!source || !target) return { ok:false, reason:'region-match-failed' };
+    var sourceLeaf = { id:String(sourceId || 'legacy-source'), populationDetail:source, byAge:source.byAge, byGender:source.byGender };
+    var targetLeaf = { id:String(targetId || 'legacy-target'), populationDetail:target, byAge:target.byAge, byGender:target.byGender };
+    var result = _transferPopulationBetweenLeaves(null, [sourceLeaf], targetLeaf, requested, 'legacy-migration');
+    source.byAge = sourceLeaf.populationDetail.byAge;
+    source.byGender = sourceLeaf.populationDetail.byGender;
+    target.byAge = targetLeaf.populationDetail.byAge;
+    target.byGender = targetLeaf.populationDetail.byGender;
+    source.yearlyNetMigration = (Number(source.yearlyNetMigration) || 0) - (result.ok ? result.mouths : 0);
+    target.yearlyNetMigration = (Number(target.yearlyNetMigration) || 0) + (result.ok ? result.mouths : 0);
+    return result;
+  }
+
+  function transferPopulation(options) {
+    options = options || {};
+    var G = global.GM;
+    var groups = _factionLeafGroups(G);
+    var factionTarget = _resolvePopulationTarget(G, options, groups);
+    if (!factionTarget.ok || !factionTarget.group) return { ok:false, reason:factionTarget.reason || 'player-faction-not-found' };
+    var group = factionTarget.group;
+    var targetWanted = _normPopulationName(options.targetRegionId || options.targetRegionName);
+    var targetLeaf = group.leaves.find(function(leaf) { return _leafPopulationAliases(leaf).indexOf(targetWanted) >= 0; }) || null;
+    if (!targetLeaf) return { ok:false, reason:'target-region-not-found' };
+    var sourceWanted = (Array.isArray(options.sourceRegionIds) ? options.sourceRegionIds : [options.sourceRegionId])
+      .concat(Array.isArray(options.sourceRegionNames) ? options.sourceRegionNames : [options.sourceRegionName])
+      .map(_normPopulationName).filter(Boolean);
+    var sources = group.leaves.filter(function(leaf) {
+      if (leaf === targetLeaf || !leaf || !leaf.populationDetail) return false;
+      if (!sourceWanted.length) return true;
+      return _leafPopulationAliases(leaf).some(function(alias) { return sourceWanted.indexOf(alias) >= 0; });
+    });
+    if (sourceWanted.length && sources.length !== sourceWanted.length) return { ok:false, reason:'source-region-not-found' };
+    return _transferPopulationBetweenLeaves(group, sources, targetLeaf, options.mouths, options.cause);
   }
 
   function _takeExactBucketShare(state, total) {
@@ -1863,13 +1984,21 @@
     var targetNames = (Array.isArray(options.targetNames) ? options.targetNames : [])
       .map(function(value) { return String(value || '').trim(); }).filter(Boolean);
     if (!eventId || !targetNames.length) return { ok:false, reason:'qiaozhi-spec-invalid' };
-    var existing = group.leaves.filter(function(leaf) {
-      return leaf && (leaf.parentHistoric === eventId || targetNames.indexOf(String(leaf.name || '')) >= 0);
+    var plannedIds = targetNames.map(function(name) {
+      return 'tm_qiaozhi_' + _tmPopulationHash(String(group.factionId || group.key) + '|' + eventId + '|' + name);
     });
-    if (existing.length === targetNames.length) {
-      return { ok:true, alreadyMaterialized:true, scale:_leafPopulationTotals(existing).mouths, factionId:group.factionId };
+    if (plannedIds.some(function(id, index) { return plannedIds.indexOf(id) !== index; })) {
+      return { ok:false, reason:'qiaozhi-spec-duplicate-target' };
     }
-    if (existing.length) return { ok:false, reason:'qiaozhi-target-conflict' };
+    var existing = group.leaves.filter(function(leaf) { return leaf && leaf.parentHistoric === eventId; });
+    if (existing.length) {
+      var actualIds = existing.map(function(leaf) { return String(leaf.id || ''); });
+      var complete = actualIds.length === plannedIds.length && plannedIds.every(function(id) {
+        return actualIds.filter(function(actualId) { return actualId === id; }).length === 1;
+      });
+      if (complete) return { ok:true, alreadyMaterialized:true, scale:_leafPopulationTotals(existing).mouths, factionId:group.factionId };
+      return { ok:false, reason:'qiaozhi-target-conflict' };
+    }
     var sourceCandidates = Array.isArray(options.sourceCandidates) ? options.sourceCandidates : [];
     var sourceLeaves = group.leaves.filter(function(leaf) {
       return leaf && leaf.populationDetail && Number(leaf.populationDetail.mouths) > 0 &&
@@ -1885,12 +2014,10 @@
         if (leaf && leaf.id != null) existingIds[String(leaf.id)] = true;
       });
     });
-    var plannedIds = targetNames.map(function(name) {
-      var stableId = 'tm_qiaozhi_' + _tmPopulationHash(String(group.factionId || group.key) + '|' + eventId + '|' + name);
-      if (existingIds[stableId]) throw new Error('侨置行政区稳定 ID 冲突: ' + stableId);
-      existingIds[stableId] = true;
-      return stableId;
-    });
+    if (plannedIds.some(function(stableId) { return existingIds[stableId]; })) {
+      return { ok:false, reason:'qiaozhi-target-conflict' };
+    }
+    plannedIds.forEach(function(stableId) { existingIds[stableId] = true; });
     var bundle = _removePopulationForTransfer(sourceLeaves, requested);
     if (!bundle.mouths) return { ok:false, reason:'source-population-empty' };
     var assigned = { mouths:0, households:0, ding:0, byAge:{}, byGender:{} };
@@ -1960,28 +2087,12 @@
       to = playerGroup.leaves.find(function(leaf) { return _normPopulationName(leaf && (leaf.name || leaf.id)).indexOf(_normPopulationName(e.toRegion)) >= 0; });
     }
     if (from && to && from.populationDetail && to.populationDetail) {
-      var fromDetail = from.populationDetail;
-      var toDetail = to.populationDetail;
-      var fromMouths = Math.max(0, Number(fromDetail.mouths) || 0);
-      var toMouths = Math.max(0, Number(toDetail.mouths) || 0);
+      var fromMouths = Math.max(0, Number(from.populationDetail.mouths) || 0);
       var scale = Math.max(0, Math.round(Math.min(e.scale, fromMouths * 0.3)));
       if (!scale) return { ok:false, reason:'source-population-empty' };
-      var fromMphh = fromMouths / Math.max(1, Number(fromDetail.households) || 0);
-      var fromDingRatio = Number(fromDetail.ding) / Math.max(1, fromMouths);
-      var toMphh = toMouths / Math.max(1, Number(toDetail.households) || 0);
-      var toDingRatio = Number(toDetail.ding) / Math.max(1, toMouths);
-      fromDetail.mouths = fromMouths - scale;
-      fromDetail.households = Math.round(fromDetail.mouths / Math.max(1, fromMphh));
-      fromDetail.ding = Math.round(fromDetail.mouths * fromDingRatio);
-      toDetail.mouths = toMouths + scale;
-      toDetail.households = Math.round(toDetail.mouths / Math.max(1, toMphh));
-      toDetail.ding = Math.round(toDetail.mouths * toDingRatio);
-      _syncLeafPopulationMirrors(from, fromDetail);
-      _syncLeafPopulationMirrors(to, toDetail);
-      _syncPlayerLegacyRow(P, from, fromDetail);
-      _syncPlayerLegacyRow(P, to, toDetail);
-      from.yearlyNetMigration = (Number(from.yearlyNetMigration) || 0) - scale;
-      to.yearlyNetMigration = (Number(to.yearlyNetMigration) || 0) + scale;
+      var moved = _transferPopulationBetweenLeaves(playerGroup, [from], to, scale, e.id);
+      if (!moved.ok) return moved;
+      scale = moved.mouths;
     } else {
       if (!P.byRegion) return { ok:false, reason:'regions-unavailable' };
       var fromKey = Object.keys(P.byRegion).find(function(k) { return _normPopulationName(k).indexOf(_normPopulationName(e.fromRegion)) >= 0; });
@@ -1991,8 +2102,9 @@
       to = P.byRegion[toKey];
       var scale = Math.max(0, Math.round(Math.min(e.scale, (Number(from.mouths) || 0) * 0.3)));
       if (!scale) return { ok:false, reason:'source-population-empty' };
-      from.mouths -= scale;
-      to.mouths += scale;
+      var legacyMoved = _transferLegacyPopulationRows(from, to, scale, fromKey, toKey);
+      if (!legacyMoved.ok) return legacyMoved;
+      scale = legacyMoved.mouths;
     }
     P.migrationEvents.push({ id: e.id, name: e.name, turn: global.GM.turn, scale: scale });
     if (global.addEB) global.addEB('迁徙', e.name + '：' + e.fromRegion + ' → ' + e.toRegion + ' 约 ' + Math.round(scale/10000) + ' 万口');
@@ -2108,6 +2220,7 @@
     init: init,
     tick: tick,
     applyPopulationLoss: applyPopulationLoss,
+    transferPopulation: transferPopulation,
     materializeQiaozhiResettlement: materializeQiaozhiResettlement,
     syncDemographicViews: syncDemographicViews,
     startLargeCorvee: startLargeCorvee,

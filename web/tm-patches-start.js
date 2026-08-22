@@ -1017,6 +1017,15 @@ function _tmResetScenarioScopedConfig(target) {
 }
 if (typeof window !== 'undefined') window._tmResetScenarioScopedConfig = _tmResetScenarioScopedConfig;
 
+// 剧本注册对象是同一会话内可重复开局的不可变模板。跨入 P 前统一深拷贝，
+// sid/type 等运行标记只能写在副本上，禁止反向污染 sc 与下一局。
+function _tmStartCloneScenarioRows(rows, sid) {
+  return deepClone(Array.isArray(rows) ? rows : []).filter(Boolean).map(function(row) {
+    if (row && typeof row === 'object') row.sid = sid;
+    return row;
+  });
+}
+
 function doActualStart(sid, requestToken){
   if (!_tmStartRequestCurrent(requestToken)) return;
   // 每次开新局先废止上一局仍在飞行中的 AI 预热结果。
@@ -1245,7 +1254,7 @@ function doActualStart(sid, requestToken){
   // rules保持对象格式{base,combat,economy,diplomacy}——这是文本规则描述，供AI推演参考
   // 不转为数组（旧版兼容：如果rules已经是数组则保持）
   if(sc.openingText) P.openingText = sc.openingText;
-  if(sc.globalRules) P.globalRules = sc.globalRules;
+  if(sc.globalRules) P.globalRules = deepClone(sc.globalRules);
   if(sc.mapData) P.mapData = deepClone(sc.mapData);
   // 剧本地图进入可变运行态：GM.mapData 为唯一 live state；P.map/P.mapData
   // 始终保留不可变模板，防止运行时变化污染下一局。
@@ -1290,27 +1299,27 @@ function doActualStart(sid, requestToken){
   if(sc.characters) {
     // 移除旧的该剧本的角色，添加新的
     P.characters = (P.characters||[]).filter(function(c){return c.sid!==sid;});
-    P.characters = P.characters.concat(sc.characters.map(function(c){c.sid=sid;return c;}));
+    P.characters = P.characters.concat(_tmStartCloneScenarioRows(sc.characters, sid));
   }
   if(sc.factions) {
     P.factions = (P.factions||[]).filter(function(f){return f.sid!==sid;});
-    P.factions = P.factions.concat(sc.factions.map(function(f){f.sid=sid;return f;}));
+    P.factions = P.factions.concat(_tmStartCloneScenarioRows(sc.factions, sid));
   }
   if(sc.parties) {
     P.parties = (P.parties||[]).filter(function(p){return p.sid!==sid;});
-    P.parties = P.parties.concat(sc.parties.map(function(p){p.sid=sid;return p;}));
+    P.parties = P.parties.concat(_tmStartCloneScenarioRows(sc.parties, sid));
   }
   if(sc.classes) {
     P.classes = (P.classes||[]).filter(function(c){return c.sid!==sid;});
-    P.classes = P.classes.concat(sc.classes.map(function(c){c.sid=sid;return c;}));
+    P.classes = P.classes.concat(_tmStartCloneScenarioRows(sc.classes, sid));
   }
   if(sc.items) {
     P.items = (P.items||[]).filter(function(i){return i.sid!==sid;});
-    P.items = P.items.concat(sc.items.map(function(i){i.sid=sid;return i;}));
+    P.items = P.items.concat(_tmStartCloneScenarioRows(sc.items, sid));
   }
   if(sc.relations) {
     P.relations = (P.relations||[]).filter(function(r){return r.sid!==sid;});
-    P.relations = P.relations.concat(sc.relations.map(function(r){r.sid=sid;return r;}));
+    P.relations = P.relations.concat(_tmStartCloneScenarioRows(sc.relations, sid));
   }
 
   if(sc.events) {
@@ -1320,13 +1329,13 @@ function doActualStart(sid, requestToken){
       // 根治：旧加载器只认 {historical/random/conditional/story/chain} 对象格式，
       // 官方天启/绍宋的 sc.events 是扁平数组 → allEvents 恒空 → GM.events 空 → 开局事件无法激活成御案时政。
       // （1.3.4.1 旧天启靠 split-rows 把事件直接塞 P.events 绕过此处；换成扁平内置脚本后暴露。绍宋靠预制 currentIssues 兜底未暴露。）
-      allEvents = sc.events.filter(Boolean).map(function(e){ e.sid=sid; if(!e.type) e.type='story'; return e; });
+      allEvents = _tmStartCloneScenarioRows(sc.events, sid).map(function(e){ if(!e.type) e.type='story'; return e; });
     } else {
-      if(sc.events.historical) allEvents = allEvents.concat(sc.events.historical.map(function(e){e.sid=sid;e.type='historical';return e;}));
-      if(sc.events.random) allEvents = allEvents.concat(sc.events.random.map(function(e){e.sid=sid;e.type='random';return e;}));
-      if(sc.events.conditional) allEvents = allEvents.concat(sc.events.conditional.map(function(e){e.sid=sid;e.type='conditional';return e;}));
-      if(sc.events.story) allEvents = allEvents.concat(sc.events.story.map(function(e){e.sid=sid;e.type='story';return e;}));
-      if(sc.events.chain) allEvents = allEvents.concat(sc.events.chain.map(function(e){e.sid=sid;e.type='chain';return e;}));
+      if(sc.events.historical) allEvents = allEvents.concat(_tmStartCloneScenarioRows(sc.events.historical, sid).map(function(e){e.type='historical';return e;}));
+      if(sc.events.random) allEvents = allEvents.concat(_tmStartCloneScenarioRows(sc.events.random, sid).map(function(e){e.type='random';return e;}));
+      if(sc.events.conditional) allEvents = allEvents.concat(_tmStartCloneScenarioRows(sc.events.conditional, sid).map(function(e){e.type='conditional';return e;}));
+      if(sc.events.story) allEvents = allEvents.concat(_tmStartCloneScenarioRows(sc.events.story, sid).map(function(e){e.type='story';return e;}));
+      if(sc.events.chain) allEvents = allEvents.concat(_tmStartCloneScenarioRows(sc.events.chain, sid).map(function(e){e.type='chain';return e;}));
     }
     // 移除旧的该剧本的事件，添加新的
     P.events = (P.events||[]).filter(function(e){return e.sid!==sid;});
@@ -1339,7 +1348,7 @@ function doActualStart(sid, requestToken){
   // 补齐后所有剧本一致。幂等：同 sid 旧条目先 filter 掉再 concat，重复 doActualStart 不累积。
   if(Array.isArray(sc.rigidHistoryEvents)) {
     P.rigidHistoryEvents = (P.rigidHistoryEvents||[]).filter(function(e){return e && e.sid!==sid;});
-    P.rigidHistoryEvents = P.rigidHistoryEvents.concat(sc.rigidHistoryEvents.map(function(e){e.sid=sid;return e;}));
+    P.rigidHistoryEvents = P.rigidHistoryEvents.concat(_tmStartCloneScenarioRows(sc.rigidHistoryEvents, sid));
   }
 
   // 开局内容（御案时政 currentIssues / 奏疏 memorials / 开场书信 openingLetters→鸿雁 letters）→ GM。

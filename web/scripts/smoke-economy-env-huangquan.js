@@ -238,6 +238,109 @@ function runOverloadTierCase(load) {
   };
 }
 
+function runZeroResourceCase() {
+  const leaf = makeLeaf('barren-county', '荒县', 10000);
+  const zeroMath = Object.create(Math);
+  zeroMath.random = () => 1;
+  const zeroCtx = {
+    console,
+    Date,
+    JSON,
+    Math: zeroMath,
+    Object,
+    Array,
+    Number,
+    String,
+    Boolean,
+    parseInt,
+    parseFloat,
+    isFinite,
+    TM: { errors: { capture() {}, captureSilent() {} } },
+    GM: {
+      sid: 'zero-environment-resources',
+      turn: 12,
+      regions: [{ id: 'barren', unrest: 0, disasterLevel: 0 }],
+      guoku: { money: 1000000, grain: 500000, cloth: 0 },
+      adminHierarchy: {
+        player: {
+          factionId: 'player-faction',
+          divisions: [{ id: 'barren', name: '荒芜省', children: [leaf] }]
+        }
+      },
+      population: {
+        byRegion: { 'barren-county': leaf.populationDetail },
+        national: { mouths: 10000, households: 2000, ding: 3000 },
+        dynamics: { yearlyLog: [] }
+      },
+      minxin: { trueIndex: 60 }
+    },
+    P: {
+      id: 'zero-environment-resources',
+      dynasty: '汉',
+      conf: {},
+      time: { daysPerTurn: 30 },
+      playerInfo: { factionName: 'player-faction' },
+      environmentConfig: {
+        initialCarrying: {
+          byRegion: {
+            barren: {
+              farmlandSupport: 0,
+              waterSupport: 0,
+              fuelSupport: 0,
+              housingSupport: 0,
+              sanitationSupport: 0,
+              forestArea: 0,
+              coalReserve: 0,
+              aquiferLevel: 0,
+              riverFlow: 0,
+              arableArea: 0,
+              soilFertility: 0
+            }
+          }
+        }
+      }
+    },
+    IntegrationBridge: {
+      getTopLevelDivisions(hierarchy) { return hierarchy.player.divisions; }
+    },
+    FiscalEngine: {
+      spendFromGuoku(cost) {
+        const deducted = {};
+        ['money', 'grain', 'cloth'].forEach(kind => {
+          const amount = Number(cost[kind]) || 0;
+          zeroCtx.GM.guoku[kind] -= amount;
+          deducted[kind] = { deducted: amount, deficit: 0 };
+        });
+        return { ok: true, deducted };
+      }
+    },
+    _adjAuthority() { return { ok: true }; },
+    addEB() {},
+    turnsForMonths(months) { return months; },
+    findScenarioById() { return zeroCtx.P; }
+  };
+  zeroCtx.window = zeroCtx;
+  zeroCtx.global = zeroCtx;
+  zeroCtx.globalThis = zeroCtx;
+  vm.createContext(zeroCtx);
+  vm.runInContext(src, zeroCtx, { filename: 'tm-economy-engine.js' });
+  zeroCtx.EnvCapacityEngine.init(zeroCtx.P);
+  const row = zeroCtx.GM.environment.byRegion.barren;
+  ['forestArea', 'coalReserve', 'aquiferLevel', 'riverFlow', 'arableArea', 'soilFertility'].forEach(field => {
+    assert(row[field] === 0, 'explicit zero ' + field + ' should survive environment initialization');
+  });
+  zeroCtx.EnvCapacityEngine.tick({ monthRatio: 1, turn: zeroCtx.GM.turn, strict: true });
+  assert(row.forestArea === 0 && row.aquiferLevel === 0 && row.riverFlow === 0
+    && row.arableArea === 0 && row.soilFertility === 0,
+  'environment recomputation and passive decay must not revive zero natural resources');
+  const technology = zeroCtx.EnvCapacityEngine.enactPolicy('tech_investment', 'barren');
+  assert(technology && technology.ok && row.arableArea === 0 && row.forestArea === 0,
+    'percentage technology boosts must not conjure arable land or forest from zero');
+  const recovery = zeroCtx.EnvCapacityEngine.enactPolicy('disaster_recovery', 'barren');
+  assert(recovery && recovery.ok && row.arableArea === 0 && Math.abs(row.soilFertility - 0.05) < 1e-12,
+    'disaster recovery should add only its explicit fertility boost to a zero-resource region');
+}
+
 vm.createContext(ctx);
 vm.runInContext(src, ctx, { filename: 'tm-economy-engine.js' });
 vm.runInContext(hujiSource, ctx, { filename: 'tm-huji-engine.js' });
@@ -253,6 +356,7 @@ assert(severeOverload.unrest === 8 && severeOverload.disaster === 0.05 && severe
   'level-three overload should apply the strongest collapse effects');
 assert(lightOverload.unrest < mediumOverload.unrest && mediumOverload.unrest < severeOverload.unrest,
   'overload social penalties should increase monotonically across all three tiers');
+runZeroResourceCase();
 
 const beforeHuangquan = ctx.GM.huangquan.index;
 const beforePopulation = countyA.populationDetail.mouths + countyB.populationDetail.mouths;

@@ -214,22 +214,22 @@
       var customScars = (config.initialScars && config.initialScars.byRegion && config.initialScars.byRegion[r.id]) || {};
       out[r.id] = {
         carrying: {
-          farmlandSupport: custom.farmlandSupport || 1000000,
-          waterSupport:    custom.waterSupport    || 1500000,
-          fuelSupport:     custom.fuelSupport     || 800000,
-          housingSupport:  custom.housingSupport  || 1200000,
-          sanitationSupport: custom.sanitationSupport || 1000000
+          farmlandSupport: _envFiniteNumber(custom.farmlandSupport, 1000000),
+          waterSupport:    _envFiniteNumber(custom.waterSupport, 1500000),
+          fuelSupport:     _envFiniteNumber(custom.fuelSupport, 800000),
+          housingSupport:  _envFiniteNumber(custom.housingSupport, 1200000),
+          sanitationSupport: _envFiniteNumber(custom.sanitationSupport, 1000000)
         },
         carryingMax: 0,
         ecoScars: _defaultScars(customScars),
         currentLoad: 0.5,
         overloadYears: 0,
-        forestArea: custom.forestArea || 500000,
-        coalReserve: custom.coalReserve || 0,
-        aquiferLevel: custom.aquiferLevel || 1.0,
-        riverFlow: custom.riverFlow || 1.0,
-        arableArea: custom.arableArea || 500000,
-        soilFertility: custom.soilFertility || 0.85,
+        forestArea: _envFiniteNumber(custom.forestArea, 500000),
+        coalReserve: _envFiniteNumber(custom.coalReserve, 0),
+        aquiferLevel: _envFiniteNumber(custom.aquiferLevel, 1.0),
+        riverFlow: _envFiniteNumber(custom.riverFlow, 1.0),
+        arableArea: _envFiniteNumber(custom.arableArea, 500000),
+        soilFertility: _envFiniteNumber(custom.soilFertility, 0.85),
         techLevel: Object.assign({ agriculture: 1, irrigation: 1, fertilizer: 1, seedSelection: 1, toolImprovement: 1 }, custom.techLevel || {})
       };
       _recomputeRegionCarrying(r.id, out[r.id]);
@@ -408,20 +408,20 @@
     var G = global.GM;
     var popCount = _environmentPopulationScope(rid).mouths;
     var techEra = G.environment ? G.environment.techEra : '唐';
-    var yieldMult = _getTechEraMult('agriculture', techEra, 'yieldMult') || 1.0;
-    var irrigMult = _getTechEraMult('irrigation', techEra, 'capMult') || 1.0;
-    var seedMult = _getTechEraMult('seedSelection', techEra, 'yieldMult') || 1.0;
-    var farmland = (reg.arableArea || 500000) * (reg.soilFertility || 0.85) * yieldMult * seedMult * irrigMult
+    var yieldMult = _envFiniteNumber(_getTechEraMult('agriculture', techEra, 'yieldMult'), 1.0);
+    var irrigMult = _envFiniteNumber(_getTechEraMult('irrigation', techEra, 'capMult'), 1.0);
+    var seedMult = _envFiniteNumber(_getTechEraMult('seedSelection', techEra, 'yieldMult'), 1.0);
+    var farmland = _envFiniteNumber(reg.arableArea, 500000) * _envFiniteNumber(reg.soilFertility, 0.85) * yieldMult * seedMult * irrigMult
                    - (reg.ecoScars.salinization || 0) * 200000
                    - (reg.ecoScars.soilErosion || 0) * 150000;
     reg.carrying.farmlandSupport = Math.max(100000, farmland);
     // 2) 水
-    var water = (reg.aquiferLevel || 1.0) * 1500000 * (reg.riverFlow || 1.0)
+    var water = _envFiniteNumber(reg.aquiferLevel, 1.0) * 1500000 * _envFiniteNumber(reg.riverFlow, 1.0)
                 - (reg.ecoScars.waterTableDrop || 0) * 300000
                 - (reg.ecoScars.riverSilting || 0) * 200000;
     reg.carrying.waterSupport = Math.max(100000, water);
     // 3) 燃料
-    var fuel = (reg.forestArea || 500000) * 1.5 + (reg.coalReserve || 0) * 3
+    var fuel = _envFiniteNumber(reg.forestArea, 500000) * 1.5 + _envFiniteNumber(reg.coalReserve, 0) * 3
                - (reg.ecoScars.deforestation || 0) * 400000;
     reg.carrying.fuelSupport = Math.max(50000, fuel);
     // 4) 住房
@@ -447,7 +447,7 @@
     if (!levels) return 1.0;
     var lv = levels.find(function(l) { return l.era === era; });
     if (!lv) lv = levels[levels.length - 1];
-    return lv[key] || 1.0;
+    return _envFiniteNumber(lv[key], 1.0);
   }
 
   function _recomputeNationalCarrying() {
@@ -481,7 +481,7 @@
       var populationScope = _environmentPopulationScope(rid);
       if (!populationScope.ok) throw new Error('环境地区无法解析人口层级: ' + rid);
       var popCount = populationScope.mouths;
-      var load = reg.currentLoad || 0.5;
+      var load = _envFiniteNumber(reg.currentLoad, 0.5);
       // 过载加速疤痕
       var overloadMult = Math.max(1.0, load);
       // 森林退化（按人口烧柴）
@@ -493,9 +493,11 @@
       // 河道淤积
       reg.ecoScars.riverSilting = Math.min(1, (reg.ecoScars.riverSilting || 0) + 0.0002 * mr);
       // 地力衰退（按技术）
-      var fertDecay = _getTechEraMult('fertilizer', E.techEra, 'fertilityDecay') || 0.03;
+      var fertDecay = _envFiniteNumber(_getTechEraMult('fertilizer', E.techEra, 'fertilityDecay'), 0.03);
       reg.ecoScars.soilFertilityLoss = Math.min(1, (reg.ecoScars.soilFertilityLoss || 0) + fertDecay / 12 * mr);
-      reg.soilFertility = Math.max(0.3, reg.soilFertility - fertDecay / 12 * mr);
+      var currentFertility = _envFiniteNumber(reg.soilFertility, 0.85);
+      var fertilityFloor = currentFertility >= 0.3 ? 0.3 : 0;
+      reg.soilFertility = Math.max(fertilityFloor, currentFertility - fertDecay / 12 * mr);
       // 盐碱化（灌溉过度）
       reg.ecoScars.salinization = Math.min(1, (reg.ecoScars.salinization || 0) + 0.0001 * overloadMult * mr);
       // 沙漠化（干旱+过伐）
@@ -521,7 +523,7 @@
           });
         }
         if (policy && policy.effect && policy.effect.loadRelief) {
-          reg.currentLoad = Math.max(0.05, (reg.currentLoad || 0.5) - policy.effect.loadRelief * mr / 24);
+          reg.currentLoad = Math.max(0.05, _envFiniteNumber(reg.currentLoad, 0.5) - policy.effect.loadRelief * mr / 24);
         }
       });
       _recomputeRegionCarrying(rid, reg);
@@ -539,7 +541,7 @@
     var G = global.GM;
     Object.keys(E.byRegion).forEach(function(rid) {
       var reg = E.byRegion[rid];
-      var load = reg.currentLoad || 0.5;
+      var load = _envFiniteNumber(reg.currentLoad, 0.5);
       if (load < 1.0) return;
       // 级别 1: 1.0-1.2 压力
       // 级别 2: 1.2-1.5 饥荒
@@ -555,11 +557,11 @@
         // 轻度压力仅兑现对应死亡率；不得落入三级崩溃的社会惩罚。
       } else if (level === 2) {
         var region = (G.regions || []).find(function(r) { return r.id === rid; });
-        if (region) region.unrest = Math.min(100, (region.unrest || 30) + 3 * mr);
+        if (region) region.unrest = Math.min(100, _envFiniteNumber(region.unrest, 30) + 3 * mr);
         if (global._adjAuthority) global._adjAuthority('minxin', -0.2 * mr);
       } else {
         var region2 = (G.regions || []).find(function(r) { return r.id === rid; });
-        if (region2) { region2.unrest = Math.min(100, (region2.unrest || 30) + 8 * mr); region2.disasterLevel = Math.min(1, (region2.disasterLevel || 0) + 0.05 * mr); }
+        if (region2) { region2.unrest = Math.min(100, _envFiniteNumber(region2.unrest, 30) + 8 * mr); region2.disasterLevel = Math.min(1, _envFiniteNumber(region2.disasterLevel, 0) + 0.05 * mr); }
         if (global._adjAuthority) global._adjAuthority('minxin', -0.5 * mr);
       }
     });
@@ -618,7 +620,7 @@
         var G = global.GM;
         if (rid) {
           var reg = (G.regions || []).find(function(r) { return r.id === rid; });
-          if (reg) reg.unrest = Math.min(100, (reg.unrest || 30) + ef.unrest);
+          if (reg) reg.unrest = Math.min(100, _envFiniteNumber(reg.unrest, 30) + ef.unrest);
         } else {
           if (typeof G.unrest === 'number') G.unrest = Math.min(100, G.unrest + ef.unrest / 2);
         }
@@ -742,20 +744,20 @@
       }
 
       if (effect.carryingBoost) {
-        reg.arableArea = (reg.arableArea || 500000) * (1 + effect.carryingBoost);
-        reg.forestArea = (reg.forestArea || 500000) * (1 + effect.carryingBoost / 2);
+        reg.arableArea = _envFiniteNumber(reg.arableArea, 500000) * (1 + effect.carryingBoost);
+        reg.forestArea = _envFiniteNumber(reg.forestArea, 500000) * (1 + effect.carryingBoost / 2);
         row.carryingBoost = effect.carryingBoost;
       }
 
       if (effect.arableRestore) {
-        var beforeArable = reg.arableArea || 500000;
+        var beforeArable = _envFiniteNumber(reg.arableArea, 500000);
         reg.arableArea = beforeArable * (1 + effect.arableRestore);
         row.arableRestored = Math.round(reg.arableArea - beforeArable);
         summary.restored += row.arableRestored;
       }
 
       if (effect.soilFertilityBoost) {
-        reg.soilFertility = Math.min(1.2, (reg.soilFertility || 0.85) + effect.soilFertilityBoost);
+        reg.soilFertility = Math.min(1.2, _envFiniteNumber(reg.soilFertility, 0.85) + effect.soilFertilityBoost);
         row.soilFertilityBoost = effect.soilFertilityBoost;
       }
 
@@ -769,7 +771,7 @@
       }
 
       if (effect.loadRelief) {
-        reg.currentLoad = Math.max(0.05, (reg.currentLoad || 0.5) - effect.loadRelief);
+        reg.currentLoad = Math.max(0.05, _envFiniteNumber(reg.currentLoad, 0.5) - effect.loadRelief);
         row.loadRelief = effect.loadRelief;
       }
 

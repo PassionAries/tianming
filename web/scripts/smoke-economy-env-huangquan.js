@@ -131,9 +131,128 @@ ctx.window = ctx;
 ctx.global = ctx;
 ctx.globalThis = ctx;
 
+function runOverloadTierCase(load) {
+  const mouths = Math.round(load * 100000);
+  const leaf = makeLeaf('tier-county', '分级县', mouths);
+  const calls = [];
+  const tierMath = Object.create(Math);
+  tierMath.random = () => 1;
+  const tierCtx = {
+    console,
+    Date,
+    JSON,
+    Math: tierMath,
+    Object,
+    Array,
+    Number,
+    String,
+    Boolean,
+    parseInt,
+    parseFloat,
+    isFinite,
+    TM: { errors: { capture() {}, captureSilent() {} } },
+    GM: {
+      sid: 'overload-tier-' + String(load),
+      turn: 12,
+      regions: [{ id: 'tier-province', unrest: 30, disasterLevel: 0 }],
+      adminHierarchy: {
+        player: {
+          factionId: 'player-faction',
+          divisions: [{ id: 'tier-province', name: '分级省', children: [leaf] }]
+        }
+      },
+      population: {
+        byRegion: { 'tier-county': leaf.populationDetail },
+        national: {
+          mouths,
+          households: leaf.populationDetail.households,
+          ding: leaf.populationDetail.ding
+        },
+        dynamics: { yearlyLog: [] }
+      },
+      minxin: { trueIndex: 60 },
+      environment: {
+        _inited: true,
+        techEra: '汉',
+        nationalLoad: load,
+        nationalCarrying: {},
+        activePolicies: [],
+        crisisHistory: [],
+        byRegion: {
+          'tier-province': {
+            carrying: {},
+            carryingMax: 100000,
+            ecoScars: {
+              deforestation: 0,
+              soilErosion: 0,
+              waterTableDrop: 0,
+              riverSilting: 0,
+              soilFertilityLoss: 0,
+              salinization: 0,
+              desertification: 0,
+              biodiversityLoss: 0,
+              urbanSewageOverload: 0
+            },
+            currentLoad: load,
+            forestArea: 100000,
+            coalReserve: 0,
+            aquiferLevel: 1,
+            riverFlow: 1,
+            arableArea: 100000,
+            soilFertility: 1,
+            techLevel: {}
+          }
+        }
+      }
+    },
+    P: {
+      id: 'overload-tier-' + String(load),
+      conf: {},
+      time: { daysPerTurn: 30 },
+      playerInfo: { factionName: 'player-faction' }
+    },
+    IntegrationBridge: {
+      getTopLevelDivisions(hierarchy) { return hierarchy.player.divisions; }
+    },
+    _adjAuthority(key, delta) {
+      calls.push({ key, delta });
+      return { ok: true };
+    },
+    addEB() {},
+    turnsForMonths(months) { return months; },
+    findScenarioById() { return null; }
+  };
+  tierCtx.window = tierCtx;
+  tierCtx.global = tierCtx;
+  tierCtx.globalThis = tierCtx;
+  vm.createContext(tierCtx);
+  vm.runInContext(src, tierCtx, { filename: 'tm-economy-engine.js' });
+  vm.runInContext(hujiSource, tierCtx, { filename: 'tm-huji-engine.js' });
+  tierCtx.EnvCapacityEngine.tick({ monthRatio: 1, turn: tierCtx.GM.turn, strict: true });
+  const region = tierCtx.GM.regions[0];
+  return {
+    unrest: region.unrest - 30,
+    disaster: region.disasterLevel,
+    minxin: calls.filter(call => call.key === 'minxin' && call.delta < 0)
+      .reduce((sum, call) => sum + call.delta, 0)
+  };
+}
+
 vm.createContext(ctx);
 vm.runInContext(src, ctx, { filename: 'tm-economy-engine.js' });
 vm.runInContext(hujiSource, ctx, { filename: 'tm-huji-engine.js' });
+
+const lightOverload = runOverloadTierCase(1.10);
+const mediumOverload = runOverloadTierCase(1.30);
+const severeOverload = runOverloadTierCase(1.60);
+assert(lightOverload.unrest === 0 && lightOverload.disaster === 0 && lightOverload.minxin === 0,
+  'level-one overload should not fall through to level-three collapse effects');
+assert(mediumOverload.unrest === 3 && mediumOverload.disaster === 0 && mediumOverload.minxin === -0.2,
+  'level-two overload should apply only the famine-tier social effects');
+assert(severeOverload.unrest === 8 && severeOverload.disaster === 0.05 && severeOverload.minxin === -0.5,
+  'level-three overload should apply the strongest collapse effects');
+assert(lightOverload.unrest < mediumOverload.unrest && mediumOverload.unrest < severeOverload.unrest,
+  'overload social penalties should increase monotonically across all three tiers');
 
 const beforeHuangquan = ctx.GM.huangquan.index;
 const beforePopulation = countyA.populationDetail.mouths + countyB.populationDetail.mouths;

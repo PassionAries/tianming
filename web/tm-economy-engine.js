@@ -551,7 +551,9 @@
       var deaths = Math.min(scope.mouths, Math.max(0, Math.round(scope.mouths * deathRate * mr / 12)));
       var mortality = _applyEnvironmentPopulationLoss(rid, deaths, 'environment-overload:' + String(level));
       if (!mortality || mortality.ok === false) throw new Error('环境过载人口损失落账失败: ' + String(mortality && mortality.reason || 'unknown'));
-      if (level === 2) {
+      if (level === 1) {
+        // 轻度压力仅兑现对应死亡率；不得落入三级崩溃的社会惩罚。
+      } else if (level === 2) {
         var region = (G.regions || []).find(function(r) { return r.id === rid; });
         if (region) region.unrest = Math.min(100, (region.unrest || 30) + 3 * mr);
         if (global._adjAuthority) global._adjAuthority('minxin', -0.2 * mr);

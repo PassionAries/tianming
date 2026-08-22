@@ -41,6 +41,16 @@
     return isFinite(n) ? n : (Number(fallback) || 0);
   }
 
+  function firstDefinedFinite(values, fallback) {
+    for (var i = 0; i < values.length; i++) {
+      var value = values[i];
+      if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) continue;
+      var n = Number(value);
+      if (isFinite(n)) return { found:true, value:n };
+    }
+    return { found:false, value:number(fallback, 0) };
+  }
+
   function round(v) {
     return Math.max(0, Math.round(number(v, 0)));
   }
@@ -316,14 +326,19 @@
     region = region || {};
     var raw = region.populationDetail || region.population || region.hukou || {};
     if (typeof raw === 'number') raw = { mouths: raw };
-    var mouths = round(raw.mouths || raw.people || raw.population || region.mouths || region.people || region.population || 0);
-    var households = round(raw.households || raw.hh || raw.registeredHouseholds || region.households || 0);
-    var ding = round(raw.ding || raw.laborDing || raw.maleDing || raw.adultMale || region.ding || 0);
-    if (!households && mouths) households = round(mouths / DEFAULT_MOUTHS_PER_HOUSEHOLD);
-    if (!mouths && households) mouths = round(households * DEFAULT_MOUTHS_PER_HOUSEHOLD);
-    if (!ding && mouths) ding = round(mouths * 0.30);
-    var hidden = round(raw.hiddenCount || raw.hidden || raw.hiddenPopulation || raw.unregistered || region.hiddenCount || region.hidden || 0);
-    var fugitives = round(raw.fugitives || raw.refugees || raw.escapees || raw.taoohu || region.fugitives || region.refugees || 0);
+    var mouthValue = firstDefinedFinite([raw.mouths, raw.people, raw.population, region.mouths, region.people, region.population], 0);
+    var householdValue = firstDefinedFinite([raw.households, raw.hh, raw.registeredHouseholds, region.households], 0);
+    var dingValue = firstDefinedFinite([raw.ding, raw.laborDing, raw.maleDing, raw.adultMale, region.ding], 0);
+    var hiddenValue = firstDefinedFinite([raw.hiddenCount, raw.hidden, raw.hiddenPopulation, raw.unregistered, region.hiddenCount, region.hidden], 0);
+    var fugitiveValue = firstDefinedFinite([raw.fugitives, raw.refugees, raw.escapees, raw.taoohu, region.fugitives, region.refugees], 0);
+    var mouths = round(mouthValue.value);
+    var households = round(householdValue.value);
+    var ding = round(dingValue.value);
+    if (!householdValue.found && mouths) households = round(mouths / DEFAULT_MOUTHS_PER_HOUSEHOLD);
+    if (!mouthValue.found && households) mouths = round(households * DEFAULT_MOUTHS_PER_HOUSEHOLD);
+    if (!dingValue.found && mouths) ding = round(mouths * 0.30);
+    var hidden = round(hiddenValue.value);
+    var fugitives = round(fugitiveValue.value);
     return {
       households: households,
       mouths: mouths,
@@ -336,6 +351,23 @@
     };
   }
 
+  function hasExplicitFiniteField(object, fields) {
+    if (!object || typeof object !== 'object') return false;
+    return fields.some(function(field) {
+      return Object.prototype.hasOwnProperty.call(object, field)
+        && firstDefinedFinite([object[field]], 0).found;
+    });
+  }
+
+  function regionHasAuthoritativeAux(region, fields) {
+    if (!region || typeof region !== 'object') return false;
+    if (region.populationDetail && typeof region.populationDetail === 'object') {
+      return hasExplicitFiniteField(region.populationDetail, fields);
+    }
+    var raw = region.population || region.hukou;
+    return hasExplicitFiniteField(raw, fields) || hasExplicitFiniteField(region, fields);
+  }
+
   function aggregatePopulation(root, config, leaves, options) {
     options = options || {};
     var initial = (config && config.initial) || {};
@@ -344,7 +376,13 @@
     var byAge = {};
     var byGender = {};
     var byLegalStatus = {};
+    var hiddenAuthorityComplete = leaves.length > 0;
+    var fugitiveAuthorityComplete = leaves.length > 0;
     leaves.forEach(function(region, idx) {
+      hiddenAuthorityComplete = hiddenAuthorityComplete
+        && regionHasAuthoritativeAux(region, ['hiddenCount', 'hidden', 'hiddenPopulation', 'unregistered']);
+      fugitiveAuthorityComplete = fugitiveAuthorityComplete
+        && regionHasAuthoritativeAux(region, ['fugitives', 'refugees', 'escapees', 'taoohu']);
       var d = detailFromRegion(region);
       var id = String(region.id || region.name || ('region-' + idx));
       totals.households += d.households;
@@ -392,16 +430,23 @@
 
     var hasRegionalTotals = leaves.length > 0 || totals.households || totals.mouths || totals.ding;
     var useRegionalTruth = options.authoritativePlayerPopulation === true || !!hasRegionalTotals;
-    var households = useRegionalTruth ? totals.households : round(initial.nationalHouseholds || (root.population && root.population.national && root.population.national.households) || 0);
-    var mouths = useRegionalTruth ? totals.mouths : round(initial.nationalMouths || (root.population && root.population.national && root.population.national.mouths) || households * DEFAULT_MOUTHS_PER_HOUSEHOLD);
-    var ding = useRegionalTruth ? totals.ding : round(initial.nationalDing || (root.population && root.population.national && root.population.national.ding) || mouths * 0.30);
-    var scenarioHidden = round(initial.hiddenPopulation || initial.hiddenCount || initial.unregisteredPopulation || 0);
-    var existingHidden = round(root.population && (root.population.hiddenCount || root.population.hiddenPopulation || root.population.unregisteredPopulation) || 0);
+    var households = useRegionalTruth ? totals.households : round(firstDefinedFinite([initial.nationalHouseholds, root.population && root.population.national && root.population.national.households], 0).value);
+    var mouths = useRegionalTruth ? totals.mouths : round(firstDefinedFinite([initial.nationalMouths, root.population && root.population.national && root.population.national.mouths], households * DEFAULT_MOUTHS_PER_HOUSEHOLD).value);
+    var ding = useRegionalTruth ? totals.ding : round(firstDefinedFinite([initial.nationalDing, root.population && root.population.national && root.population.national.ding], mouths * 0.30).value);
+    var scenarioHidden = round(firstDefinedFinite([initial.hiddenPopulation, initial.hiddenCount, initial.unregisteredPopulation], 0).value);
+    var existingHidden = round(firstDefinedFinite([root.population && root.population.hiddenCount, root.population && root.population.hiddenPopulation, root.population && root.population.unregisteredPopulation], 0).value);
     var emptyAuthoritativePlayer = options.authoritativePlayerPopulation === true && leaves.length === 0;
-    var existingFugitives = Math.max(round(root.population && root.population.fugitives || 0), round(root.hukou && (root.hukou.refugees || root.hukou.fugitives) || 0));
+    var existingFugitives = Math.max(
+      round(firstDefinedFinite([root.population && root.population.fugitives], 0).value),
+      round(firstDefinedFinite([root.hukou && root.hukou.refugees, root.hukou && root.hukou.fugitives], 0).value)
+    );
     if (options.authoritativePlayerPopulation === true && leaves.length && root.population._leafPopulationAuxAuthoritative !== true) {
-      var targetHidden = Math.max(totals.hiddenCount, scenarioHidden, existingHidden);
-      var targetFugitives = Math.max(totals.fugitives, existingFugitives);
+      // 剧本 initial.hiddenPopulation 是新局一次性播种来源；旧 national/hukou
+      // 镜像仅在叶级没有明确 hidden 字段时迁入，避免显式 0 被旧值复活。
+      var targetHidden = hiddenAuthorityComplete
+        ? Math.max(totals.hiddenCount, scenarioHidden)
+        : Math.max(totals.hiddenCount, scenarioHidden, existingHidden);
+      var targetFugitives = fugitiveAuthorityComplete ? totals.fugitives : Math.max(totals.fugitives, existingFugitives);
       var weights = {};
       leaves.forEach(function(region, index) {
         var id = String(region.id || region.name || ('region-' + index));

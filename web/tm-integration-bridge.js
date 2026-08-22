@@ -72,9 +72,14 @@
     return isFinite(n) ? n : fallback;
   }
 
+  function _hasAuthoritativePopulationDetail(detail) {
+    return !!(detail && typeof detail === 'object' && [detail.mouths, detail.households, detail.ding]
+      .some(function(value) { return _bridgeFiniteNumber(value, null) !== null; }));
+  }
+
   function _divisionPopulationWeight(div) {
     var pd = div && div.populationDetail;
-    if (pd && typeof pd === 'object' && (pd.mouths || pd.households)) return Number(pd.mouths) || 0;
+    if (_hasAuthoritativePopulationDetail(pd)) return _bridgeFiniteNumber(pd.mouths, 0);
     var pop = div && div.population;
     if (pop && typeof pop === 'object') return Number(pop.mouths) || 0;
     if (typeof pop === 'number') return pop;
@@ -323,8 +328,8 @@
 
     // 为每个顶级区划确保数据字段
     var topLevel = getTopLevelDivisions(adminHierarchy, 'player');
-    var nationalMouths = G.population && G.population.national && G.population.national.mouths || 50000000;
-    var nationalHouseholds = G.population && G.population.national && G.population.national.households || 10000000;
+    var nationalMouths = _bridgeFiniteNumber(G.population && G.population.national && G.population.national.mouths, 50000000);
+    var nationalHouseholds = _bridgeFiniteNumber(G.population && G.population.national && G.population.national.households, 10000000);
     var avgMx = G.minxin && typeof G.minxin.trueIndex === 'number' ? G.minxin.trueIndex : 60;
     var avgCorrRaw = G.corruption && (typeof G.corruption === 'object'
       ? (typeof G.corruption.trueIndex === 'number' ? G.corruption.trueIndex : G.corruption.overall)
@@ -344,10 +349,10 @@
       // 顶级人口代理已从叶级 byRegion 拆到 byProvince；旧档仍兼容读取 byRegion。
       var provincePopulation = G.population && (G.population.byProvince || G.population.byRegion);
       var legacyPop = provincePopulation && (provincePopulation[div.id] || provincePopulation[div.name]);
-      if (legacyPop && legacyPop.mouths && !div._migrated) {
-        div.population.mouths = legacyPop.mouths;
-        div.population.households = legacyPop.households || Math.floor(legacyPop.mouths / 5);
-        div.population.ding = legacyPop.ding || Math.floor(legacyPop.mouths * 0.25);
+      if (legacyPop && _bridgeFiniteNumber(legacyPop.mouths, null) !== null && !div._migrated) {
+        div.population.mouths = _bridgeFiniteNumber(legacyPop.mouths, 0);
+        div.population.households = _bridgeFiniteNumber(legacyPop.households, Math.floor(div.population.mouths / 5));
+        div.population.ding = _bridgeFiniteNumber(legacyPop.ding, Math.floor(div.population.mouths * 0.25));
         div._migrated = true;
       }
       // 旧 GM.minxin.byRegion
@@ -476,12 +481,12 @@
       var claimed=0, actual=0, remit=0, retain=0;
       var pubM=0, pubG=0, pubC=0;
       n.children.forEach(function(c) {
-        if (c.populationDetail && typeof c.populationDetail === 'object' && (c.populationDetail.mouths || c.populationDetail.households)) {
-          hh += c.populationDetail.households || 0;
-          mo += c.populationDetail.mouths || 0;
-          ding += c.populationDetail.ding || 0;
-          fug += c.populationDetail.fugitives || 0;
-          hid += c.populationDetail.hiddenCount || 0;
+        if (_hasAuthoritativePopulationDetail(c.populationDetail)) {
+          hh += _bridgeFiniteNumber(c.populationDetail.households, 0);
+          mo += _bridgeFiniteNumber(c.populationDetail.mouths, 0);
+          ding += _bridgeFiniteNumber(c.populationDetail.ding, 0);
+          fug += _bridgeFiniteNumber(c.populationDetail.fugitives, 0);
+          hid += _bridgeFiniteNumber(c.populationDetail.hiddenCount, 0);
         } else if (c.population && typeof c.population === 'object') {
           hh += c.population.households || 0;
           mo += c.population.mouths || 0;
@@ -556,12 +561,12 @@
     leaves.forEach(function(div) {
       // 优先读 populationDetail（剧本规范字段）
       var pd = div.populationDetail;
-      if (pd && typeof pd === 'object' && (pd.mouths || pd.households)) {
-        totalHH += pd.households || 0;
-        totalMouths += pd.mouths || 0;
-        totalDing += pd.ding || 0;
-        totalFug += pd.fugitives || 0;
-        totalHidden += pd.hiddenCount || 0;
+      if (_hasAuthoritativePopulationDetail(pd)) {
+        totalHH += _bridgeFiniteNumber(pd.households, 0);
+        totalMouths += _bridgeFiniteNumber(pd.mouths, 0);
+        totalDing += _bridgeFiniteNumber(pd.ding, 0);
+        totalFug += _bridgeFiniteNumber(pd.fugitives, 0);
+        totalHidden += _bridgeFiniteNumber(pd.hiddenCount, 0);
         return;
       }
       if (div.population && typeof div.population === 'object') {

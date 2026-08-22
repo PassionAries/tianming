@@ -58,15 +58,8 @@
     var fac = adminHierarchy[requested] || null;
     if (fac && !Array.isArray(fac) && !Array.isArray(fac.divisions)) fac = null;
     if (!fac && requested === 'player' && typeof _tmResolvePlayerAdminKey === 'function') {
-      var resolved = _tmResolvePlayerAdminKey(adminHierarchy);
+      var resolved = _tmResolvePlayerAdminKey(adminHierarchy, null, { allowSoleBranchFallback:false });
       if (resolved) fac = adminHierarchy[resolved];
-    }
-    if (!fac && requested === 'player') {
-      var keys = Object.keys(adminHierarchy).filter(function(key) {
-        var tree = adminHierarchy[key];
-        return Array.isArray(tree) || (tree && Array.isArray(tree.divisions));
-      });
-      if (keys.length === 1) fac = adminHierarchy[keys[0]];
     }
     if (Array.isArray(fac)) return fac;
     if (!fac || !Array.isArray(fac.divisions)) return [];

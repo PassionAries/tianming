@@ -36,6 +36,20 @@ function totals(leaves) {
     return out;
   }, { mouths: 0, households: 0, ding: 0 });
 }
+function sumBuckets(buckets) {
+  return Object.values(buckets || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+}
+function demographicTotals(leaves) {
+  return leaves.reduce((out, leaf) => {
+    const detail = leaf.populationDetail || {};
+    out.mouths += Number(detail.mouths || 0);
+    out.households += Number(detail.households || 0);
+    out.ding += Number(detail.ding || 0);
+    Object.keys(detail.byAge || {}).forEach(key => { out.byAge[key] = (out.byAge[key] || 0) + Number(detail.byAge[key] || 0); });
+    Object.keys(detail.byGender || {}).forEach(key => { out.byGender[key] = (out.byGender[key] || 0) + Number(detail.byGender[key] || 0); });
+    return out;
+  }, { mouths:0, households:0,ding:0, byAge:{}, byGender:{} });
+}
 
 function makeRuntime(options = {}) {
   const math = Object.create(Math);
@@ -202,12 +216,36 @@ console.log('[smoke-population-faction-ledger]');
 {
   const { context, npcLeaves } = makeRuntime();
   context.GM.adminHierarchy.player.divisions = [];
-  context.GM.population.national = { mouths:0, households:0, ding:0 };
+  context.GM.population.national = { mouths:10000000, households:2000000, ding:3000000 };
+  context.GM.population.byAge = { age_21_30:10000000 };
+  context.GM.population.byGender = { male:5200000, female:4800000 };
+  context.GM.regions = [makeLeaf('stale-player-region', '旧玩家地区', 10000000, true)];
   context.HujiEngine.tick({ turn: 1, monthRatio: 1, strict: true });
+  context.TM.HujiRuntimeBridge.maintain(context.GM, { scenario:context.P, turn:1 });
   ok(context.GM.population.national.mouths === 0
+    && context.GM.population.national.households === 0
+    && context.GM.population.national.ding === 0
+    && sumBuckets(context.GM.population.byAge) === 0
+    && sumBuckets(context.GM.population.byGender) === 0
+    && context.GM.hukou.registeredMouths === 0
     && context.GM.worldPopulationSummary.byFaction['fac-npc'].isPlayer === false
     && context.GM.worldPopulationSummary.byFaction['fac-npc'].national.mouths === totals(npcLeaves).mouths,
-  'territorial extinction never reclassifies the sole remaining NPC faction as player');
+  'territorial extinction clears stale player population and never revives scenario or root-region fallbacks');
+}
+
+{
+  const { context, npcLeaves } = makeRuntime();
+  delete context.GM.adminHierarchy.player;
+  context.GM.population.national = { mouths:10000000, households:2000000, ding:3000000 };
+  context.GM.regions = [makeLeaf('stale-player-region', '旧玩家地区', 10000000, true)];
+  context.HujiEngine.tick({ turn:1, monthRatio:1, strict:true });
+  context.TM.HujiRuntimeBridge.maintain(context.GM, { scenario:context.P, turn:1 });
+  ok(context.GM.population.national.mouths === 0
+    && context.GM.population.national.households === 0
+    && context.GM.population.national.ding === 0
+    && context.GM.worldPopulationSummary.byFaction['fac-npc'].isPlayer === false
+    && context.GM.worldPopulationSummary.byFaction['fac-npc'].national.mouths === totals(npcLeaves).mouths,
+  'deleting the player branch never turns the sole NPC branch into the player');
 }
 
 {
@@ -304,6 +342,138 @@ console.log('[smoke-population-faction-ledger]');
   const qiaozhiAfterGrowth = totals(qiaozhi).mouths;
   ok(materialized && context.GM.population.byLegalStatus.qiaozhi.mouths === qiaozhiAfterGrowth,
   'qiaozhi creates authoritative leaves, transfers population, and survives RuntimeBridge');
+}
+
+{
+  const { context, playerLeaves } = makeRuntime();
+  const capital = playerLeaves[0];
+  const source = playerLeaves[1];
+  capital.populationDetail.households = 60000;
+  capital.populationDetail.ding = 120000;
+  capital.populationDetail.byAge = { age_71_plus:capital.populationDetail.mouths };
+  capital.populationDetail.byGender = { male:120000, female:480000 };
+  source.populationDetail.households = 160000;
+  source.populationDetail.ding = 240000;
+  source.populationDetail.byAge = { age_21_30:source.populationDetail.mouths };
+  source.populationDetail.byGender = { male:320000, female:80000 };
+  context.HujiEngine.syncDemographicViews();
+  const before = demographicTotals(playerLeaves);
+  const sourceBefore = clone(source.populationDetail);
+  const capitalBefore = clone(capital.populationDetail);
+  const moved = context.HujiEngine.transferPopulation({
+    factionId:'fac-player', sourceRegionIds:['player-south'], targetRegionId:'player-capital', mouths:10000, cause:'smoke-capital-transfer'
+  });
+  const after = demographicTotals(playerLeaves);
+  ok(moved.ok
+    && JSON.stringify(after) === JSON.stringify(before)
+    && sourceBefore.mouths - source.populationDetail.mouths === moved.mouths
+    && sourceBefore.households - source.populationDetail.households === moved.households
+    && sourceBefore.ding - source.populationDetail.ding === moved.ding
+    && capital.populationDetail.mouths - capitalBefore.mouths === moved.mouths
+    && capital.populationDetail.households - capitalBefore.households === moved.households
+    && capital.populationDetail.ding - capitalBefore.ding === moved.ding,
+  'ordinary migration transfers one exact mouths-households-ding-age-gender bundle');
+}
+
+{
+  const { context, playerLeaves } = makeRuntime({ year:1101 });
+  playerLeaves[0].name = '中原京城';
+  playerLeaves[1].name = '江南路';
+  context.GM._capital = '中原京城';
+  context.GM.facs[0].capital = '中原京城';
+  context.GM.population.dynamics.birthRateBase = 0;
+  context.GM.population.dynamics.deathRateBase = 0;
+  playerLeaves[0].populationDetail.byAge = { age_71_plus:playerLeaves[0].populationDetail.mouths };
+  playerLeaves[0].populationDetail.byGender = { male:100000, female:500000 };
+  playerLeaves[1].populationDetail.byAge = { age_21_30:playerLeaves[1].populationDetail.mouths };
+  playerLeaves[1].populationDetail.byGender = { male:300000, female:100000 };
+  context.HujiEngine.syncDemographicViews();
+  const before = demographicTotals(playerLeaves);
+  context.HujiEngine.tick({ turn:1, monthRatio:1e-9, strict:true });
+  const after = demographicTotals(playerLeaves);
+  ok(JSON.stringify(after) === JSON.stringify(before)
+    && context.GM.population.migrationEvents.some(row => row.id === 'jingkang_nandu'),
+  'historical migration conserves every demographic field, not only mouths');
+}
+
+{
+  const { context } = makeRuntime({ year:1101 });
+  context.GM.adminHierarchy = {};
+  context.GM._capital = '不存在的首都';
+  context.GM.population.byRegion = {
+    中原: { mouths:100000, households:20000, ding:40000, byAge:{ age_21_30:100000 }, byGender:{ male:80000, female:20000 } },
+    江南: { mouths:100000, households:10000, ding:20000, byAge:{ age_71_plus:100000 }, byGender:{ male:20000, female:80000 } }
+  };
+  context.GM.population.national = { mouths:200000, households:30000, ding:60000 };
+  context.GM.population.dynamics.birthRateBase = 0;
+  context.GM.population.dynamics.deathRateBase = 0;
+  const before = clone(context.GM.population.byRegion);
+  const beforeTotals = {
+    mouths:before.中原.mouths + before.江南.mouths,
+    households:before.中原.households + before.江南.households,
+    ding:before.中原.ding + before.江南.ding,
+    age21:before.中原.byAge.age_21_30,
+    age71:before.江南.byAge.age_71_plus,
+    male:before.中原.byGender.male + before.江南.byGender.male,
+    female:before.中原.byGender.female + before.江南.byGender.female
+  };
+  context.HujiEngine.tick({ turn:1, monthRatio:1e-9, strict:true });
+  const rows = context.GM.population.byRegion;
+  ok(rows.中原.mouths + rows.江南.mouths === beforeTotals.mouths
+    && rows.中原.households + rows.江南.households === beforeTotals.households
+    && rows.中原.ding + rows.江南.ding === beforeTotals.ding
+    && (rows.中原.byAge.age_21_30 || 0) + (rows.江南.byAge.age_21_30 || 0) === beforeTotals.age21
+    && (rows.中原.byAge.age_71_plus || 0) + (rows.江南.byAge.age_71_plus || 0) === beforeTotals.age71
+    && rows.中原.byGender.male + rows.江南.byGender.male === beforeTotals.male
+    && rows.中原.byGender.female + rows.江南.byGender.female === beforeTotals.female,
+  'legacy byRegion migration transfers households ding age and gender with mouths');
+}
+
+{
+  const { context, playerLeaves } = makeRuntime();
+  let exact = true;
+  for (let mouths = 0; mouths <= 100; mouths++) {
+    playerLeaves[0].populationDetail.mouths = mouths;
+    playerLeaves[0].populationDetail.households = Math.round(mouths / 5);
+    playerLeaves[0].populationDetail.ding = Math.round(mouths * 0.3);
+    playerLeaves[0].populationDetail.byAge = {};
+    playerLeaves[0].populationDetail.byGender = {};
+    playerLeaves[0].byAge = {};
+    playerLeaves[0].byGender = {};
+    playerLeaves[1].populationDetail.mouths = 0;
+    playerLeaves[1].populationDetail.households = 0;
+    playerLeaves[1].populationDetail.ding = 0;
+    playerLeaves[1].populationDetail.byAge = {};
+    playerLeaves[1].populationDetail.byGender = {};
+    playerLeaves[1].byAge = {};
+    playerLeaves[1].byGender = {};
+    context.HujiEngine.syncDemographicViews();
+    exact = exact
+      && sumBuckets(playerLeaves[0].populationDetail.byAge) === mouths
+      && sumBuckets(playerLeaves[0].populationDetail.byGender) === mouths;
+  }
+  ok(exact, 'largest-remainder allocation keeps age and gender buckets exact for populations 0 through 100');
+}
+
+{
+  const { context } = makeRuntime();
+  const branch = context.GM.adminHierarchy.player.divisions;
+  ['侨京西', '侨京东', '侨河北'].forEach((name, index) => branch.push(makeLeaf('ordinary-same-name-' + index, name, 1000, false)));
+  const first = context.HujiEngine.materializeQiaozhiResettlement({
+    eventId:'jingkang_qiao', mouths:100000, sourceCandidates:['京城'], targetNames:['侨京西', '侨京东', '侨河北']
+  });
+  const eventOwned = branch.filter(leaf => leaf.parentHistoric === 'jingkang_qiao');
+  const second = context.HujiEngine.materializeQiaozhiResettlement({
+    eventId:'jingkang_qiao', mouths:100000, sourceCandidates:['京城'], targetNames:['侨京西', '侨京东', '侨河北']
+  });
+  branch.splice(branch.indexOf(eventOwned[0]), 1);
+  const partial = context.HujiEngine.materializeQiaozhiResettlement({
+    eventId:'jingkang_qiao', mouths:100000, sourceCandidates:['京城'], targetNames:['侨京西', '侨京东', '侨河北']
+  });
+  ok(first.ok && !first.alreadyMaterialized && eventOwned.length === 3
+    && second.ok && second.alreadyMaterialized
+    && partial.ok === false && partial.reason === 'qiaozhi-target-conflict',
+  'qiaozhi idempotence uses complete event-owned stable IDs, never unrelated display names');
 }
 
 {

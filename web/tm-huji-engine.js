@@ -296,6 +296,56 @@
     return total;
   }
 
+  // 将一个非负整数按权重精确分配；任何时候分项之和都严格等于 total。
+  // limits 可选，用于“从现有存量中扣除”这类不能超过各项库存的场景。
+  function _allocateExactIntegers(total, weights, limits) {
+    total = Math.max(0, Math.round(Number(total) || 0));
+    weights = Array.isArray(weights) ? weights.map(function(value) {
+      return Math.max(0, Number(value) || 0);
+    }) : [];
+    limits = Array.isArray(limits) ? limits.map(function(value) {
+      return Math.max(0, Math.round(Number(value) || 0));
+    }) : null;
+    var out = weights.map(function() { return 0; });
+    if (!weights.length || !total) return out;
+    if (limits) {
+      var capacity = limits.reduce(function(sum, value) { return sum + value; }, 0);
+      total = Math.min(total, capacity);
+    }
+    var weightTotal = weights.reduce(function(sum, value, index) {
+      if (limits && limits[index] <= 0) return sum;
+      return sum + value;
+    }, 0);
+    if (!(weightTotal > 0)) {
+      weights = weights.map(function(_, index) { return !limits || limits[index] > 0 ? 1 : 0; });
+      weightTotal = weights.reduce(function(sum, value) { return sum + value; }, 0);
+    }
+    var ranked = [];
+    var assigned = 0;
+    weights.forEach(function(weight, index) {
+      var quota = weightTotal > 0 ? total * weight / weightTotal : 0;
+      var value = Math.floor(quota);
+      if (limits) value = Math.min(value, limits[index]);
+      out[index] = value;
+      assigned += value;
+      ranked.push({ index:index, fraction:quota - Math.floor(quota) });
+    });
+    ranked.sort(function(a, b) { return b.fraction - a.fraction || a.index - b.index; });
+    var remaining = total - assigned;
+    while (remaining > 0) {
+      var progressed = false;
+      for (var i = 0; i < ranked.length && remaining > 0; i++) {
+        var index = ranked[i].index;
+        if (limits && out[index] >= limits[index]) continue;
+        out[index]++;
+        remaining--;
+        progressed = true;
+      }
+      if (!progressed) break;
+    }
+    return out;
+  }
+
   function _maxShare(obj) {
     var total = _sumObj(obj);
     var max = 0;
@@ -805,7 +855,15 @@
       leaf.population.mouths = detail.mouths;
       leaf.population.households = detail.households;
       leaf.population.ding = detail.ding;
+      leaf.population.hiddenCount = Math.max(0, Math.round(Number(detail.hiddenCount != null ? detail.hiddenCount : detail.hidden) || 0));
+      leaf.population.fugitives = Math.max(0, Math.round(Number(detail.fugitives) || 0));
     }
+    detail.hiddenCount = Math.max(0, Math.round(Number(detail.hiddenCount != null ? detail.hiddenCount : detail.hidden) || 0));
+    detail.hidden = detail.hiddenCount;
+    detail.fugitives = Math.max(0, Math.round(Number(detail.fugitives) || 0));
+    leaf.hiddenCount = detail.hiddenCount;
+    leaf.hidden = detail.hiddenCount;
+    leaf.fugitives = detail.fugitives;
     if (leaf.isQiaozhi || leaf.regionType === 'qiaozhi') {
       leaf.byLegalStatus = leaf.byLegalStatus && typeof leaf.byLegalStatus === 'object' ? leaf.byLegalStatus : {};
       leaf.byLegalStatus.qiaozhi = {
@@ -1037,6 +1095,9 @@
       legacyRow.mouths = detail.mouths;
       legacyRow.households = detail.households;
       legacyRow.ding = detail.ding;
+      legacyRow.hiddenCount = Math.max(0, Math.round(Number(detail.hiddenCount != null ? detail.hiddenCount : detail.hidden) || 0));
+      legacyRow.hidden = legacyRow.hiddenCount;
+      legacyRow.fugitives = Math.max(0, Math.round(Number(detail.fugitives) || 0));
     }
   }
 
@@ -1957,14 +2018,10 @@
     return out;
   }
 
-  function _bundleShare(bundle, index, count, assigned, bucketState) {
-    var last = index === count - 1;
+  function _bundleShare(bundle, index, scalarShares, bucketState) {
     var share = {};
     ['mouths', 'households', 'ding'].forEach(function(field) {
-      share[field] = last
-        ? Math.max(0, Number(bundle[field]) - Number(assigned[field]))
-        : Math.round(Number(bundle[field]) / count);
-      assigned[field] += share[field];
+      share[field] = scalarShares[field][index] || 0;
     });
     share.byAge = _takeExactBucketShare(bucketState.byAge, share.mouths);
     share.byGender = _takeExactBucketShare(bucketState.byGender, share.mouths);
@@ -2020,13 +2077,17 @@
     plannedIds.forEach(function(stableId) { existingIds[stableId] = true; });
     var bundle = _removePopulationForTransfer(sourceLeaves, requested);
     if (!bundle.mouths) return { ok:false, reason:'source-population-empty' };
-    var assigned = { mouths:0, households:0, ding:0, byAge:{}, byGender:{} };
+    var scalarShares = {
+      mouths:_allocateExactIntegers(bundle.mouths, targetNames.map(function() { return 1; })),
+      households:_allocateExactIntegers(bundle.households, targetNames.map(function() { return 1; })),
+      ding:_allocateExactIntegers(bundle.ding, targetNames.map(function() { return 1; }))
+    };
     var bucketState = {
       byAge:{ values:Object.assign({}, bundle.byAge), total:bundle.mouths },
       byGender:{ values:Object.assign({}, bundle.byGender), total:bundle.mouths }
     };
     var created = targetNames.map(function(name, index) {
-      var share = _bundleShare(bundle, index, targetNames.length, assigned, bucketState);
+      var share = _bundleShare(bundle, index, scalarShares, bucketState);
       var stableId = plannedIds[index];
       var detail = {
         households:share.households,
@@ -2115,6 +2176,124 @@
   //  造册登记
   // ═══════════════════════════════════════════════════════════════════
 
+  function _leafHiddenMouths(leaf) {
+    var detail = leaf && leaf.populationDetail;
+    if (!detail) return 0;
+    return Math.max(0, Math.round(Number(detail.hiddenCount != null ? detail.hiddenCount : detail.hidden) || 0));
+  }
+
+  function _setLeafHiddenMouths(leaf, value) {
+    if (!leaf || !leaf.populationDetail) return;
+    var hidden = Math.max(0, Math.round(Number(value) || 0));
+    leaf.populationDetail.hiddenCount = hidden;
+    leaf.populationDetail.hidden = hidden;
+    _syncLeafPopulationMirrors(leaf, leaf.populationDetail);
+  }
+
+  function _registrationHiddenTarget(P, group) {
+    var leafTotal = (group && group.leaves || []).reduce(function(sum, leaf) {
+      return sum + _leafHiddenMouths(leaf);
+    }, 0);
+    if (P && P._leafPopulationAuxAuthoritative === true) return leafTotal;
+    return Math.max(leafTotal, Math.max(0, Math.round(Number(P && P.hiddenCount) || 0)));
+  }
+
+  function _materializeHiddenPopulation(P, group, target) {
+    var leaves = (group && group.leaves || []).filter(function(leaf) {
+      return leaf && leaf.populationDetail;
+    });
+    var current = leaves.reduce(function(sum, leaf) { return sum + _leafHiddenMouths(leaf); }, 0);
+    target = Math.max(current, Math.max(0, Math.round(Number(target) || 0)));
+    if (target > current && leaves.length) {
+      var additions = _allocateExactIntegers(target - current, leaves.map(function(leaf) {
+        return Math.max(0, Math.round(Number(leaf.populationDetail.mouths) || 0));
+      }));
+      leaves.forEach(function(leaf, index) {
+        _setLeafHiddenMouths(leaf, _leafHiddenMouths(leaf) + additions[index]);
+      });
+    }
+    P._leafPopulationAuxAuthoritative = true; // arch-ok: 户籍权威写口确认叶级隐口账本已物化
+    P.hiddenCount = leaves.reduce(function(sum, leaf) { return sum + _leafHiddenMouths(leaf); }, 0); // arch-ok: 叶级隐口聚合全国视图
+    return P.hiddenCount;
+  }
+
+  function registerHiddenPopulation(options) {
+    options = options || {};
+    var G = global.GM;
+    var P = G && G.population;
+    if (!P) return { ok:false, reason:'population-unavailable', mouths:0, households:0, ding:0 };
+    var groups = _factionLeafGroups(G);
+    var target = _resolvePopulationTarget(G, options, groups);
+    if (!target.ok || !target.group || !target.group.leaves.length) {
+      return { ok:false, reason:target.reason || 'player-faction-not-found', mouths:0, households:0, ding:0 };
+    }
+    var group = target.group;
+    var available = _materializeHiddenPopulation(P, group, options.availableHidden);
+    var requested = Math.min(available, Math.max(0, Math.round(Number(options.mouths) || 0)));
+    var leaves = group.leaves.filter(function(leaf) { return _leafHiddenMouths(leaf) > 0; });
+    var hiddenBefore = leaves.map(_leafHiddenMouths);
+    var discoveries = _allocateExactIntegers(requested, hiddenBefore, hiddenBefore);
+    var registered = { mouths:0, households:0, ding:0 };
+    leaves.forEach(function(leaf, index) {
+      var discoveredMouths = discoveries[index] || 0;
+      if (!discoveredMouths) return;
+      var detail = leaf.populationDetail;
+      var localMouths = Math.max(0, Math.round(Number(detail.mouths) || 0));
+      var localHouseholds = Math.max(0, Math.round(Number(detail.households) || 0));
+      var localDing = Math.max(0, Math.round(Number(detail.ding) || 0));
+      var mouthsPerHousehold = localMouths / Math.max(1, localHouseholds);
+      if (!(mouthsPerHousehold > 0) || !isFinite(mouthsPerHousehold)) mouthsPerHousehold = 5;
+      var dingRatio = localDing / Math.max(1, localMouths);
+      var discoveredHouseholds = Math.min(localHouseholds, Math.round(discoveredMouths / mouthsPerHousehold));
+      var discoveredDing = Math.min(localDing, Math.round(discoveredMouths * dingRatio));
+      var legal = detail.byLegalStatus && typeof detail.byLegalStatus === 'object' ? detail.byLegalStatus : {};
+      var yinhu = legal.yinhu && typeof legal.yinhu === 'object' ? legal.yinhu : {
+        mouths:hiddenBefore[index],
+        households:Math.round(hiddenBefore[index] / mouthsPerHousehold),
+        ding:Math.round(hiddenBefore[index] * dingRatio)
+      };
+      var huangji = legal.huangji && typeof legal.huangji === 'object' ? legal.huangji : { mouths:0, households:0, ding:0 };
+      yinhu.mouths = Math.max(0, Math.round(Number(yinhu.mouths) || 0) - discoveredMouths);
+      yinhu.households = Math.max(0, Math.round(Number(yinhu.households) || 0) - discoveredHouseholds);
+      yinhu.ding = Math.max(0, Math.round(Number(yinhu.ding) || 0) - discoveredDing);
+      huangji.mouths = Math.max(0, Math.round(Number(huangji.mouths) || 0)) + discoveredMouths;
+      huangji.households = Math.max(0, Math.round(Number(huangji.households) || 0)) + discoveredHouseholds;
+      huangji.ding = Math.max(0, Math.round(Number(huangji.ding) || 0)) + discoveredDing;
+      legal.yinhu = yinhu;
+      legal.huangji = huangji;
+      detail.byLegalStatus = legal;
+      leaf.byLegalStatus = legal;
+      _setLeafHiddenMouths(leaf, hiddenBefore[index] - discoveredMouths);
+      if (!Array.isArray(leaf.populationRegistrationLedger)) leaf.populationRegistrationLedger = [];
+      leaf.populationRegistrationLedger.push({
+        turn:Number(G.turn) || 0,
+        cause:String(options.cause || 'census-registration'),
+        mouths:discoveredMouths,
+        households:discoveredHouseholds,
+        ding:discoveredDing
+      });
+      if (leaf.populationRegistrationLedger.length > 40) {
+        leaf.populationRegistrationLedger.splice(0, leaf.populationRegistrationLedger.length - 40);
+      }
+      registered.mouths += discoveredMouths;
+      registered.households += discoveredHouseholds;
+      registered.ding += discoveredDing;
+    });
+    P.hiddenCount = group.leaves.reduce(function(sum, leaf) { return sum + _leafHiddenMouths(leaf); }, 0); // arch-ok: 造册后由叶级隐口聚合全国视图
+    if (!P.meta || typeof P.meta !== 'object') P.meta = _defaultMeta();
+    if (!Array.isArray(P.meta.registrationLedger)) P.meta.registrationLedger = [];
+    P.meta.registrationLedger.push({
+      turn:Number(G.turn) || 0,
+      factionId:group.factionId,
+      cause:String(options.cause || 'census-registration'),
+      mouths:registered.mouths,
+      households:registered.households,
+      ding:registered.ding
+    });
+    if (P.meta.registrationLedger.length > 80) P.meta.registrationLedger.splice(0, P.meta.registrationLedger.length - 80);
+    return Object.assign({ ok:true, factionId:group.factionId, hiddenRemaining:P.hiddenCount }, registered);
+  }
+
   function _tickRegistration(ctx) {
     var P = global.GM.population;
     if (!P || !P.meta) return;
@@ -2122,12 +2301,30 @@
     var cycleMonths = Math.max(0, Number(P.meta.registrationCycle) || 0) * 12;
     var cycleTurns = (typeof global.turnsForMonths === 'function') ? global.turnsForMonths(cycleMonths) : cycleMonths;
     if (turnsSince < Math.max(1, Number(cycleTurns) || 1)) return;
-    // 触发造册
+    // 触发造册。hiddenCount 的单位是“口”，不能直接写进黄籍“户”。
     var cost = Math.round(P.national.households * 0.05);
     if (global.GM.guoku && global.GM.guoku.money !== undefined && global.GM.guoku.money >= cost) {
       // 造册经费走 FiscalEngine 真账(2026-07-04 收口)
-      if (global.FiscalEngine && global.FiscalEngine.spendFromGuoku) global.FiscalEngine.spendFromGuoku({ money: cost }, '户籍造册');
-      P.meta.lastRegistrationTurn = ctx.turn || 0;
+      if (!global.FiscalEngine || typeof global.FiscalEngine.spendFromGuoku !== 'function') {
+        throw new Error('户籍造册失败：财政写口不可用');
+      }
+      var groups = _factionLeafGroups(global.GM);
+      var playerGroup = groups.find(function(group) { return group.isPlayer; });
+      if (!playerGroup || !playerGroup.leaves.length) return;
+      var availableHidden = _registrationHiddenTarget(P, playerGroup);
+      var discoveredMouths = Math.round(availableHidden * 0.3);
+      var payment = cost > 0 ? global.FiscalEngine.spendFromGuoku({ money: cost }, '户籍造册') : { ok:true };
+      var deficit = payment && payment.deducted && payment.deducted.money && Number(payment.deducted.money.deficit) || 0;
+      if (payment === false || (payment && payment.ok === false) || deficit > 0) {
+        throw new Error('户籍造册失败：财政扣款未完成');
+      }
+      var registered = registerHiddenPopulation({
+        factionId:playerGroup.factionId,
+        mouths:discoveredMouths,
+        availableHidden:availableHidden,
+        cause:'census-registration'
+      });
+      if (!registered.ok) throw new Error('户籍造册失败：' + registered.reason);
       // 更新准确度——腐败降低
       var corrObj = global.GM.corruption;
       var corrRaw = corrObj && typeof corrObj === 'object'
@@ -2135,11 +2332,8 @@
         : corrObj;
       var corrupt = typeof corrRaw === 'number' && isFinite(corrRaw) ? corrRaw : 30;
       P.meta.registrationAccuracy = Math.max(0.5, 1.0 - corrupt / 100 * 0.5);
-      // 发现隐户（部分）
-      var discovered = Math.round(P.hiddenCount * 0.3);
-      P.hiddenCount = Math.max(0, P.hiddenCount - discovered);
-      if (P.byLegalStatus.huangji) P.byLegalStatus.huangji.households += discovered;
-      if (global.addEB) global.addEB('户口', '大造黄册，发现隐户 ' + discovered + ' 户（准确度 ' + (P.meta.registrationAccuracy*100).toFixed(0) + '%）');
+      P.meta.lastRegistrationTurn = ctx.turn || 0;
+      if (global.addEB) global.addEB('户口', '大造黄册，核出隐口 ' + registered.mouths + ' 口、约 ' + registered.households + ' 户（准确度 ' + (P.meta.registrationAccuracy*100).toFixed(0) + '%）');
     }
   }
 
@@ -2221,6 +2415,7 @@
     tick: tick,
     applyPopulationLoss: applyPopulationLoss,
     transferPopulation: transferPopulation,
+    registerHiddenPopulation: registerHiddenPopulation,
     materializeQiaozhiResettlement: materializeQiaozhiResettlement,
     syncDemographicViews: syncDemographicViews,
     startLargeCorvee: startLargeCorvee,

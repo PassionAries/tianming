@@ -506,6 +506,9 @@ document.addEventListener('mousedown', function(e){
 console.log('天命游戏脚本开始加载...');
 </script>
 
+<script src="tm-perf.js?v=20260824-round20-observability"></script>
+<script src="tm-startup-phases.js?v=20260824-round20-observability"></script>
+
 <script src="tm-env-detect.js?v=2026042714"></script>
 <script src="tm-platform.js?v=20260823-ipc1"></script>
 <!-- 固定虚拟分辨率+整体等比缩放适配（移植 Phase 2 重做）·仅 capacitor/?fit=1·须在 platform 后尽早加载防闪 -->
@@ -513,6 +516,7 @@ console.log('天命游戏脚本开始加载...');
 <script src="tm-debug-logger.js?v=2026052801"></script>
 <script src="tm-diagnostics-foundation.js?v=2026050401"></script>
 <script src="tm-ui-foundation.js?v=2026050401"></script>
+<script>window.TMStartupPhases.transition('core', { boundary: 'tm-data-model' });</script>
 <script src="tm-data-model.js?v=20260709"></script>
 <!-- R135 (2026-04-25) tm-utils 拆分 → utils + ai-infra -->
 <script src="tm-utils.js?v=20260706-shijivolumes"></script>
@@ -614,6 +618,7 @@ console.log('天命游戏脚本开始加载...');
 <!-- R111+R127 拆分 tm-game-engine.js → launch + player-settings + player-core + hongyan-office + game-loop -->
 <script src="tm-promotion.js?v=20260604-gongming"></script>
 <script src="tm-gongming.js?v=20260613-gongming-sys"></script>
+<script>window.TMStartupPhases.transition('world', { boundary: 'tm-launch' });</script>
 <script src="tm-launch.js?v=20260711-scnimport"></script>
 <script src="tm-player-settings.js?v=20260622-wfswitches"></script>
 <script src="tm-player-core.js?v=2026062003-custombuild"></script>
@@ -917,7 +922,6 @@ console.log('天命游戏脚本开始加载...');
 <script src="tm-fiscal-ui.js?v=2026042714"></script>
 <script src="tm-integration-bridge.js?v=20260822-auditfix17"></script>
 <script src="tm-fiscal-engine.js?v=20260824-auditfix19"></script>
-<script src="tm-perf.js?v=2026042714"></script>
 <script src="tm-invariants.js?v=2026042714"></script>
 <script src="tm-namespaces.js?v=2026042714"></script>
 <script src="tm-state.js?v=2026042714"></script>
@@ -958,6 +962,7 @@ console.log('天命游戏脚本开始加载...');
 <link rel="stylesheet" href="tm-online-mall.css?v=20260722-baigong-landscape">
 <script src="tm-workshop-covers.js?v=20260604-mall-s1"></script>
 <script src="tm-zip-store.js?v=20260604-zip-s2c"></script>
+<script>window.TMStartupPhases.transition('optional', { boundary: 'tm-content-manager' });</script>
 <script src="tm-content-manager.js?v=20260811-auditfix1"></script>
 <script src="tm-content-manager-community.js?v=20260811-auditfix1"></script><!-- 第二十拆·community须紧随origin(origin装载期导出bucket→community捕获·错序即崩)·勿动位置 -->
 <script src="preview/img/east-asia-basemap-data.js?v=20260514-formal-map"></script>
@@ -1004,6 +1009,7 @@ console.log('天命游戏脚本开始加载...');
 <script src="tm-hover-fulltext.js?v=20260701-fulltip"></script>
 
 <!-- 末尾 defer 启动契约：等待此前 blocking/defer 脚本均执行后检查关键全局，缺失时显示明确故障层。 -->
+<script>window.TMStartupPhases.finish({ boundary: 'startup-contract' });</script>
 <script src="tm-startup-contract.js?v=20260823-global1" defer></script>
 
 <!-- 触屏工效层（移植 Phase 2·S2.1）·仅 @media(pointer:coarse) 生效·桌面零影响·置尾以压过御案注入样式 -->

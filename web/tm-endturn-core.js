@@ -91,6 +91,8 @@ async function _tmRunEndTurnDeterministicTail() {
 
 async function _runPreSubmitPartyClassCalibration() {
   try {
+    var _hujiFirstPass = null;
+    var _hujiConsumerResult = null;
     var _pcSchedulerRan = false;
     try {
       if (typeof window !== 'undefined' && window.TM && TM.PartyClassActionScheduler && typeof TM.PartyClassActionScheduler.scheduleBeforeSubmit === 'function') {
@@ -236,7 +238,7 @@ async function _runPreSubmitPartyClassCalibration() {
     }
     try {
       if (typeof window !== 'undefined' && window.TM && TM.HujiRuntimeBridge && typeof TM.HujiRuntimeBridge.maintain === 'function') {
-        TM.HujiRuntimeBridge.maintain(GM, {
+        _hujiFirstPass = TM.HujiRuntimeBridge.maintain(GM, {
           source: 'pre-submit-huji-runtime-bridge',
           turn: GM && GM.turn,
           includePlayerSignals: true
@@ -259,7 +261,7 @@ async function _runPreSubmitPartyClassCalibration() {
     }
     try {
       if (typeof window !== 'undefined' && window.TM && TM.MinxinHardLinkConsumers && typeof TM.MinxinHardLinkConsumers.consume === 'function') {
-        TM.MinxinHardLinkConsumers.consume(GM, {
+        _hujiConsumerResult = TM.MinxinHardLinkConsumers.consume(GM, {
           source: 'pre-submit-minxin-hard-link-consumers',
           turn: GM && GM.turn
         });
@@ -270,10 +272,17 @@ async function _runPreSubmitPartyClassCalibration() {
     }
     try {
       if (typeof window !== 'undefined' && window.TM && TM.HujiRuntimeBridge && typeof TM.HujiRuntimeBridge.maintain === 'function') {
-        TM.HujiRuntimeBridge.maintain(GM, {
-          source: 'pre-submit-huji-runtime-bridge-after-hard-links',
-          turn: GM && GM.turn
-        });
+        if (typeof TM.HujiRuntimeBridge.maintainAfterHardLinks === 'function') {
+          TM.HujiRuntimeBridge.maintainAfterHardLinks(GM, _hujiFirstPass, _hujiConsumerResult, {
+            source: 'pre-submit-huji-runtime-bridge-after-hard-links',
+            turn: GM && GM.turn
+          });
+        } else {
+          TM.HujiRuntimeBridge.maintain(GM, {
+            source: 'pre-submit-huji-runtime-bridge-after-hard-links',
+            turn: GM && GM.turn
+          });
+        }
       }
     } catch(_hujiRuntimeBridgeAfterE) {
       try { console.warn('[endTurn] post-consumer huji runtime bridge failed', _hujiRuntimeBridgeAfterE); } catch(_){}
@@ -403,11 +412,26 @@ function _tmRestoreEndTurnObject(target, snapshot) {
 }
 
 function _tmCaptureEndTurnTransaction() {
+  var captureSpan = (typeof TM !== 'undefined' && TM.perf && typeof TM.perf.beginSpan === 'function')
+    ? TM.perf.beginSpan('endturn.transactionCapture') : null;
   var gmRef = GM, pRef = P;
   var transactionId = '';
   try { transactionId = 'turn-' + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2))); }
   catch (_) { transactionId = 'turn-' + Date.now() + '-' + Math.random().toString(16).slice(2); }
-  return {
+  var captureSession = {
+    transactionId: transactionId,
+    campaignId: gmRef && gmRef._campaignId || '',
+    timelineId: gmRef && gmRef._timelineId || '',
+    clickTurn: gmRef && gmRef.turn,
+    rollbackCapture: null,
+    preEndturnState: null,
+    finalCanonicalState: null,
+    preEndturnPayload: null,
+    finalPayload: null,
+    committed: false,
+    rolledBack: false
+  };
+  var transaction = {
     gmRef: gmRef,
     pRef: pRef,
     loadGen: (typeof window !== 'undefined' && window._tmLoadGen) || 0,
@@ -417,9 +441,16 @@ function _tmCaptureEndTurnTransaction() {
     transactionId: transactionId,
     gm: _tmCaptureEndTurnObject(gmRef, ['_postTurnJobs', '_postTurnDetachedJobs', '_indices']),
     p: _tmCaptureEndTurnObject(pRef, ['scenario', '_indices']),
+    captureSession: captureSession,
     committed: false,
     rolledBack: false
   };
+  captureSession.rollbackCapture = { gm: transaction.gm, p: transaction.p };
+  if (typeof TM !== 'undefined' && TM.perf && typeof TM.perf.count === 'function') {
+    TM.perf.count('world.rollbackClone.count', 1);
+  }
+  if (captureSpan && TM.perf && typeof TM.perf.endSpan === 'function') TM.perf.endSpan(captureSpan, { ok: true });
+  return transaction;
 }
 
 function _tmEndTurnTransactionCurrent(txn) {
@@ -438,6 +469,7 @@ function _tmMaybeStageTurnResult(html, idx) {
 function _tmCommitEndTurnTransaction(txn) {
   if (!_tmEndTurnTransactionCurrent(txn)) return false;
   txn.committed = true;
+  if (txn.captureSession) txn.captureSession.committed = true;
   GM._endTurnCommitPending = false; // arch-ok end-turn transaction owns its commit barrier
   var pendingResult = GM._pendingCommittedTurnResult;
   try { delete GM._pendingCommittedTurnResult; } catch (_) {} // arch-ok end-turn transaction owns its staged result
@@ -477,8 +509,18 @@ function _tmRequestEndTurnDesktopAutoSaveFlush(reason) {
 function _tmCapturePreEndTurnCommittedState(txn) {
   if (!_tmEndTurnTransactionCurrent(txn)) throw new Error('pre_endturn transaction lease expired');
   if (typeof _buildSaveState !== 'function') throw new Error('pre_endturn save-state builder unavailable');
-  var state = _buildSaveState({ format: 'idb', detach: true, gm: txn.gmRef, p: txn.pRef });
+  var span = (typeof TM !== 'undefined' && TM.perf && typeof TM.perf.beginSpan === 'function')
+    ? TM.perf.beginSpan('endturn.preEndturnBuild', { transactionId: txn.transactionId }) : null;
+  var state;
+  try {
+    state = _buildSaveState({ format: 'idb', detach: true, gm: txn.gmRef, p: txn.pRef });
+  } catch (error) {
+    if (span && TM.perf && typeof TM.perf.endSpan === 'function') TM.perf.endSpan(span, { ok: false, error: error.message || String(error) });
+    throw error;
+  }
+  if (span && TM.perf && typeof TM.perf.endSpan === 'function') TM.perf.endSpan(span, { ok: true });
   if (!state || !state.GM || !state.P) throw new Error('pre_endturn click-state capture failed');
+  if (txn.captureSession) txn.captureSession.preEndturnState = state;
   return state;
 }
 
@@ -566,12 +608,12 @@ async function _tmPrepareEndTurnBoundary(txn, clickState) {
 
 function _tmRestoreCommittedBaselineAfterRollback(txn) {
   try {
-    if (typeof _buildSaveState !== 'function' || typeof _tmAdoptCommittedWorldSnapshot !== 'function') {
+    if (typeof _tmAdoptCommittedWorldSnapshot !== 'function') {
       throw new Error('rollback committed snapshot boundary unavailable');
     }
-    var restoredState = _buildSaveState({ format: 'idb', detach: true, gm: txn.gmRef, p: txn.pRef });
+    var restoredState = txn && txn.captureSession && txn.captureSession.preEndturnState;
     if (!restoredState || !restoredState.GM || !restoredState.P) {
-      throw new Error('rollback committed snapshot capture failed');
+      throw new Error('rollback committed click-state unavailable');
     }
     if (_tmAdoptCommittedWorldSnapshot(restoredState, {
       turn: txn.gmRef.turn,
@@ -594,6 +636,8 @@ function _tmRollbackEndTurnTransaction(txn, reason) {
   if (!_tmEndTurnTransactionCurrent(txn)) return false;
   var rollbackLease = { kind: 'end-turn', transactionId: txn.transactionId || '', startedAt: Date.now() };
   if (typeof window !== 'undefined') window._tmWorldRollbackActive = rollbackLease;
+  var rollbackSpan = (typeof TM !== 'undefined' && TM.perf && typeof TM.perf.beginSpan === 'function')
+    ? TM.perf.beginSpan('endturn.rollbackRestore', { transactionId: txn.transactionId }) : null;
   try {
     try { if (typeof closeTurnResult === 'function') closeTurnResult(); }
     catch (closeError) { _tmReportEndTurnBoundaryError(closeError, 'close rollback presentation'); }
@@ -611,6 +655,7 @@ function _tmRollbackEndTurnTransaction(txn, reason) {
       }
     }
     txn.rolledBack = true;
+    if (txn.captureSession) txn.captureSession.rolledBack = true;
     if (typeof window !== 'undefined') window._tmLoadGen = (window._tmLoadGen || 0) + 1;
     GM.busy = false; // arch-ok end-turn transaction owns rollback cleanup
     GM._endTurnBusy = false; // arch-ok end-turn transaction owns rollback cleanup
@@ -620,6 +665,9 @@ function _tmRollbackEndTurnTransaction(txn, reason) {
     catch (renderError) { _tmReportEndTurnBoundaryError(renderError, 'render restored world'); }
     return true;
   } finally {
+    if (rollbackSpan && typeof TM !== 'undefined' && TM.perf && typeof TM.perf.endSpan === 'function') {
+      TM.perf.endSpan(rollbackSpan, { ok: txn.rolledBack === true });
+    }
     if (typeof window !== 'undefined' && window._tmWorldRollbackActive === rollbackLease) window._tmWorldRollbackActive = null;
     _tmRequestEndTurnDesktopAutoSaveFlush('end-turn-rollback');
   }

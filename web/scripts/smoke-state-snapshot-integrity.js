@@ -16,7 +16,7 @@ function fakeIndexedDB(options) {
   options = options || {};
   const stores = new Map();
   const deletedIndexes = [];
-  const stats = { fullStoreGetAll: 0, indexGetAll: 0 };
+  const stats = { fullStoreGetAll: 0, indexGetAll: 0, indexGetAllKeys: 0 };
   if (Array.isArray(options.records)) {
     stores.set('snapshots_v2', {
       keyPath: 'id',
@@ -45,20 +45,30 @@ function fakeIndexedDB(options) {
       },
       index(name) {
         if (!def.indexes.has(name)) throw new Error('missing index ' + name);
+        function indexKey(record) {
+          if (name === 'campaignTimeline') return [record.campaignId, record.timelineId];
+          if (name === 'timelineTurn') return [record.campaignId, record.timelineId, record.turn];
+          if (name === 'campaignParent') return [record.campaignId, record.parentTimelineId];
+          if (name === 'campaignId') return record.campaignId;
+          return undefined;
+        }
         return {
           getAll(query) {
             stats.indexGetAll++;
             const req = {};
-            function indexKey(record) {
-              if (name === 'campaignTimeline') return [record.campaignId, record.timelineId];
-              if (name === 'timelineTurn') return [record.campaignId, record.timelineId, record.turn];
-              if (name === 'campaignParent') return [record.campaignId, record.parentTimelineId];
-              if (name === 'campaignId') return record.campaignId;
-              return undefined;
-            }
             const wanted = JSON.stringify(query);
             const values = Array.from(def.rows.values()).filter(record => JSON.stringify(indexKey(record)) === wanted).map(clone);
             setTimeout(function() { if (req.onsuccess) req.onsuccess({ target: { result: values } }); }, 0);
+            return req;
+          },
+          getAllKeys(query) {
+            stats.indexGetAllKeys++;
+            const req = {};
+            const wanted = JSON.stringify(query);
+            const keys = Array.from(def.rows.entries())
+              .filter(entry => JSON.stringify(indexKey(entry[1])) === wanted)
+              .map(entry => entry[0]);
+            setTimeout(function() { if (req.onsuccess) req.onsuccess({ target: { result: keys } }); }, 0);
             return req;
           }
         };
@@ -143,8 +153,10 @@ function fakeIndexedDB(options) {
   ctx.window = ctx;
   ctx._tmLoadGen = 0;
   ctx._desktopAutoSaveFlushes = 0;
+  let persistenceBuilds = 0;
   ctx._tmFlushDeferredDesktopAutoSave = function() { ctx._desktopAutoSaveFlushes++; };
   ctx._buildSaveState = function(options) {
+    persistenceBuilds++;
     return { GM: clone(options.gm), P: clone(options.p || {}) };
   };
   let forkSeq = 0;
@@ -208,6 +220,21 @@ function fakeIndexedDB(options) {
   ctx.P = { conf: { campaign: 'A' }, mapData: { a: 1 } };
   let r = await ctx.StateSnapshot.save(1);
   ok(r.ok === true, 'campA/T1 完整快照写入');
+  const canonicalBuildsBefore = persistenceBuilds;
+  const canonicalState = { GM: clone(ctx.GM), P: clone(ctx.P) };
+  canonicalState.GM._campaignId = 'campCanonical';
+  canonicalState.GM._timelineId = 'tml_canonical_12345678';
+  canonicalState.GM.turn = 7;
+  canonicalState.GM.marker = 'canonical-reuse';
+  r = await ctx.StateSnapshot.save({
+    canonicalState,
+    campaignId: 'campCanonical',
+    timelineId: 'tml_canonical_12345678',
+    turn: 7
+  });
+  ok(r.ok === true && persistenceBuilds === canonicalBuildsBefore
+    && (await ctx.StateSnapshot.load(7, 'campCanonical', 'tml_canonical_12345678')).state.GM.marker === 'canonical-reuse',
+  '提供 canonical state 时快照直接复用，不再次构造或读取 live world');
   // 注入 100 个无关战役；当前列表必须继续只走 campaign+timeline 复合索引。
   const snapshotRows = primaryDb.stores.get('snapshots_v2').rows;
   for (let i = 0; i < 100; i++) {
@@ -310,12 +337,37 @@ function fakeIndexedDB(options) {
   r = await hookResult;
   ok(r.ok === true && (await ctx.StateSnapshot.load(3)).state.GM.marker === 'hook', 'await hook 后快照已落库');
 
+  // 真实触发 200 条上限；清理阶段只能取主键，不得读取/克隆 205 份完整 state。
+  const lruCampaign = 'campLRU';
+  const lruTimeline = 'tml_lru_12345678';
+  for (let turn = 0; turn < 205; turn++) {
+    snapshotRows.set(lruCampaign + ':' + lruTimeline + ':' + turn, {
+      id: lruCampaign + ':' + lruTimeline + ':' + turn,
+      campaignId: lruCampaign,
+      timelineId: lruTimeline,
+      turn,
+      ts: turn,
+      state: { GM: { _campaignId: lruCampaign, _timelineId: lruTimeline, turn, payload: 'x'.repeat(256) }, P: {} }
+    });
+  }
+  const fullReadsBeforeLRU = primaryDb.stats.fullStoreGetAll;
+  r = await ctx.StateSnapshot.save({
+    canonicalState: { GM: { _campaignId: lruCampaign, _timelineId: lruTimeline, turn: 205 }, P: {} },
+    campaignId: lruCampaign,
+    timelineId: lruTimeline,
+    turn: 205
+  });
+  const lruRows = Array.from(snapshotRows.values()).filter(record => record.campaignId === lruCampaign && record.timelineId === lruTimeline);
+  ok(r.ok === true && lruRows.length === 200 && Math.min.apply(null, lruRows.map(record => record.turn)) === 6
+    && primaryDb.stats.fullStoreGetAll === fullReadsBeforeLRU,
+  '205 条真实 payload 的 LRU 只读 keys 并精确保留最新 200 条');
+
   ok(/_stillCurrent\(sourceGM, sourceP, sourceLoadGen, campaignId, timelineId\)/.test(src), 'timeTravel 在异步边界复验 GM/P/loadGen/campaign/timeline');
   ok(/failed to save return point/.test(src) && /time-travel-rollback/.test(src), '返航点失败不恢复，目标恢复失败会回滚');
   ok(/return saveSnapshot\(t\)\.then/.test(src), '自动 hook 显式返回保存链');
-  ok(primaryDb.stats.indexGetAll > 0 && primaryDb.stats.fullStoreGetAll === 0
+  ok(primaryDb.stats.indexGetAll > 0 && primaryDb.stats.indexGetAllKeys > 0 && primaryDb.stats.fullStoreGetAll === 0
     && !/objectStore\(STORE\)\.getAll\(\)/.test(src) && !/objectStore\(LINEAGE_STORE\)\.getAll\(\)/.test(src),
-  '多战役快照列表按复合索引和谱系主键读取，不执行全库 getAll');
+  '多战役快照列表按复合索引、keys-only LRU 和谱系主键读取，不执行全库 getAll');
 
   console.log('\n[smoke-state-snapshot-integrity] pass=' + pass);
 })().catch(function(e) {

@@ -90,12 +90,18 @@ function makeIndexedDB(initial, failPutAt, failureName) {
 }
 
 function makeContext(indexedDB, localStorage) {
+  const workCounters = Object.create(null);
   const context = {
     console: { log() {}, warn() {}, error() {}, info() {} },
     Promise, Math, Date, JSON, Object, Array, Number, String, Boolean, Error,
     Blob, Response, CompressionStream: undefined, DecompressionStream: undefined, TextDecoder,
     setTimeout, clearTimeout, localStorage, indexedDB,
-    navigator: { storage: null }
+    navigator: { storage: null },
+    TM: { perf: {
+      count(name, delta = 1) { workCounters[name] = (workCounters[name] || 0) + Number(delta); },
+      withSpan(_name, fn) { return fn(); }
+    } },
+    workCounters
   };
   context.window = context;
   context.globalThis = context;
@@ -115,6 +121,12 @@ function makeContext(indexedDB, localStorage) {
   ]);
   check(ok === true && idb.stats.readwriteTransactions === 1, 'both canonical slots use one IndexedDB readwrite transaction');
   check(idb.stores.get('saves').size === 2 && idb.stores.get('saveMetadata').size === 2, 'payloads and metadata commit together');
+  check(ctx.workCounters['save.stringify.count'] === 1
+    && ctx.workCounters['save.compress.count'] === 1
+    && ctx.workCounters['save.payloadReuse.count'] === 1,
+  'one canonical state is stringified/compressed once and reused by autosave plus slot_0');
+  check(idb.stores.get('saves').get('autosave').gameState === idb.stores.get('saves').get('slot_0').gameState,
+  'both canonical slots persist byte-identical payloads');
 
   const batchReceiptMarker = {
     campaignId: 'campaign-batch-receipt', timelineId: 'tml_batch_12345678', transactionId: 'turn-batch-receipt-12345678', saveName: '测试档',

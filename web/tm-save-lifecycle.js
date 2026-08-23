@@ -2305,6 +2305,9 @@ function _autoSaveSnapshotGM(sourceGM, options){
   var out = {};
   for (var k in _snapshotGM) {
     if (!_snapshotGM.hasOwnProperty(k)) continue;
+    if (typeof TM !== 'undefined' && TM.perf && typeof TM.perf.count === 'function') {
+      TM.perf.count('world.persistenceVisitedNodes', 1);
+    }
     if (SKIP[k]) continue;
     // _prepareGMForSave 刚以 _safeClone 建的 _saved* 镜像·写后只读不再变动·此处引用即可
     // (原落入下方 deepClone 分支被二次深拷·每60s 自动存档对~130 个大块多拷一遍·此优化砍掉冗余那遍·序列化输出逐字节不变)
@@ -2345,6 +2348,9 @@ if (typeof window !== 'undefined') window._autoSaveSnapshotGM = _autoSaveSnapsho
 // 调用方须在需要时先 await 后台任务；prepare 默认开启，传 prepare:false 可避免同一写口重复序列化。
 function _buildSaveState(options){
   options = options || {};
+  if (typeof TM !== 'undefined' && TM.perf && typeof TM.perf.count === 'function') {
+    TM.perf.count('world.persistenceBuild.count', 1);
+  }
   var liveGM = (typeof GM !== 'undefined' ? GM : null);
   var sourceGM = options.gm || liveGM;
   var sourceP = options.p || (typeof P !== 'undefined' ? P : {});

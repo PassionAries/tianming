@@ -97,7 +97,9 @@ ok(/TM_SaveDB\.saveManyAtomic\([\s\S]*?_autoWriteOptions\)/.test(render)
     && (core.match(/_endTurn_saveSnapshot\(ctx\)/g) || []).length === 1, 'normal/deferred 两条路径复用同一幂等存档 promise');
   ok(/var saved = await ctx\.meta\.endTurnSavePromise;[\s\S]*?saved !== true[\s\S]*?_tmCommitEndTurnTransaction/.test(core), 'normal 提交屏障严格等待最终存档后才 commit');
 }
-ok(/function save\(id, gameState, meta, options\)[\s\S]*?_writeStillAllowed\(\)[\s\S]*?SaveCompression\.compress[\s\S]*?if \(!_writeStillAllowed\(\)\) return false;[\s\S]*?return _put/.test(storage), 'SaveDB 在压缩前及真正 put 前复验 writeGuard');
+ok(/function createCanonicalPayload\(state, identity\)[\s\S]*?JSON\.stringify\(state\)[\s\S]*?SaveCompression\.compress\(json\)/.test(storage)
+  && /function save\(id, gameState, meta, options\)[\s\S]*?createCanonicalPayload\(gameState[\s\S]*?if \(!_writeStillAllowed\(\)\) return Promise\.resolve\(false\)[\s\S]*?if \(!_writeStillAllowed\(\)\) return false;[\s\S]*?_putSaveRecord/.test(storage),
+  'SaveDB 同步冻结 canonical payload，并在异步准备前及真正 put 前复验 writeGuard');
 ok(/var sourceSnapshot = lastCommittedSnapshot;[\s\S]*?await window\.tianming\.autoSave\(saveData\);[\s\S]*?lastCommittedSnapshot !== sourceSnapshot[\s\S]*?不推进当前局闲置基线[\s\S]*?_autoSaveLastDoneMs = Date\.now\(\)/.test(lifecycle), '60s Electron IPC 跨档或快照推进后不推进当前局闲置跳存基线');
 ok(/let autoSaveWriteQueue = Promise\.resolve\(\);[\s\S]*?const task = autoSaveWriteQueue\.then[\s\S]*?autoSaveWriteQueue = task\.then/.test(mainImpl), '主进程串行化固定 .tmp 的所有 auto-save IPC');
 ok(/auto-save-session-rotate/.test(mainImpl) && /autoSaveSessionMatches\(requestToken\)/.test(mainImpl)

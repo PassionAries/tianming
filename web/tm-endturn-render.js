@@ -42,7 +42,10 @@ function _endTurn_stripCommittedDraftsFromSnapshot(snapshot) {
   return snapshot;
 }
 
-async function _endTurn_stateChecksum(snapshot) {
+async function _endTurn_stateChecksum(snapshot, canonicalPayload) {
+  if (canonicalPayload && canonicalPayload.state === snapshot && canonicalPayload.checksum) {
+    return canonicalPayload.checksum;
+  }
   var json = JSON.stringify(snapshot);
   try {
     if (typeof crypto !== 'undefined' && crypto.subtle && typeof TextEncoder !== 'undefined') {
@@ -55,13 +58,13 @@ async function _endTurn_stateChecksum(snapshot) {
   return 'fnv1a-' + (hash >>> 0).toString(16).padStart(8, '0');
 }
 
-async function _endTurn_stageTurnData(ctx, snapshot) {
+async function _endTurn_stageTurnData(ctx, snapshot, canonicalPayload) {
   ctx = ctx || { meta: {} };
   ctx.meta = ctx.meta || {};
   var presentation = ctx.meta.turnPresentation;
   if (!(window.tianming && window.tianming.isDesktop && GM.saveName && presentation && presentation.turnData)) return true;
   if (typeof window.tianming.stageTurnData !== 'function') throw new Error('桌面回合分卷暂存接口缺失');
-  var checksum = await _endTurn_stateChecksum(snapshot);
+  var checksum = await _endTurn_stateChecksum(snapshot, canonicalPayload);
   var marker = {
     saveName: GM.saveName,
     turn: GM.turn - 1,
@@ -145,9 +148,45 @@ function _endTurn_saveSnapshot(ctx) {
       if (!_endturnSaveStillCurrent()) return false;
       try { if (typeof _wtRunFulfillAudit === 'function') _wtRunFulfillAudit(); } catch (_wtFaHkE) {}
       var _autoT0 = Date.now();
-      var _autoState = _buildSaveState({format:'idb',detach:true,gm:_endturnSaveGM,p:_endturnSaveP});
+      var _canonicalSpan = (typeof TM !== 'undefined' && TM.perf && typeof TM.perf.beginSpan === 'function')
+        ? TM.perf.beginSpan('endturn.finalCanonicalBuild', { transactionId: ctx.meta.transactionId || '' }) : null;
+      var _autoState;
+      try {
+        _autoState = _buildSaveState({format:'idb',detach:true,gm:_endturnSaveGM,p:_endturnSaveP});
+      } catch (_canonicalBuildError) {
+        if (_canonicalSpan && TM.perf && typeof TM.perf.endSpan === 'function') TM.perf.endSpan(_canonicalSpan, { ok:false, error:_canonicalBuildError.message || String(_canonicalBuildError) });
+        throw _canonicalBuildError;
+      }
       _endTurn_stripCommittedDraftsFromSnapshot(_autoState);
-      await _endTurn_stageTurnData(ctx, _autoState);
+      if (_canonicalSpan && TM.perf && typeof TM.perf.endSpan === 'function') TM.perf.endSpan(_canonicalSpan, { ok:true });
+      var _captureSession = ctx.meta.transaction && ctx.meta.transaction.captureSession;
+      if (_captureSession) _captureSession.finalCanonicalState = _autoState;
+      var _canonicalIdentity = {
+        campaignId: String(_endturnSaveGM._campaignId || ''),
+        timelineId: String(_endturnSaveGM._timelineId || ''),
+        turn: _endturnSaveTurn,
+        transactionId: String(ctx.meta.transactionId || ''),
+        schemaVersion: 1
+      };
+      var _canonicalPayload;
+      if (typeof TM_SaveDB.createCanonicalPayload === 'function') {
+        _canonicalPayload = await TM_SaveDB.createCanonicalPayload(_autoState, _canonicalIdentity);
+      } else {
+        // Compatibility for embedders/tests that provide the older SaveDB surface.
+        var _canonicalJson = JSON.stringify(_autoState);
+        _canonicalPayload = {
+          identity: _canonicalIdentity,
+          state: _autoState,
+          json: _canonicalJson,
+          jsonByteLength: _canonicalJson.length,
+          checksum: await _endTurn_stateChecksum(_autoState),
+          compressed: _canonicalJson,
+          compressedByteLength: _canonicalJson.length
+        };
+      }
+      if (_captureSession) _captureSession.finalPayload = _canonicalPayload;
+      ctx.meta.canonicalWorldPayload = _canonicalPayload;
+      await _endTurn_stageTurnData(ctx, _autoState, _canonicalPayload);
       var _autoSnapMs = Date.now() - _autoT0;
       if (_autoSnapMs > 800) console.warn('[AutoSave] 端回合 snapshot 耗 '+_autoSnapMs+'ms·考虑 A-2');
       var _sc3 = typeof findScenarioById === 'function' ? findScenarioById(_endturnSaveSid) : null;
@@ -161,12 +200,25 @@ function _endTurn_saveSnapshot(ctx) {
         turnPublishReceipt: ctx.meta.stagedTurnData || null
       };
       var _writeOk = await TM_SaveDB.saveManyAtomic([
-        { id: 'autosave', gameState: _autoState, meta: _autoMeta },
-        { id: 'slot_0', gameState: _autoState, meta: _autoMeta }
-      ], _autoWriteOptions);
+        { id: 'autosave', gameState: _autoState, canonicalPayload: _canonicalPayload, meta: _autoMeta },
+        { id: 'slot_0', gameState: _autoState, canonicalPayload: _canonicalPayload, meta: _autoMeta }
+      ], Object.assign({ transactionId: String(ctx.meta.transactionId || '') }, _autoWriteOptions));
       if (_writeOk !== true) throw new Error('canonical 回合存档未原子落库');
       _canonicalCommitted = true;
       if (!_endturnSaveStillCurrent()) throw new Error('canonical 回合存档完成时世界身份已变化');
+      if (typeof StateSnapshot !== 'undefined' && StateSnapshot && typeof StateSnapshot.save === 'function') {
+        var snapshotResult = await StateSnapshot.save({
+          canonicalState: _autoState,
+          canonicalPayload: _canonicalPayload,
+          campaignId: String(_endturnSaveGM._campaignId || ''),
+          timelineId: String(_endturnSaveGM._timelineId || ''),
+          turn: _endturnSaveTurn
+        });
+        if (!snapshotResult || snapshotResult.ok !== true) {
+          var snapshotError = snapshotResult && snapshotResult.error;
+          console.warn('[StateSnapshot] canonical world committed but time snapshot failed:', snapshotError || snapshotResult);
+        }
+      }
       // 只把已经与 autosave + slot_0 一起原子提交的独立快照交给桌面自动档；
       // core 在世界事务 commit 成功后才正式提升，避免保存成功但内存事务身份失效时误发布。
       ctx.meta.canonicalWorldSnapshot = _autoState;

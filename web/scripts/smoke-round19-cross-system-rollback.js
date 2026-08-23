@@ -332,6 +332,7 @@ async function main() {
     takeOwnership: true
   }), true);
   const txn = context._tmCaptureEndTurnTransaction();
+  context._tmCapturePreEndTurnCommittedState(txn);
   context.GM.busy = true;
   context.GM._endTurnBusy = true;
   context.GM._endTurnCommitPending = true;

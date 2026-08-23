@@ -1291,10 +1291,21 @@
 
   function _cleanExpiredPolicies(ctx) {
     var E = global.GM.environment;
-    if (!E || !E.activePolicies) return;
+    if (!E || !E.activePolicies) return [];
+    var currentTurn = Number(ctx && ctx.turn);
+    if (!isFinite(currentTurn) || currentTurn < 0) throw new Error('环境政策结算回合无效');
+    var expired = [];
     E.activePolicies = E.activePolicies.filter(function(p) {
-      return (ctx.turn - p.startTurn) < p.duration;
+      var startTurn = Number(p && p.startTurn);
+      var duration = Number(p && p.duration);
+      if (!isFinite(startTurn) || startTurn < 0 || !isFinite(duration) || duration <= 0) {
+        throw new Error('环境政策期限无效: ' + String(p && p.id || 'unknown'));
+      }
+      var active = currentTurn >= startTurn && currentTurn < startTurn + duration;
+      if (!active) expired.push(p);
+      return active;
     });
+    return expired;
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -1376,10 +1387,12 @@
     }
     var mr = ctx.monthRatio || 1;
     var strict = ctx.strict === true;
+    // 政策采用 [startTurn, startTurn + duration) 半开区间；必须在疤痕、承载、
+    // 超载和危机读取 activePolicies 前清理，避免到期回合多生效一次。
+    _runEnvironmentStep('env] policies:', function() { return _cleanExpiredPolicies(ctx); }, strict);
     _runEnvironmentStep('env] scars:', function() { return _tickScarAccumulation(ctx, mr); }, strict);
     _runEnvironmentStep('env] overload:', function() { return _tickOverloadFeedback(ctx, mr); }, strict);
     _runEnvironmentStep('env] crises:', function() { return _tickCrisisEvents(ctx, mr); }, strict);
-    _runEnvironmentStep('env] policies:', function() { return _cleanExpiredPolicies(ctx); }, strict);
     _runEnvironmentStep('env] minxin:', function() { return _applyMinxinCoupling(mr); }, strict);
     return { ok:true };
   }

@@ -129,11 +129,28 @@
   }
 
   function resolveDynasty(G) {
-    var sc = null;
-    if (G && G.sid && typeof findScenarioById === 'function') {
-      try { sc = findScenarioById(G.sid); } catch (_e) { sc = null; }
+    if (global.TMWorldEra && typeof global.TMWorldEra.resolve === 'function') {
+      return global.TMWorldEra.resolve(G, global.P, global.scriptData);
     }
-    return (G && G.dynasty) || (G && G.eraState && G.eraState.dynasty) || (sc && (sc.dynasty || sc.era)) || '';
+    var sc = null;
+    if (G && G.sid && typeof global.findScenarioById === 'function') {
+      try {
+        sc = global.findScenarioById(G.sid);
+      } catch (error) {
+        if (global.TM && global.TM.errors && typeof global.TM.errors.capture === 'function') {
+          global.TM.errors.capture(error, 'FiscalEngine.resolveDynasty');
+        } else if (global.console && typeof global.console.warn === 'function') {
+          global.console.warn('[FiscalEngine] resolveDynasty failed', error);
+        }
+      }
+    }
+    return (sc && (sc.dynasty || sc.era))
+      || (G && G.eraState && (G.eraState.dynasty || G.eraState.era))
+      || (G && (G.dynasty || G.era))
+      || (global.P && (global.P.dynasty || global.P.era))
+      || (global.scriptData && (global.scriptData.dynasty
+        || (global.scriptData.settings && global.scriptData.settings.dynasty)))
+      || '';
   }
 
   function splitCamelTokens(text) {
@@ -2183,6 +2200,7 @@
     DEFAULT_ALLOCATION: DEFAULT_ALLOCATION,
     ATOMIC_TAX_TYPES_19: ATOMIC_TAX_TYPES_19,
     EXPENDITURE_EFFECTS_14: EXPENDITURE_EFFECTS_14,
+    resolveDynasty: resolveDynasty,
     enableTaxesByDynasty: enableTaxesByDynasty,
     _ensureRegionFiscal: _ensureRegionFiscal,
     splitTaxByAllocation: splitTaxByAllocation,

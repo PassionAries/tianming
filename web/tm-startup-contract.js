@@ -12,6 +12,7 @@
     ['renderGameState', function (world) { return typeof world.renderGameState === 'function'; }],
     ['callAISmart', function (world) { return typeof world.callAISmart === 'function'; }],
     ['TMNumberParser', function (world) { return !!(world.TMNumberParser && typeof world.TMNumberParser.parseNumber === 'function'); }],
+    ['TMWorldEra', function (world) { return !!(world.TMWorldEra && typeof world.TMWorldEra.resolve === 'function'); }],
     ['TM_SaveDB', function (world) { return !!world.TM_SaveDB; }],
     ['HujiEngine', function (world) { return !!world.HujiEngine; }],
     ['EnvCapacityEngine', function (world) { return !!world.EnvCapacityEngine; }],

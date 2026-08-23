@@ -16,8 +16,10 @@
     // 朝代名（匹配 scriptData.dynasty 或 sc.dynasty 子串）
     '秦':    { money:'钱',  grain:'石', cloth:'匹', silverToCoin: 0     }, // 无银本位
     '汉':    { money:'钱',  grain:'石', cloth:'匹', silverToCoin: 0     },
+    '先秦':  { money:'钱',  grain:'石', cloth:'匹', silverToCoin: 0     },
     '魏':    { money:'钱',  grain:'石', cloth:'匹', silverToCoin: 0     },
     '晋':    { money:'钱',  grain:'石', cloth:'匹', silverToCoin: 0     },
+    '魏晋':  { money:'钱',  grain:'石', cloth:'匹', silverToCoin: 0     },
     '南北朝':{ money:'钱',  grain:'石', cloth:'匹', silverToCoin: 0     },
     '隋':    { money:'贯',  grain:'石', cloth:'匹', silverToCoin: 1000  },
     '唐':    { money:'贯',  grain:'石', cloth:'匹', silverToCoin: 800   },
@@ -28,40 +30,93 @@
     '元':    { money:'贯',  grain:'石', cloth:'匹', silverToCoin: 1000  },
     '明':    { money:'两',  grain:'石', cloth:'匹', silverToCoin: 700   }, // 明中后期
     '清':    { money:'两',  grain:'石', cloth:'匹', silverToCoin: 1000  },
+    '民国':  { money:'两',  grain:'石', cloth:'匹', silverToCoin: 1000  },
     'default':{ money:'两', grain:'石', cloth:'匹', silverToCoin: 1000  }
   };
 
-  function _inferDynastyKey() {
+  function _currentScenario() {
+    if (global.TMWorldEra && typeof global.TMWorldEra.currentScenario === 'function') {
+      return global.TMWorldEra.currentScenario(global.GM);
+    }
+    if (!global.GM || !global.GM.sid || typeof global.findScenarioById !== 'function') return null;
+    try {
+      return global.findScenarioById(global.GM.sid) || null;
+    } catch (error) {
+      if (global.TM && global.TM.errors && typeof global.TM.errors.capture === 'function') {
+        global.TM.errors.capture(error, 'CurrencyUnit.resolveScenario');
+      } else if (global.console && typeof global.console.warn === 'function') {
+        global.console.warn('[CurrencyUnit] resolveScenario failed', error);
+      }
+      return null;
+    }
+  }
+
+  function _resolvedDynasty() {
+    if (global.TMWorldEra && typeof global.TMWorldEra.resolve === 'function') {
+      return global.TMWorldEra.resolve(global.GM, global.P, global.scriptData);
+    }
+    var G = global.GM || {};
+    var player = global.P || {};
     var sd = global.scriptData || {};
-    var sc = (typeof global.findScenarioById === 'function' && global.GM && global.GM.sid)
-      ? global.findScenarioById(global.GM.sid) : null;
-    var dyn = (sc && (sc.dynasty || sc.era)) || sd.dynasty || (sd.settings && sd.settings.dynasty) || '';
-    dyn = String(dyn);
-    // 含"明"但不含"明清更迭"、"南明"等优先判断
-    var keys = Object.keys(DYNASTY_DEFAULT_UNITS).filter(function(k){return k!=='default';});
+    var sc = _currentScenario();
+    return (sc && (sc.dynasty || sc.era))
+      || (G.eraState && (G.eraState.dynasty || G.eraState.era))
+      || G.dynasty || G.era || player.dynasty || player.era
+      || sd.dynasty || (sd.settings && sd.settings.dynasty) || '';
+  }
+
+  function _inferDynastyKey() {
+    var dyn = _resolvedDynasty();
+    if (global.TMWorldEra && typeof global.TMWorldEra.canonicalCurrencyDynasty === 'function') {
+      return global.TMWorldEra.canonicalCurrencyDynasty(dyn) || 'default';
+    }
+    var keys = Object.keys(DYNASTY_DEFAULT_UNITS).filter(function(k){ return k !== 'default'; })
+      .sort(function(a, b){ return b.length - a.length; });
+    dyn = String(dyn || '');
     for (var i = 0; i < keys.length; i++) {
       if (dyn.indexOf(keys[i]) >= 0) return keys[i];
     }
     return 'default';
   }
 
+  function _configuredUnitSources() {
+    var player = global.P || {};
+    var scenario = _currentScenario();
+    var sd = global.scriptData || {};
+    return [
+      player.fiscalConfig && player.fiscalConfig.unit,
+      scenario && scenario.fiscalConfig && scenario.fiscalConfig.unit,
+      sd.fiscalConfig && sd.fiscalConfig.unit
+    ].filter(function(source){ return source && typeof source === 'object'; });
+  }
+
+  function _pickConfiguredField(sources, field) {
+    for (var i = 0; i < sources.length; i++) {
+      if (!Object.prototype.hasOwnProperty.call(sources[i], field)) continue;
+      var value = sources[i][field];
+      if (value !== undefined && value !== null && value !== '') return value;
+    }
+    return null;
+  }
+
   function _getEffectiveUnit() {
     var G = global.GM;
-    // 优先：scriptData.fiscalConfig.unit（用户在编辑器选的）
-    var sd = global.scriptData || {};
-    var fc = (sd.fiscalConfig && sd.fiscalConfig.unit) || (global.P && global.P.fiscalConfig && global.P.fiscalConfig.unit) || null;
-    // 其次：G.fiscal.unit
+    // 优先：当前世界/剧本显式 fiscalConfig.unit；其次：GM.fiscal.unit 运行时覆盖。
+    var explicitSources = _configuredUnitSources();
     var gfu = G && G.fiscal && G.fiscal.unit;
-    // 再次：朝代默认
     var dynKey = _inferDynastyKey();
     var dynUnit = DYNASTY_DEFAULT_UNITS[dynKey] || DYNASTY_DEFAULT_UNITS.default;
+    var money = _pickConfiguredField(explicitSources, 'money');
+    var grain = _pickConfiguredField(explicitSources, 'grain');
+    var cloth = _pickConfiguredField(explicitSources, 'cloth');
+    var silverToCoin = _pickConfiguredField(explicitSources, 'silverToCoin');
 
     return {
-      money: (fc && fc.money) || (gfu && gfu.money) || dynUnit.money,
-      grain: (fc && fc.grain) || (gfu && gfu.grain) || dynUnit.grain,
-      cloth: (fc && fc.cloth) || (gfu && gfu.cloth) || dynUnit.cloth,
-      silverToCoin: (fc && fc.silverToCoin != null ? fc.silverToCoin : null) != null
-                    ? fc.silverToCoin
+      money: money !== null ? money : ((gfu && gfu.money) || dynUnit.money),
+      grain: grain !== null ? grain : ((gfu && gfu.grain) || dynUnit.grain),
+      cloth: cloth !== null ? cloth : ((gfu && gfu.cloth) || dynUnit.cloth),
+      silverToCoin: silverToCoin !== null
+                    ? silverToCoin
                     : ((gfu && gfu.silverToCoin != null) ? gfu.silverToCoin : dynUnit.silverToCoin),
       dynastyKey: dynKey
     };
@@ -236,17 +291,26 @@
     '元': { silver:true, copper:true, gold:false, iron:false, shell:false, paper:true },
     '明': { silver:true, copper:true, gold:false, iron:false, shell:false, paper:true },
     '清': { silver:true, copper:true, gold:false, iron:false, shell:false, paper:true },
-    '民国': { silver:true, copper:true, paper:true, gold:false, iron:false, shell:false }
+    '民国': { silver:true, copper:true, paper:true, gold:false, iron:false, shell:false },
+    'default': { copper:true, gold:false, silver:false, iron:false, shell:false, paper:false }
   };
 
   function inferDynastyFromScenario(sc) {
-    if (!sc) return '唐';
-    var name = (sc.name || sc.dynasty || '').toString();
-    var keys = Object.keys(DYNASTY_COIN_DEFAULTS);
-    for (var i = 0; i < keys.length; i++) {
-      if (name.indexOf(keys[i]) >= 0) return keys[i];
+    var raw = '';
+    if (global.TMWorldEra && typeof global.TMWorldEra.resolve === 'function') {
+      raw = global.TMWorldEra.resolve(global.GM, global.P, global.scriptData);
     }
-    return '唐';
+    if (!raw && sc) raw = sc.dynasty || sc.era || sc.name || '';
+    if (global.TMWorldEra && typeof global.TMWorldEra.canonicalCurrencyDynasty === 'function') {
+      return global.TMWorldEra.canonicalCurrencyDynasty(raw) || 'default';
+    }
+    var keys = Object.keys(DYNASTY_COIN_DEFAULTS).filter(function(key){ return key !== 'default'; })
+      .sort(function(a, b){ return b.length - a.length; });
+    raw = String(raw || '');
+    for (var i = 0; i < keys.length; i++) {
+      if (raw.indexOf(keys[i]) >= 0) return keys[i];
+    }
+    return 'default';
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -309,7 +373,7 @@
     }
     var rules = (sc && sc.fiscalConfig && sc.fiscalConfig.currencyRules) || {};
     var dynasty = inferDynastyFromScenario(sc);
-    var enabled = rules.enabledCoins || DYNASTY_COIN_DEFAULTS[dynasty] || DYNASTY_COIN_DEFAULTS['唐'];
+    var enabled = rules.enabledCoins || DYNASTY_COIN_DEFAULTS[dynasty] || DYNASTY_COIN_DEFAULTS.default;
 
     G.currency = {
       _inited: true,
@@ -820,7 +884,9 @@
     if (!C) return '';
     var lines = [];
     lines.push('【货币·市场】');
-    lines.push('本位制：' + C.currentStandard + '；朝代：' + C.dynasty);
+    var unitName = global.CurrencyUnit && typeof global.CurrencyUnit.unitOf === 'function'
+      ? global.CurrencyUnit.unitOf('money') : '';
+    lines.push('本位制：' + C.currentStandard + '；朝代：' + C.dynasty + (unitName ? '；计价单位：' + unitName : ''));
     if (C.market) {
       lines.push('粮价 ' + Math.round(C.market.grainPrice) + ' 文/石；通胀 ' + ((C.market.inflation||0)*100).toFixed(1) + '%；年景因子 ' + (C.market.yearFortune||1).toFixed(2));
       if (C.market.moneySupplyRatio) lines.push('货币/经济活动比：' + C.market.moneySupplyRatio.toFixed(2) + (C.market.moneySupplyRatio < 0.7 ? '（钱荒）' : C.market.moneySupplyRatio > 1.5 ? '（钱贱）' : ''));

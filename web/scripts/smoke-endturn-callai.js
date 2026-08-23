@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // smoke-endturn-callai.js — Phase 7 P7-β baseline·9/21
-// 锁 callAI / callAIMessages / callAIMessagesStream / callAIWithTools 调用 pattern
+// 锁 callAI / callAIMessages / finalized-body stream / callAIWithTools 调用 pattern
 // 拆分时·sub-call 内部 LLM 调用 API 必保
 
 'use strict';
@@ -16,7 +16,7 @@ const src = readSource();
 const callAIVariants = {
   'callAI': /\bawait\s+callAI\s*\(/,
   'callAIMessages': /\bawait\s+callAIMessages\s*\(/,
-  'callAIMessagesStream': /\bawait\s+callAIMessagesStream\s*\(/,
+  'callAIBodyStream': /\bawait\s+callAIBodyStream\s*\(/,
   'callAIWithTools': /\bawait\s+callAIWithTools\s*\(/
 };
 
@@ -54,8 +54,8 @@ assert(src.indexOf('_sc0Body.response_format') >= 0,
   'sc0 OpenAI response_format json_object is set');
 assert(src.indexOf("callAIMessages(_callABody.messages, _callABody.max_tokens !== undefined ? _callABody.max_tokens : 1200") >= 0,
   'SC1 Call A compression does not fall back to callAIMessages 500-token default');
-assert(src.indexOf("callAIMessagesStream(_sc1Body.messages, _sc1Body.max_tokens !== undefined ? _sc1Body.max_tokens : _sc1BaseTok") >= 0,
-  'SC1 stream uses business output budget when max_tokens is omitted');
+assert(src.indexOf("callAIBodyStream(_sc1Body, {") >= 0,
+  'SC1 stream sends the complete body already approved by the final budgeter');
 assert(src.indexOf('timeoutMs: opts.timeoutMs') >= 0,
   '_callEndturnAI forwards timeoutMs to _aiFetchWithRetry when configured');
 assert(src.indexOf('maxRetries: opts.maxRetries') >= 0,

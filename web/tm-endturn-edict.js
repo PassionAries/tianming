@@ -362,24 +362,10 @@ function extractEdictActions(edictText) {
   //   只认明确"创建"动词 + 军名后缀，避免把"调某军/提到某军"误判成建军；已在册同名军视作扩编留给 AI。
   //   兵力规模与招募成本不在此定：诏书写明则解析备用、没写交回合内 sc18 军事推演 AI 估（确定性层只保"军必入册"）。
   function _bldCnNum(s) {
-    if (!s) return null;
-    if (/^[0-9]+$/.test(s)) return parseInt(s, 10);
-    var map = { '零':0,'〇':0,'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9 };
-    var unit = { '十':10,'百':100,'千':1000,'万':10000,'亿':100000000 };
-    var total = 0, section = 0, num = 0, ok = false;
-    for (var _ci = 0; _ci < s.length; _ci++) {
-      var _ch = s.charAt(_ci);
-      if (map[_ch] != null) { num = map[_ch]; ok = true; }
-      else if (unit[_ch] != null) {
-        ok = true; var _u = unit[_ch];
-        if (_u >= 10000) { section = (section + (num || 0)) * _u; total += section; section = 0; }
-        else { section += (num === 0 ? 1 : num) * _u; }
-        num = 0;
-      } else if (/[0-9]/.test(_ch)) { num = num * 10 + parseInt(_ch, 10); ok = true; }
-      else { return null; }
-    }
-    var _r = total + section + num;
-    return ok && _r > 0 ? _r : null;
+    var parser = typeof TMNumberParser !== 'undefined' ? TMNumberParser : null;
+    if (!parser || typeof parser.parseNumber !== 'function') return null;
+    var parsed = parser.parseNumber(s, { max: 1000000000 });
+    return parsed && parsed.ok && parsed.value > 0 ? parsed.value : null;
   }
   var _buildVerbs = '(?:组建|新建|新设|增设|增置|设立|创设|创立|创建|筹建|编练|编组|编立|建立)';
   var _armySuffix = '(?:军|营|卫|镇|师|标|旅|水师|铁骑|马队|乡勇|团练|新军)';

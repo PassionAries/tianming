@@ -11,6 +11,7 @@
     ['endTurn', function (world) { return typeof world.endTurn === 'function'; }],
     ['renderGameState', function (world) { return typeof world.renderGameState === 'function'; }],
     ['callAISmart', function (world) { return typeof world.callAISmart === 'function'; }],
+    ['TMNumberParser', function (world) { return !!(world.TMNumberParser && typeof world.TMNumberParser.parseNumber === 'function'); }],
     ['TM_SaveDB', function (world) { return !!world.TM_SaveDB; }],
     ['HujiEngine', function (world) { return !!world.HujiEngine; }],
     ['EnvCapacityEngine', function (world) { return !!world.EnvCapacityEngine; }],

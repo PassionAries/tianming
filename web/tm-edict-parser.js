@@ -48,14 +48,27 @@
 
   function _edictAmountFromText(text, fallback) {
     text = String(text || '');
+    var parser = global.TMNumberParser;
+    if (parser && typeof parser.extractEdictQuantity === 'function') {
+      var parsed = parser.extractEdictQuantity(text, { max: 1000000000000 });
+      if (parsed && parsed.ok) return parsed.value;
+      if (parsed && parsed.reason === 'not-found') return fallback;
+      var error = new Error('诏令数量无法安全解析：' + (parsed && parsed.reason ? parsed.reason : 'unknown'));
+      error.code = 'TM_EDICT_AMOUNT_INVALID';
+      error.details = parsed || null;
+      throw error;
+    }
+    // Standalone legacy harnesses may load this slice without the startup provider.
+    // Preserve the former Arabic-only behavior; production startup requires TMNumberParser.
     var m = text.match(/(\d+(?:\.\d+)?)\s*(亿|万|千|贯|两|文)?/);
     if (!m) return fallback;
-    var n = parseFloat(m[1]);
+    var n = Number(m[1]);
+    if (!Number.isFinite(n) || n < 0) return fallback;
     var unit = m[2] || '';
     if (unit === '亿') n *= 100000000;
     else if (unit === '万') n *= 10000;
     else if (unit === '千') n *= 1000;
-    return Math.max(0, Math.round(n));
+    return Number.isFinite(n) && n <= 1000000000000 ? Math.round(n) : fallback;
   }
 
   function _currencyPaperNameFromText(text) {
@@ -1302,7 +1315,21 @@
   // ═══════════════════════════════════════════════════════════════════
 
   function tryExecute(text, params, ctx) {
-    var cls = classify(text, ctx);
+    var cls;
+    try {
+      cls = classify(text, ctx);
+    } catch (classificationError) {
+      if (classificationError && classificationError.code === 'TM_EDICT_AMOUNT_INVALID') {
+        console.error('[edict] invalid amount', classificationError);
+        return {
+          ok: false,
+          pathway: 'invalid',
+          reason: classificationError.code,
+          details: classificationError.details || null
+        };
+      }
+      throw classificationError;
+    }
     if (cls.pathway !== 'direct') {
       return { ok: false, pathway: cls.pathway, classification: cls };
     }

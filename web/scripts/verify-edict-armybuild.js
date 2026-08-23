@@ -16,7 +16,9 @@ global.GM = {
 };
 global.P = {};
 
-// 真加载文件，把 extractEdictActions 暴露到 global
+// 真加载共享中文数量 provider 与诏令文件，把 extractEdictActions 暴露到 global
+var numberSource = fs.readFileSync(path.join(__dirname, '..', 'tm-number-parser.js'), 'utf8');
+eval(numberSource);
 var src = fs.readFileSync(path.join(__dirname, '..', 'tm-endturn-edict.js'), 'utf8');
 eval(src + '\nglobal.__extractEdictActions = extractEdictActions;');
 var extract = global.__extractEdictActions;

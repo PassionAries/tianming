@@ -18,6 +18,7 @@ function criticalWorld() {
   return {
     TM: { platform: {} },
     startGame() {}, enterGame() {}, fullLoadGame() {}, endTurn() {}, renderGameState() {}, callAISmart() {},
+    TMNumberParser: { parseNumber() {} },
     TM_SaveDB: {}, HujiEngine: {}, EnvCapacityEngine: {}, TimeUtils: {}
   };
 }

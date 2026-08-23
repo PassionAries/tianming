@@ -24,6 +24,8 @@ function clone(value) { return JSON.parse(JSON.stringify(value)); }
 
 async function main() {
   const writes = [];
+  const preEndturnWrites = [];
+  const localValues = new Map();
   let sessionToken = 'session-a';
   let delayedWriteResolve = null;
   let delayNextWrite = false;
@@ -62,7 +64,22 @@ async function main() {
     _prepareGMForSave(gm, p) { return { GM: gm, P: p }; },
     _tmHasNativeFs() { return true; },
     findScenarioById() { return { name: '测试剧本' }; },
-    localStorage: { removeItem() {}, setItem() {} }
+    getTSText(turn) { return 'T' + turn; },
+    TM_SaveDB: {
+      async save(id, state, meta, options) {
+        if (id !== 'pre_endturn') throw new Error('unexpected save id: ' + id);
+        if (!options || typeof options.writeGuard !== 'function' || options.writeGuard() !== true) {
+          throw new Error('pre_endturn write guard rejected click-state');
+        }
+        preEndturnWrites.push({ id, state: clone(state), meta: clone(meta) });
+        return true;
+      }
+    },
+    localStorage: {
+      removeItem(key) { localValues.delete(String(key)); },
+      setItem(key, value) { localValues.set(String(key), String(value)); },
+      getItem(key) { return localValues.has(String(key)) ? localValues.get(String(key)) : null; }
+    }
   };
   context.window.window = context.window;
   context.GM = {
@@ -77,6 +94,12 @@ async function main() {
     qijuHistory: [{ turn: 7, text: '已提交' }]
   };
   context.P = { conf: { marker: 'before' }, scenarios: [] };
+  context._runPreSubmitPartyClassCalibration = async function() {
+    context.GM.treasury = 80;
+    context.GM.population.national.mouths = 950;
+    context.GM.qijuHistory.push({ turn: 8, text: '校准中' });
+    context.P.conf.marker = 'calibrated';
+  };
   vm.createContext(context);
   vm.runInContext(source.slice(start, end), context, { filename: 'tm-save-lifecycle-autosave-slice.js' });
   vm.runInContext(coreSource.slice(coreStart, coreEnd), context, { filename: 'tm-endturn-core-transaction-slice.js' });
@@ -91,22 +114,18 @@ async function main() {
   check('已提交快照排除带 gmRef 环的运行时任务队列', !!cycleSafeState
     && !Object.prototype.hasOwnProperty.call(cycleSafeState.GM, '_postTurnJobs')
     && !Object.prototype.hasOwnProperty.call(cycleSafeState.GM, '_postTurnDetachedJobs'));
-  const preTurn = context._buildSaveState({
-    format: 'idb',
-    detach: true,
-    prepare: false,
-    gm: context.GM,
-    p: context.P
-  });
-  check('安全快照能够提升为已提交基线', context._tmAdoptCommittedWorldSnapshot(preTurn, {
-    turn: 8,
-    transactionId: 'pre-turn-8'
-  }) === true);
-
   const endTurnTransaction = context._tmCaptureEndTurnTransaction();
+  const clickState = context._tmCapturePreEndTurnCommittedState(endTurnTransaction);
   context.GM.busy = true;
   context.GM._endTurnBusy = true;
   context.GM._endTurnCommitPending = true;
+  await context._tmPrepareEndTurnBoundary(endTurnTransaction, clickState);
+  check('生产 prepare 顺序先提交点击时 pre_endturn、后执行校准', preEndturnWrites.length === 1
+    && preEndturnWrites[0].state.GM.treasury === 100
+    && preEndturnWrites[0].state.GM.population.national.mouths === 1000
+    && preEndturnWrites[0].state.P.conf.marker === 'before'
+    && context.GM.treasury === 80
+    && context.P.conf.marker === 'calibrated');
   context.GM.treasury = 60;
   context.GM.population.national.mouths = 850;
   context.GM.qijuHistory.push({ turn: 8, text: '半结算' });
@@ -117,12 +136,18 @@ async function main() {
     context._tmRollbackEndTurnTransaction(endTurnTransaction, new Error('injected later system failure')) === true
     && context.GM.treasury === 100
     && context.GM.population.national.mouths === 1000
-    && context.GM.qijuHistory.length === 1);
+    && context.GM.qijuHistory.length === 1
+    && context.P.conf.marker === 'before');
   const afterRollback = await context._tmFlushDeferredDesktopAutoSave('rollback', { immediate: true });
   check('回滚后 deferred 自动档写入一次', afterRollback.ok === true && writes.length === 1);
   check('桌面自动档等于过回合前已提交世界', writes[0].gameState.treasury === 100
     && writes[0].gameState.population.national.mouths === 1000
-    && writes[0].gameState.qijuHistory.length === 1);
+    && writes[0].gameState.qijuHistory.length === 1
+    && writes[0].conf.marker === 'before');
+  check('回滚纵深保护重新提升恢复世界而非校准世界', context.lastCommittedSnapshot.GM.treasury === 100
+    && context.lastCommittedSnapshot.GM.population.national.mouths === 1000
+    && context.lastCommittedSnapshot.P.conf.marker === 'before'
+    && /:rollback$/.test(context.lastCommittedTransactionId));
 
   const committedTurn9 = context._buildSaveState({
     format: 'idb', detach: true, prepare: false,

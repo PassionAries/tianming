@@ -2406,6 +2406,17 @@ function _tmAdoptCommittedWorldSnapshot(state, meta){
   return true;
 }
 
+function _tmInvalidateCommittedWorldSnapshot(reason){
+  lastCommittedSnapshot = null;
+  lastCommittedTurn = -1;
+  lastCommittedTransactionId = '';
+  _lastCommittedSnapshotIdentity = null;
+  if (reason && typeof console !== 'undefined' && console.warn) {
+    console.warn('[autoSave] 已提交世界基线失效:', String(reason));
+  }
+  return true;
+}
+
 function _tmCaptureCommittedWorldSnapshotFromLive(reason){
   if (!GM || !P || !GM.running || isWorldTransactionActive()) return false;
   var state = _buildSaveState({ format: 'idb', detach: true, gm: GM, p: P });
@@ -2556,6 +2567,7 @@ function _tmRequestDeferredDesktopAutoSaveFlush(reason, options){
 if (typeof window !== 'undefined') {
   window.isWorldTransactionActive = isWorldTransactionActive;
   window._tmAdoptCommittedWorldSnapshot = _tmAdoptCommittedWorldSnapshot;
+  window._tmInvalidateCommittedWorldSnapshot = _tmInvalidateCommittedWorldSnapshot;
   window._tmCaptureCommittedWorldSnapshotFromLive = _tmCaptureCommittedWorldSnapshotFromLive;
   window._tmRunDesktopAutoSaveTick = _tmRunDesktopAutoSaveTick;
   window._tmFlushDeferredDesktopAutoSave = _tmFlushDeferredDesktopAutoSave;

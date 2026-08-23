@@ -474,6 +474,122 @@ function _tmRequestEndTurnDesktopAutoSaveFlush(reason) {
   return pending;
 }
 
+function _tmCapturePreEndTurnCommittedState(txn) {
+  if (!_tmEndTurnTransactionCurrent(txn)) throw new Error('pre_endturn transaction lease expired');
+  if (typeof _buildSaveState !== 'function') throw new Error('pre_endturn save-state builder unavailable');
+  var state = _buildSaveState({ format: 'idb', detach: true, gm: txn.gmRef, p: txn.pRef });
+  if (!state || !state.GM || !state.P) throw new Error('pre_endturn click-state capture failed');
+  return state;
+}
+
+async function _tmCommitPreEndTurnRecoveryPoint(txn, state) {
+  if (!_tmEndTurnTransactionCurrent(txn)) throw new Error('pre_endturn transaction lease expired');
+  if (!state || !state.GM || !state.P) throw new Error('pre_endturn click-state unavailable');
+  if (typeof TM_SaveDB === 'undefined' || typeof TM_SaveDB.save !== 'function') {
+    throw new Error('pre_endturn storage unavailable');
+  }
+  var preSaveGM = txn.gmRef;
+  var preSaveP = txn.pRef;
+  var preStateGM = state.GM;
+  var preSaveLoadGen = txn.loadGen;
+  var preSnapshotId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : ('pre_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10));
+  var preTurn = Number(preStateGM.turn);
+  var preSid = preStateGM.sid;
+  if (!Number.isFinite(preTurn) || preTurn < 0) throw new Error('pre_endturn click-state turn invalid');
+  var preWriteStillCurrent = function() {
+    var liveLoadGen = (typeof window !== 'undefined' && window._tmLoadGen) || 0;
+    var liveSnapshotId = (typeof window !== 'undefined' && window._tmActivePreEndturnSnapshotId) || '';
+    return GM === preSaveGM && P === preSaveP
+      && liveLoadGen === preSaveLoadGen
+      && GM.turn === preTurn && GM.sid === preSid
+      && liveSnapshotId === preSnapshotId
+      && _tmEndTurnTransactionCurrent(txn);
+  };
+  state._preEndturn = { snapshotId: preSnapshotId, turn: preTurn, commitState: 'committed' };
+  var scenario = (typeof findScenarioById === 'function' && preSid) ? findScenarioById(preSid) : null;
+  var preMeta = {
+    name: '过回合前·' + (typeof getTSText === 'function' ? getTSText(preTurn) : 'T' + preTurn),
+    type: 'pre_endturn',
+    turn: preTurn,
+    scenarioName: scenario ? scenario.name : '',
+    eraName: preStateGM.eraName || '',
+    savedAt: Date.now(),
+    snapshotId: preSnapshotId,
+    commitState: 'committed'
+  };
+  try {
+    localStorage.setItem('tm_pre_endturn_mark', JSON.stringify({
+      turn: preTurn,
+      timestamp: Date.now(),
+      scenarioName: preMeta.scenarioName,
+      eraName: preMeta.eraName,
+      saveName: preStateGM.saveName || '',
+      snapshotId: preSnapshotId,
+      commitState: 'pending'
+    }));
+  } catch (markerError) {
+    _tmReportEndTurnBoundaryError(markerError, 'pre_endturn pending marker');
+  }
+  if (typeof window !== 'undefined') window._tmActivePreEndturnSnapshotId = preSnapshotId;
+  var preSaved = await TM_SaveDB.save('pre_endturn', state, preMeta, { writeGuard: preWriteStillCurrent });
+  if (preSaved !== true) throw new Error('pre_endturn IndexedDB commit failed');
+  if (!preWriteStillCurrent()) throw new Error('pre_endturn world lease expired');
+  var rawPreMark = localStorage.getItem('tm_pre_endturn_mark');
+  var livePreMark = rawPreMark ? JSON.parse(rawPreMark) : null;
+  if (!livePreMark || livePreMark.snapshotId !== preSnapshotId || livePreMark.turn !== preTurn) {
+    throw new Error('pre_endturn marker mismatch');
+  }
+  livePreMark.commitState = 'committed';
+  livePreMark.committedAt = Date.now();
+  localStorage.setItem('tm_pre_endturn_mark', JSON.stringify(livePreMark));
+  if (typeof _tmAdoptCommittedWorldSnapshot !== 'function'
+      || _tmAdoptCommittedWorldSnapshot(state, {
+        turn: preTurn,
+        transactionId: preSnapshotId,
+        takeOwnership: true
+      }) !== true) {
+    throw new Error('pre_endturn desktop baseline adoption failed');
+  }
+  txn.preEndTurnSnapshotId = preSnapshotId;
+  return true;
+}
+
+async function _tmPrepareEndTurnBoundary(txn, clickState) {
+  // 恢复点与桌面 committed 基线必须先固定为“点击过回合”时的世界；
+  // 之后的 LLM/党派/户籍校准属于本回合事务，失败时必须随事务一起回滚。
+  await _tmCommitPreEndTurnRecoveryPoint(txn, clickState);
+  await _runPreSubmitPartyClassCalibration();
+  return true;
+}
+
+function _tmRestoreCommittedBaselineAfterRollback(txn) {
+  try {
+    if (typeof _buildSaveState !== 'function' || typeof _tmAdoptCommittedWorldSnapshot !== 'function') {
+      throw new Error('rollback committed snapshot boundary unavailable');
+    }
+    var restoredState = _buildSaveState({ format: 'idb', detach: true, gm: txn.gmRef, p: txn.pRef });
+    if (!restoredState || !restoredState.GM || !restoredState.P) {
+      throw new Error('rollback committed snapshot capture failed');
+    }
+    if (_tmAdoptCommittedWorldSnapshot(restoredState, {
+      turn: txn.gmRef.turn,
+      transactionId: String(txn.transactionId || 'end-turn') + ':rollback',
+      takeOwnership: true
+    }) !== true) {
+      throw new Error('rollback committed snapshot adoption failed');
+    }
+    return true;
+  } catch (baselineError) {
+    if (typeof _tmInvalidateCommittedWorldSnapshot === 'function') {
+      _tmInvalidateCommittedWorldSnapshot('end-turn rollback baseline failure');
+    }
+    _tmReportEndTurnBoundaryError(baselineError, 'restore rollback desktop autosave baseline');
+    return false;
+  }
+}
+
 function _tmRollbackEndTurnTransaction(txn, reason) {
   if (!_tmEndTurnTransactionCurrent(txn)) return false;
   var rollbackLease = { kind: 'end-turn', transactionId: txn.transactionId || '', startedAt: Date.now() };
@@ -499,6 +615,7 @@ function _tmRollbackEndTurnTransaction(txn, reason) {
     GM.busy = false; // arch-ok end-turn transaction owns rollback cleanup
     GM._endTurnBusy = false; // arch-ok end-turn transaction owns rollback cleanup
     GM._lastEndTurnRollback = { at: Date.now(), turn: txn.turn, reason: String(reason && (reason.message || reason) || 'unknown') }; // arch-ok end-turn transaction owns rollback diagnostics
+    _tmRestoreCommittedBaselineAfterRollback(txn);
     try { if (typeof renderGameState === 'function') renderGameState(); }
     catch (renderError) { _tmReportEndTurnBoundaryError(renderError, 'render restored world'); }
     return true;
@@ -582,6 +699,8 @@ async function _endTurnCore(options){
   var btn=_$("btn-end")||_$("btn-end-turn");
   if(GM.busy)return;
   _turnTxn = _tmCaptureEndTurnTransaction();
+  // 必须在后朝标记、busy/commit barrier 及校准写入之前冻结点击时世界。
+  var _preCommittedState = _tmCapturePreEndTurnCommittedState(_turnTxn);
   if (options && Object.prototype.hasOwnProperty.call(options, 'postTurnCourt')) {
     if (typeof _beginPostTurnCourtState !== 'function') throw new Error('后朝状态写口未加载');
     _beginPostTurnCourtState(!!options.postTurnCourt);
@@ -595,86 +714,19 @@ async function _endTurnCore(options){
     showLoading("\u65F6\u79FB\u4E8B\u53BB",10);
   }
 
-  // 预提交校准会修改党派、阶层、民心和户籍，必须位于事务快照之后。
-  // 任一关键校准失败都抛到本函数外层，恢复到玩家点击过回合前的完整状态。
-  await _runPreSubmitPartyClassCalibration();
-
-  // 上回合 post-turn 任务改到 AI prompt 构造前兜底等待。
-  // 入口不硬等，让 prep / 存档快照 / plan-prefetch 与上回合后台债务重叠。
-
   // ★ 过回合前自动存档·防 AI 长推演崩溃丢失本回合操作(诏令/奏疏批复/对话/调动)
   // 写入独立 IDB key 'pre_endturn'·与正常 autosave/slot_0 分离·不污染案卷目录
   // 写入 localStorage 标记 tm_pre_endturn_mark·页面刷新后可检测
   // 恢复点是事务的 prepare 阶段：必须先完整提交，才允许进入有副作用的推演。
   try {
-    if (typeof TM_SaveDB !== 'undefined' && typeof _buildSaveState === 'function') {
-      var _preSaveGM = GM;
-      var _preSaveP = P;
-      var _preSaveLoadGen = (typeof window !== 'undefined' && window._tmLoadGen) || 0;
-      var _preSnapshotId = (typeof crypto !== 'undefined' && crypto.randomUUID)
-        ? crypto.randomUUID()
-        : ('pre_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10));
-      var _preTurn = GM.turn;
-      var _preSid = GM.sid;
-      var _preWriteStillCurrent = function() {
-        var _liveLoadGen = (typeof window !== 'undefined' && window._tmLoadGen) || 0;
-        var _liveSnapshotId = (typeof window !== 'undefined' && window._tmActivePreEndturnSnapshotId) || '';
-        return GM === _preSaveGM && P === _preSaveP
-          && _liveLoadGen === _preSaveLoadGen
-          && GM.turn === _preTurn && GM.sid === _preSid
-          && _liveSnapshotId === _preSnapshotId;
-      };
-      var _preState = _buildSaveState({ format: 'idb', detach: true, gm: _preSaveGM, p: _preSaveP });
-      _preState._preEndturn = { snapshotId: _preSnapshotId, turn: _preTurn, commitState: 'committed' };
-      var _scPre = (typeof findScenarioById === 'function' && GM.sid) ? findScenarioById(GM.sid) : null;
-      var _preMeta = {
-        name: '过回合前·' + (typeof getTSText === 'function' ? getTSText(GM.turn) : 'T' + GM.turn),
-        type: 'pre_endturn',
-        turn: _preTurn,
-        scenarioName: _scPre ? _scPre.name : '',
-        eraName: GM.eraName || '',
-        savedAt: Date.now(),
-        snapshotId: _preSnapshotId,
-        commitState: 'committed'
-      };
-      // 两阶段提交：先写 pending marker，再写带同一 snapshotId 的 IDB record；
-      // 仅事务确认成功后把 marker 提升为 committed。任何中途崩溃都只会安全回退 autosave。
-      try {
-        localStorage.setItem('tm_pre_endturn_mark', JSON.stringify({
-          turn: _preTurn, timestamp: Date.now(),
-          scenarioName: _preMeta.scenarioName,
-          eraName: _preMeta.eraName,
-          saveName: GM.saveName || '',
-          snapshotId: _preSnapshotId,
-          commitState: 'pending'
-        }));
-      } catch(_lsE){try{window.TM&&TM.errors&&TM.errors.captureSilent(_lsE,'pre_endturn ls mark');}catch(_){}}
-      try { window._tmActivePreEndturnSnapshotId = _preSnapshotId; } catch(_preIdE) {}
-      var _preSaved = await TM_SaveDB.save('pre_endturn', _preState, _preMeta, { writeGuard: _preWriteStillCurrent });
-      if (_preSaved !== true) throw new Error('pre_endturn IndexedDB commit failed');
-      if (!_preWriteStillCurrent()) throw new Error('pre_endturn world lease expired');
-      var _rawPreMark = localStorage.getItem('tm_pre_endturn_mark');
-      var _livePreMark = _rawPreMark ? JSON.parse(_rawPreMark) : null;
-      if (!_livePreMark || _livePreMark.snapshotId !== _preSnapshotId || _livePreMark.turn !== _preTurn) {
-        throw new Error('pre_endturn marker mismatch');
-      }
-      _livePreMark.commitState = 'committed';
-      _livePreMark.committedAt = Date.now();
-      localStorage.setItem('tm_pre_endturn_mark', JSON.stringify(_livePreMark));
-      if (typeof _tmAdoptCommittedWorldSnapshot === 'function') {
-        if (_tmAdoptCommittedWorldSnapshot(_preState, {
-          turn: _preTurn,
-          transactionId: _preSnapshotId,
-          takeOwnership: true
-        }) !== true) throw new Error('pre_endturn desktop baseline adoption failed');
-      }
-    } else {
-      throw new Error('pre_endturn storage unavailable');
-    }
+    await _tmPrepareEndTurnBoundary(_turnTxn, _preCommittedState);
   } catch(_psE) {
     (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_psE, 'PreEndTurnSave outer') : console.warn('[PreEndTurnSave outer]', _psE);
     throw _psE;
   }
+
+  // 上回合 post-turn 任务改到 AI prompt 构造前兜底等待。
+  // 入口不硬等，让 prep / 存档快照 / plan-prefetch 与上回合后台债务重叠。
 
   await EndTurnHooks.execute('before');
 

@@ -5,16 +5,17 @@
 
 // 更新军事单位
 function updateMilitary(timeRatio) {
-  var sc = findScenarioById(GM.sid);
-  if (!sc || !sc.military || !sc.military.initialTroops) return;
+  var ratio = Number(timeRatio);
+  if (!Number.isFinite(ratio) || ratio < 0) throw new Error('军事更新 timeRatio 非法');
+  var armies = GM && Array.isArray(GM.armies) ? GM.armies : [];
 
-  sc.military.initialTroops.forEach(function(troop) {
+  armies.forEach(function(troop) {
     if (!troop || !troop.name) return;
 
     // 士气变化
     if (troop.morale !== undefined) {
       var oldMorale = troop.morale;
-      var change = Math.floor((random() - 0.5) * 6 * timeRatio); // 年度±3
+      var change = Math.floor((random() - 0.5) * 6 * ratio); // 年度±3
       troop.morale = Math.max(0, Math.min(100, troop.morale + change));
 
       if (Math.abs(change) > 1) {
@@ -25,7 +26,7 @@ function updateMilitary(timeRatio) {
     // 训练度提升
     if (troop.training !== undefined && troop.training < 100) {
       var oldTraining = troop.training;
-      var inc = Math.floor(random() * 3 * timeRatio); // 年度+0-2
+      var inc = Math.floor(random() * 3 * ratio); // 年度+0-2
       troop.training = Math.min(100, troop.training + inc);
 
       if (inc > 0) {
@@ -36,7 +37,7 @@ function updateMilitary(timeRatio) {
     // 忠诚度微调
     if (troop.loyalty !== undefined) {
       var oldLoyalty = troop.loyalty;
-      var change = Math.floor((random() - 0.5) * 4 * timeRatio); // 年度±2
+      var change = Math.floor((random() - 0.5) * 4 * ratio); // 年度±2
       troop.loyalty = Math.max(0, Math.min(100, troop.loyalty + change));
 
       if (Math.abs(change) > 1) {
@@ -48,24 +49,29 @@ function updateMilitary(timeRatio) {
 
 // 更新地图数据
 function updateMap(timeRatio) {
-  // 支持新的地图数据结构 (P.map.regions)
-  if (P.map && P.map.regions && P.map.regions.length > 0) {
-    P.map.regions.forEach(function(region) {
+  var ratio = Number(timeRatio);
+  if (!Number.isFinite(ratio) || ratio < 0) throw new Error('地图更新 timeRatio 非法');
+  var liveMap = typeof getLiveMapData === 'function'
+    ? getLiveMapData()
+    : (GM && GM.mapData);
+  if (liveMap && Array.isArray(liveMap.regions)) {
+    liveMap.regions.forEach(function(region) {
       if (!region) return;
 
       // 1. 发展度自然变化
-      var oldDev = region.development || 50;
+      var oldDev = Number(region.development);
+      if (!Number.isFinite(oldDev)) oldDev = 50;
       var newDev = oldDev;
 
       // 和平时期缓慢增长
       if (region.owner && random() < 0.3) {
-        var growth = (1 + random() * 2) * timeRatio; // 1-3点/年
+        var growth = (1 + random() * 2) * ratio; // 1-3点/年
         newDev = Math.min(100, oldDev + growth);
       }
 
       // 战争或无主降低发展度
       if (!region.owner && random() < 0.2) {
-        var decline = (1 + random() * 3) * timeRatio;
+        var decline = (1 + random() * 3) * ratio;
         newDev = Math.max(0, oldDev - decline);
       }
 
@@ -76,36 +82,17 @@ function updateMap(timeRatio) {
       }
 
       // 2. 驻军自然消耗
-      if (region.troops > 0 && random() < 0.1) {
-        var oldTroops = region.troops;
-        var attrition = Math.floor(region.troops * 0.01 * timeRatio); // 1%损耗/年
-        region.troops = Math.max(0, region.troops - attrition);
+      var troopCount = Number(region.troops);
+      if (Number.isFinite(troopCount) && troopCount > 0 && random() < 0.1) {
+        var oldTroops = troopCount;
+        var attrition = Math.floor(troopCount * 0.01 * ratio); // 1%损耗/年
+        region.troops = Math.max(0, troopCount - attrition);
         if (attrition > 0) {
           recordChange('map', region.name, 'troops', oldTroops, region.troops, '自然损耗');
         }
       }
     });
   }
-
-  // 兼容旧的地图数据结构
-  var sc = findScenarioById(GM.sid);
-  if (!sc || !sc.map || !sc.map.items) return;
-
-  sc.map.items.forEach(function(item) {
-    if (!item || !item.name) return;
-
-    if (item.type === 'city' && item.population) {
-      // 城市人口缓慢增长
-      var oldPop = item.population;
-      // 简化：人口年增长1-3%
-      if (random() < 0.5) {
-        var growthRate = 0.01 + random() * 0.02; // 1-3%
-        var change = growthRate * timeRatio;
-        // 这里需要解析人口字符串，简化处理
-        recordChange('map', item.name, 'population', oldPop, item.population, '自然增长');
-      }
-    }
-  });
 }
 
 // ============================================================

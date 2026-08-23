@@ -1000,6 +1000,9 @@ console.log('天命游戏脚本开始加载...');
 <!-- 全局「悬停显示完整文本」·委托监听 document·凡被 CSS 省略号截断(…)的元素鼠标悬停即弹完整内容·仅 hover:hover 设备装(纯触屏不装) -->
 <script src="tm-hover-fulltext.js?v=20260701-fulltip"></script>
 
+<!-- 末尾 defer 启动契约：等待此前 blocking/defer 脚本均执行后检查关键全局，缺失时显示明确故障层。 -->
+<script src="tm-startup-contract.js?v=20260823-global1" defer></script>
+
 <!-- 触屏工效层（移植 Phase 2·S2.1）·仅 @media(pointer:coarse) 生效·桌面零影响·置尾以压过御案注入样式 -->
 <link rel="stylesheet" href="tm-touch.css?v=20260603-s21-touch">
 

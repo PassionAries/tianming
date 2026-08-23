@@ -76,6 +76,19 @@ function _rotateAutoSaveSession(token) {
   }
 }
 
+function _subscribeRendererEvent(channel, callback) {
+  if (typeof callback !== 'function') throw new TypeError(channel + ' listener must be a function');
+  const listener = (_event, payload) => callback(payload);
+  let active = true;
+  ipcRenderer.on(channel, listener);
+  return function dispose() {
+    if (!active) return false;
+    active = false;
+    ipcRenderer.removeListener(channel, listener);
+    return true;
+  };
+}
+
 // 把这些功能暴露给网页中的 JavaScript
 contextBridge.exposeInMainWorld('tianming', {
 
@@ -193,7 +206,7 @@ contextBridge.exposeInMainWorld('tianming', {
     ipcRenderer.invoke('update-install'),
 
   onUpdateStatus: (callback) =>
-    ipcRenderer.on('update-status', (event, status) => callback(status)),
+    _subscribeRendererEvent('update-status', callback),
 
   // === renderer/web 热更新 ===
   hotUpdateStatus: () =>
@@ -218,7 +231,7 @@ contextBridge.exposeInMainWorld('tianming', {
     ipcRenderer.invoke('hot-update-open-dir'),
 
   onHotUpdateStatus: (callback) =>
-    ipcRenderer.on('hot-update-status', (event, status) => callback(status)),
+    _subscribeRendererEvent('hot-update-status', callback),
 
   // === 内容与创意工坊 ===
   contentStatus: () =>
@@ -297,8 +310,8 @@ contextBridge.exposeInMainWorld('tianming', {
 
   // === 接收主进程发来的消息 ===
   onMenuAction: (callback) =>
-    ipcRenderer.on('menu-action', (event, action) => callback(action)),
+    _subscribeRendererEvent('menu-action', callback),
 
   onImportData: (callback) =>
-    ipcRenderer.on('import-project-data', (event, data) => callback(data)),
+    _subscribeRendererEvent('import-project-data', callback),
 });

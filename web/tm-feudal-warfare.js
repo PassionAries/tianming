@@ -122,6 +122,55 @@ function updateMap(timeRatio) {
  * @property {function(Object):void} deserialize
  */
 var WarWeightSystem = {
+  TRUCE_DURATION: 24, // 24回合 ≈ 2年
+
+  _emptyState: function() {
+    return { version: 1, truces: Object.create(null) };
+  },
+
+  _world: function(world) {
+    if (world && typeof world === 'object') return world;
+    return (typeof GM !== 'undefined' && GM && typeof GM === 'object') ? GM : null;
+  },
+
+  _normalizeState: function(input) {
+    var normalized = WarWeightSystem._emptyState();
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return normalized;
+    var raw = input;
+    if (Object.prototype.hasOwnProperty.call(input, 'truces')) {
+      raw = input.truces;
+    } else if (Object.prototype.hasOwnProperty.call(input, 'version')) {
+      raw = null;
+    }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return normalized;
+    Object.keys(raw).forEach(function(key) {
+      var parties = String(key).split('|');
+      var unsafeKey = parties.some(function(part) {
+        var name = String(part || '').trim();
+        return !name || name === '__proto__' || name === 'prototype' || name === 'constructor';
+      });
+      var expiry = Number(raw[key]);
+      if (unsafeKey || !Number.isFinite(expiry) || expiry < 0) return;
+      normalized.truces[String(key)] = Math.floor(expiry);
+    });
+    return normalized;
+  },
+
+  _state: function(world) {
+    var target = WarWeightSystem._world(world);
+    if (!target) return WarWeightSystem._emptyState();
+    target._warTruces = WarWeightSystem._normalizeState(target._warTruces);
+    return target._warTruces;
+  },
+
+  _pairKey: function(partyA, partyB) {
+    if (typeof partyA !== 'string' || typeof partyB !== 'string') return '';
+    var a = partyA.trim();
+    var b = partyB.trim();
+    if (!a || !b) return '';
+    return [a, b].sort().join('|');
+  },
+
   /** 评估 NPC 宣战意愿权重（0=绝不，100=必战） */
   evaluateWarWeight: function(attacker, defender, context) {
     if (!attacker || !defender) return 0;
@@ -165,37 +214,71 @@ var WarWeightSystem = {
     return clamp(Math.round(weight), 0, 100);
   },
 
-  // 停战记录 {key: expiryTurn}
-  _truces: {},
-  TRUCE_DURATION: 24, // 24回合 ≈ 2年
-
   /** 添加停战 */
-  addTruce: function(partyA, partyB, duration) {
-    var key = [partyA, partyB].sort().join('|');
-    WarWeightSystem._truces[key] = GM.turn + (duration || WarWeightSystem.TRUCE_DURATION);
-    _dbg('[War] 停战协议:', partyA, '↔', partyB, '至回合', WarWeightSystem._truces[key]);
+  addTruce: function(partyA, partyB, duration, world) {
+    var target = WarWeightSystem._world(world);
+    var key = WarWeightSystem._pairKey(partyA, partyB);
+    var turns = duration === undefined || duration === null
+      ? WarWeightSystem.TRUCE_DURATION : Number(duration);
+    if (!target || !key || !Number.isFinite(turns) || turns <= 0) return false;
+    var turn = Number(target.turn);
+    if (!Number.isFinite(turn) || turn < 0) turn = 0;
+    var state = WarWeightSystem._state(target);
+    state.truces[key] = Math.floor(turn + turns);
+    _dbg('[War] 停战协议:', partyA, '↔', partyB, '至回合', state.truces[key]);
+    return true;
   },
 
   /** 检查停战 */
-  hasTruce: function(partyA, partyB) {
-    var key = [partyA, partyB].sort().join('|');
-    var expiry = WarWeightSystem._truces[key];
+  hasTruce: function(partyA, partyB, world) {
+    var target = WarWeightSystem._world(world);
+    var key = WarWeightSystem._pairKey(partyA, partyB);
+    if (!target || !key) return false;
+    var state = WarWeightSystem._state(target);
+    var expiry = state.truces[key];
     if (!expiry) return false;
-    if (GM.turn >= expiry) { delete WarWeightSystem._truces[key]; return false; }
+    var turn = Number(target.turn);
+    if (!Number.isFinite(turn) || turn < 0) turn = 0;
+    if (turn >= expiry) { delete state.truces[key]; return false; }
     return true;
   },
 
   /** 清理过期停战 */
-  cleanTruces: function() {
-    var keys = Object.keys(WarWeightSystem._truces);
+  cleanTruces: function(world) {
+    var target = WarWeightSystem._world(world);
+    if (!target) return 0;
+    var state = WarWeightSystem._state(target);
+    var turn = Number(target.turn);
+    if (!Number.isFinite(turn) || turn < 0) turn = 0;
+    var removed = 0;
+    var keys = Object.keys(state.truces);
     keys.forEach(function(k) {
-      if (GM.turn >= WarWeightSystem._truces[k]) delete WarWeightSystem._truces[k];
+      if (turn >= state.truces[k]) {
+        delete state.truces[k];
+        removed++;
+      }
     });
+    return removed;
   },
 
   /** 序列化 */
-  serialize: function() { return { truces: WarWeightSystem._truces }; },
-  deserialize: function(d) { if (d && d.truces) WarWeightSystem._truces = d.truces; }
+  serialize: function(world) {
+    return WarWeightSystem._normalizeState(WarWeightSystem._state(world));
+  },
+
+  deserialize: function(data, world) {
+    var target = WarWeightSystem._world(world);
+    var normalized = WarWeightSystem._normalizeState(data);
+    if (target) target._warTruces = normalized;
+    return WarWeightSystem._normalizeState(normalized);
+  },
+
+  reset: function(world) {
+    var target = WarWeightSystem._world(world);
+    var empty = WarWeightSystem._emptyState();
+    if (target) target._warTruces = empty;
+    return WarWeightSystem._normalizeState(empty);
+  }
 };
 
 // ============================================================

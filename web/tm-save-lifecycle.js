@@ -416,7 +416,8 @@ function _prepareGMForSave(GM, P) {
   // 注意：GM._chronicle是编年事件数组，不可与ChronicleSystem的月/年摘要对象混用——分开存
   // 编年状态已经属于传入的 GM 快照；不得从当前全局世界重新读取后覆盖跨档快照。
   GM._chronicleSysState = typeof ChronicleSystem !== 'undefined' ? ChronicleSystem.serialize(GM) : null;
-  GM._warTruces = typeof WarWeightSystem !== 'undefined' ? WarWeightSystem.serialize() : null;
+  // 停战状态属于传入的 detached 世界；不得从当前 live world 重新覆盖跨档快照。
+  GM._warTruces = typeof WarWeightSystem !== 'undefined' ? WarWeightSystem.serialize(GM) : { version: 1, truces: {} };
   GM._rngState = typeof getRngState === 'function' ? getRngState() : null;
   // 亲疏/得罪/反弹/观感
   if (GM.affinityMap) GM._savedAffinityMap = _safeClone(GM.affinityMap);
@@ -1609,8 +1610,8 @@ function _tmRestoreLoadTransaction(txn) {
   if (typeof ChronicleSystem !== 'undefined' && ChronicleSystem && typeof ChronicleSystem.deserialize === 'function') {
     ChronicleSystem.deserialize(GM && GM._chronicleSysState || null, GM);
   }
-  if (GM && GM._warTruces && typeof WarWeightSystem !== 'undefined' && WarWeightSystem && typeof WarWeightSystem.deserialize === 'function') {
-    WarWeightSystem.deserialize(GM._warTruces);
+  if (typeof WarWeightSystem !== 'undefined' && WarWeightSystem && typeof WarWeightSystem.deserialize === 'function') {
+    WarWeightSystem.deserialize(GM && GM._warTruces || null, GM);
   }
   if (GM && GM._rngState && typeof restoreRng === 'function') restoreRng(GM._rngState);
   if (typeof _tmRotateDesktopAutoSaveSession === 'function') {
@@ -1815,7 +1816,7 @@ async function _fullLoadGameApplyImpl(data, loadOptions, _loadTxn){
     if(typeof ChronicleSystem !== 'undefined') {
       ChronicleSystem.deserialize(GM._chronicleSysState || null, GM);
     }
-    if(GM._warTruces && typeof WarWeightSystem !== 'undefined') WarWeightSystem.deserialize(GM._warTruces);
+    if(typeof WarWeightSystem !== 'undefined') WarWeightSystem.deserialize(GM._warTruces || null, GM);
 
     // 恢复所有_saved*字段
     _restoreSavedFields();

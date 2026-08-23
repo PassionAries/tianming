@@ -1116,7 +1116,10 @@ function doActualStart(sid, requestToken){
 
   // 重置全局系统状态（防止上一局数据残留）
   if (typeof ChronicleSystem !== 'undefined') ChronicleSystem.reset();
-  if (typeof WarWeightSystem !== 'undefined') WarWeightSystem._truces = {};
+  if (typeof WarWeightSystem === 'undefined' || typeof WarWeightSystem.reset !== 'function') {
+    throw new Error('WarWeightSystem 未加载，无法初始化世界停战状态');
+  }
+  WarWeightSystem.reset(GM);
 
   // 加载经济配置
   if (sc.economyConfig) {

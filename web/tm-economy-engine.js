@@ -158,7 +158,7 @@
     { id:'ken_huang',     name:'垦荒（慎）',  effect:{ farmlandBoost:+0.05 },         cost:{ money:40000 }, risk:{ deforestation:+0.01 } },
     { id:'yu_huang',      name:'育皇林',      scarReduce:{ biodiversityLoss:0.01 },   cost:{ money:25000 } },
     { id:'jing_wei',      name:'净渭清畿',    scarReduce:{ urbanSewageOverload:0.03 },cost:{ money:50000 } },
-    { id:'migration_relief', name:'迁民减压', scarReduce:{ soilErosion:0.045, deforestation:0.03, urbanSewageOverload:0.02 }, effect:{ migrateShare:0.10, loadRelief:0.10 }, cost:{ money:120000, grain:60000 }, duration:36 },
+    { id:'migration_relief', name:'迁民减压', scarReduce:{ soilErosion:0.045, deforestation:0.03, urbanSewageOverload:0.02 }, effect:{ migrateShare:0.10, loadRelief:0.10, receiverLoadThreshold:1.0 }, cost:{ money:120000, grain:60000 }, duration:36 },
     { id:'tech_investment', name:'技术投入', scarReduce:{ waterTableDrop:0.012, riverSilting:0.012, soilFertilityLoss:0.008 }, effect:{ techBoost:{ irrigation:0.25, agriculture:0.15, fertilizer:0.12, toolImprovement:0.10 }, carryingBoost:0.03 }, cost:{ money:160000 }, duration:36 },
     { id:'disaster_recovery', name:'灾后恢复', scarReduce:{ soilErosion:0.035, riverSilting:0.025, soilFertilityLoss:0.035, salinization:0.018 }, effect:{ arableRestore:0.08, soilFertilityBoost:0.05, disasterRecovery:0.18 }, cost:{ money:140000, grain:50000 }, duration:30 }
   ];
@@ -676,52 +676,164 @@
       }
       var target = _pickEnvironmentMigrationTarget(scope);
       if (!target) throw new Error('迁民减压缺少可用叶级地区: ' + rid);
+      var carrying = reg && reg.carrying || {};
+      var fixedSupports = ['farmlandSupport', 'waterSupport', 'fuelSupport', 'sanitationSupport'].map(function(key) {
+        return _envFiniteNumber(carrying[key], NaN);
+      });
+      if (fixedSupports.some(function(value) { return !isFinite(value) || value <= 0; })) {
+        throw new Error('迁民减压承载力无效: ' + rid);
+      }
+      var scopeMouths = Number(scope.mouths);
+      var currentLoad = Number(reg && reg.currentLoad);
+      var currentCarryingMax = Number(reg && reg.carryingMax);
+      if (!isFinite(scopeMouths) || scopeMouths < 0 || !isFinite(currentLoad) || currentLoad < 0
+          || !isFinite(currentCarryingMax) || currentCarryingMax <= 0) {
+        throw new Error('迁民减压人口或负载账本无效: ' + rid);
+      }
+      var mouths = Math.round(scopeMouths);
+      var fixedCarryingMax = Math.min.apply(Math, fixedSupports);
       return {
         regionId:rid,
-        currentLoad:_envFiniteNumber(reg && reg.currentLoad, 0.5),
-        mouths:Math.max(0, Math.round(_envFiniteNumber(scope.mouths, 0))),
+        currentLoad:currentLoad,
+        mouths:mouths,
+        carryingMax:currentCarryingMax,
+        fixedCarryingMax:fixedCarryingMax,
+        projectedMouths:mouths,
+        projectedCarryingMax:0,
+        projectedLoad:0,
+        plannedIncoming:0,
+        plannedOutgoing:0,
         leafIds:scope.leafIds.slice(),
         targetLeafRegionId:String(target.id)
       };
     });
   }
 
-  function _compareEnvironmentMigrationRows(a, b) {
-    return a.currentLoad - b.currentLoad
-      || a.mouths - b.mouths
-      || String(a.regionId).localeCompare(String(b.regionId));
+  function _migrationReliefSafeLoad(policy) {
+    var config = global.P && global.P.environmentConfig || {};
+    var configured = Object.prototype.hasOwnProperty.call(config, 'migrationReliefMaxLoad')
+      ? config.migrationReliefMaxLoad
+      : (policy && policy.effect && policy.effect.receiverLoadThreshold);
+    if (configured == null || configured === '') configured = 1.0;
+    var threshold = Number(configured);
+    if (!isFinite(threshold) || threshold < (1 / 1.1) || threshold > 2) {
+      throw new Error('迁民减压接纳负载阈值无效');
+    }
+    return threshold;
   }
 
-  function _planEnvironmentMigrations(regionIds, share, allRegions) {
-    var rows = _snapshotEnvironmentMigrationRows();
+  function _refreshProjectedMigrationRow(row) {
+    row.projectedCarryingMax = Math.min(
+      row.fixedCarryingMax,
+      Math.max(1, row.projectedMouths * 1.1)
+    );
+    row.projectedLoad = row.projectedMouths / Math.max(1, row.projectedCarryingMax);
+    return row;
+  }
+
+  function _receiverCapacity(row, threshold) {
+    var maxMouths = Math.floor(row.fixedCarryingMax * threshold);
+    return Math.max(0, maxMouths - row.projectedMouths);
+  }
+
+  function _planEnvironmentMigrations(regionIds, share, allRegions, policy) {
+    var rows = _snapshotEnvironmentMigrationRows().map(_refreshProjectedMigrationRow);
     var selected = {};
     (regionIds || []).forEach(function(rid) { selected[String(rid)] = true; });
     var sources = rows.filter(function(row) { return !!selected[row.regionId]; });
-    var receiver = rows.slice().sort(_compareEnvironmentMigrationRows)[0] || null;
-    if (!receiver || rows.length < 2) throw new Error('迁民减压缺少接纳地区');
+    var threshold = _migrationReliefSafeLoad(policy);
+    if (rows.length < 2) throw new Error('迁民减压缺少接纳地区');
     if (allRegions) {
       sources = sources.filter(function(row) {
-        return row.regionId !== receiver.regionId
-          && row.currentLoad > 1
-          && row.currentLoad > receiver.currentLoad;
+        return row.currentLoad > threshold;
       });
-    } else {
-      receiver = rows.filter(function(row) { return row.regionId !== sources[0].regionId; })
-        .sort(_compareEnvironmentMigrationRows)[0] || null;
-      if (!receiver) throw new Error('迁民减压缺少接纳地区: ' + (sources[0] && sources[0].regionId || 'unknown'));
     }
-    var ratio = Math.max(0, Number(share) || 0);
-    return sources.slice().sort(function(a, b) {
+    sources = sources.slice().sort(function(a, b) {
       return String(a.regionId).localeCompare(String(b.regionId));
-    }).map(function(source) {
+    });
+    var ratio = Number(share);
+    if (!isFinite(ratio) || ratio < 0 || ratio > 1) throw new Error('迁民减压比例无效');
+    var sourceIds = {};
+    sources.forEach(function(source) { sourceIds[source.regionId] = true; });
+    var receivers = rows.filter(function(row) { return !sourceIds[row.regionId]; });
+    if (!receivers.length && sources.length) throw new Error('迁民减压缺少接纳地区');
+    var requested = sources.reduce(function(total, source) {
+      return total + Math.max(0, Math.min(source.mouths, Math.round(source.mouths * ratio)));
+    }, 0);
+    var capacity = receivers.reduce(function(total, receiver) {
+      return total + _receiverCapacity(receiver, threshold);
+    }, 0);
+    if (capacity < requested) throw new Error('迁民减压接纳容量不足');
+
+    var planByRoute = {};
+    function addRoute(source, receiver, mouths) {
+      var key = source.regionId + '>' + receiver.regionId;
+      if (!planByRoute[key]) {
+        planByRoute[key] = {
+          sourceRegionId:source.regionId,
+          sourceLeafIds:source.leafIds.slice(),
+          targetRegionId:receiver.regionId,
+          targetLeafRegionId:receiver.targetLeafRegionId,
+          mouths:0,
+          safeLoadThreshold:threshold
+        };
+      }
+      planByRoute[key].mouths += mouths;
+      source.projectedMouths -= mouths;
+      source.plannedOutgoing += mouths;
+      receiver.projectedMouths += mouths;
+      receiver.plannedIncoming += mouths;
+      _refreshProjectedMigrationRow(source);
+      _refreshProjectedMigrationRow(receiver);
+    }
+
+    sources.forEach(function(source) {
+      var remaining = Math.max(0, Math.min(source.mouths, Math.round(source.mouths * ratio)));
+      while (remaining > 0) {
+        var available = receivers.filter(function(receiver) {
+          return _receiverCapacity(receiver, threshold) > 0;
+        }).sort(function(a, b) {
+          return a.projectedLoad - b.projectedLoad
+            || a.plannedIncoming - b.plannedIncoming
+            || String(a.regionId).localeCompare(String(b.regionId));
+        });
+        if (!available.length) throw new Error('迁民减压接纳容量不足');
+        var receiver = available[0];
+        var receiverCapacity = _receiverCapacity(receiver, threshold);
+        var nextLoad = available[1] ? available[1].projectedLoad : threshold;
+        var toNextLoad = Math.floor(nextLoad * receiver.fixedCarryingMax - receiver.projectedMouths);
+        var batch = toNextLoad > 0
+          ? Math.min(remaining, receiverCapacity, toNextLoad)
+          : Math.min(remaining, receiverCapacity, Math.ceil(remaining / available.length));
+        if (batch <= 0) throw new Error('迁民减压规划无法推进');
+        addRoute(source, receiver, batch);
+        remaining -= batch;
+      }
+    });
+    var plan = Object.keys(planByRoute).sort().map(function(key) {
+      var item = planByRoute[key];
+      var source = rows.find(function(row) { return row.regionId === item.sourceRegionId; });
+      var receiver = rows.find(function(row) { return row.regionId === item.targetRegionId; });
+      item.projectedSourceMouths = source.projectedMouths;
+      item.projectedTargetMouths = receiver.projectedMouths;
+      item.projectedTargetLoad = receiver.projectedLoad;
+      item.targetCarryingMax = receiver.projectedCarryingMax;
+      item.plannedIncoming = receiver.plannedIncoming;
+      item.plannedOutgoing = source.plannedOutgoing;
+      return item;
+    });
+    plan.safeLoadThreshold = threshold;
+    plan.projectedRows = rows.map(function(row) {
       return {
-        sourceRegionId:source.regionId,
-        sourceLeafIds:source.leafIds.slice(),
-        targetRegionId:receiver.regionId,
-        targetLeafRegionId:receiver.targetLeafRegionId,
-        mouths:Math.max(0, Math.min(source.mouths, Math.round(source.mouths * ratio)))
+        regionId:row.regionId,
+        projectedMouths:row.projectedMouths,
+        carryingMax:row.projectedCarryingMax,
+        projectedLoad:row.projectedLoad,
+        plannedIncoming:row.plannedIncoming,
+        plannedOutgoing:row.plannedOutgoing
       };
-    }).filter(function(item) { return item.mouths > 0; });
+    });
+    return plan;
   }
 
   function _executeEnvironmentMigrationPlan(plan) {
@@ -740,13 +852,34 @@
       if (!result || result.ok === false) {
         throw new Error('迁民减压人口落账失败: ' + String(result && result.reason || 'unknown'));
       }
-      if (Number(result.mouths) !== item.mouths) throw new Error('迁民减压人口落账不完整');
-      result.toRegionId = item.targetRegionId;
-      bySource[item.sourceRegionId] = result;
+      var movedMouths = Number(result.mouths);
+      var movedHouseholds = Number(result.households);
+      var movedDing = Number(result.ding);
+      if (!isFinite(movedMouths) || !isFinite(movedHouseholds) || !isFinite(movedDing)
+          || movedMouths < 0 || movedHouseholds < 0 || movedDing < 0) {
+        throw new Error('迁民减压人口账本返回非法数值');
+      }
+      if (movedMouths !== item.mouths) throw new Error('迁民减压人口落账不完整');
+      if (!bySource[item.sourceRegionId]) {
+        bySource[item.sourceRegionId] = { ok:true, mouths:0, households:0, ding:0, toRegionIds:[], targetRegionIds:[] };
+      }
+      var sourceResult = bySource[item.sourceRegionId];
+      sourceResult.mouths += movedMouths;
+      sourceResult.households += movedHouseholds;
+      sourceResult.ding += movedDing;
+      if (sourceResult.toRegionIds.indexOf(item.targetRegionId) < 0) sourceResult.toRegionIds.push(item.targetRegionId);
+      if (sourceResult.targetRegionIds.indexOf(result.targetRegionId) < 0) sourceResult.targetRegionIds.push(result.targetRegionId);
+      sourceResult.toRegionId = sourceResult.toRegionIds.join(',');
+      sourceResult.targetRegionId = sourceResult.targetRegionIds.join(',');
       affected[item.sourceRegionId] = true;
       affected[item.targetRegionId] = true;
     });
-    return { bySource:bySource, affectedRegionIds:Object.keys(affected).sort() };
+    return {
+      bySource:bySource,
+      affectedRegionIds:Object.keys(affected).sort(),
+      safeLoadThreshold:plan && plan.safeLoadThreshold,
+      projectedRows:plan && plan.projectedRows || []
+    };
   }
 
   function _applyPolicyImmediateEffect(policy, policyId, regionId) {
@@ -758,7 +891,7 @@
     var regionIds = _envRegionIds(regionId);
     var migrationBatch = { bySource:{}, affectedRegionIds:[] };
     if (effect.migrateShare) {
-      var migrationPlan = _planEnvironmentMigrations(regionIds, effect.migrateShare, regionId === 'all');
+      var migrationPlan = _planEnvironmentMigrations(regionIds, effect.migrateShare, regionId === 'all', policy);
       migrationBatch = _executeEnvironmentMigrationPlan(migrationPlan);
     }
     regionIds.forEach(function(rid) {
@@ -774,6 +907,8 @@
         row.migratedDing = Number(migration.ding) || 0;
         row.toRegionId = migration.toRegionId || '';
         row.toLeafRegionId = migration.targetRegionId || '';
+        row.toRegionIds = migration.toRegionIds ? migration.toRegionIds.slice() : [];
+        row.toLeafRegionIds = migration.targetRegionIds ? migration.targetRegionIds.slice() : [];
         summary.migrated += row.migrated;
       }
 
@@ -837,6 +972,18 @@
       var reg = E.byRegion[rid];
       if (reg) _recomputeRegionCarrying(rid, reg);
     });
+    if (effect.migrateShare) {
+      (migrationBatch.projectedRows || []).filter(function(row) { return row.plannedIncoming > 0; }).forEach(function(row) {
+        var finalRegion = E.byRegion[row.regionId];
+        if (!finalRegion || _envFiniteNumber(finalRegion.currentLoad, Infinity) > migrationBatch.safeLoadThreshold + 1e-9) {
+          throw new Error('迁民减压接纳地超过安全负载: ' + row.regionId);
+        }
+      });
+      summary.migrationProjection = {
+        safeLoadThreshold:migrationBatch.safeLoadThreshold,
+        rows:(migrationBatch.projectedRows || []).map(function(row) { return Object.assign({}, row); })
+      };
+    }
     _recomputeNationalCarrying();
     _pushEnvPolicyHistory({
       turn: G.turn || 0,

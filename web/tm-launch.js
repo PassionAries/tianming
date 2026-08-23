@@ -83,22 +83,39 @@
 //
 // ══════════════════════════════════════════════════════════════
 // N4: 主角精力消耗——各操作消耗不同精力
+function _renderEnergyBar() {
+  var _enBar = document.getElementById('_energyBar');
+  if (!_enBar || GM._energy === undefined) return;
+  var _pct = Math.round((GM._energy / (GM._energyMax || 100)) * 100);
+  var _col = _pct > 60 ? 'var(--celadon-400)' : _pct > 30 ? 'var(--gold-400)' : 'var(--vermillion-400)';
+  _enBar.innerHTML = '<div style="font-size:0.72rem;color:var(--txt-d);margin-bottom:2px;">\u7CBE\u529B ' + Math.round(GM._energy) + '/' + (GM._energyMax || 100) + '</div>'
+    + '<div style="height:4px;background:var(--bg-4);border-radius:2px;overflow:hidden;"><div style="height:100%;width:' + _pct + '%;background:' + _col + ';border-radius:2px;transition:width 0.3s;"></div></div>';
+}
+
+function _captureEnergySnapshot() {
+  return {
+    hadEnergy: Object.prototype.hasOwnProperty.call(GM, '_energy'),
+    energy: GM._energy
+  };
+}
+
+function _restoreEnergySnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object' || typeof snapshot.hadEnergy !== 'boolean') {
+    throw new Error('invalid energy snapshot');
+  }
+  if (snapshot.hadEnergy) GM._energy = snapshot.energy; else delete GM._energy;
+  _renderEnergyBar();
+  return true;
+}
+
 function _spendEnergy(cost, actionName) {
   if (GM._energy === undefined) return true; // 系统未初始化则不限制
   if (GM._energy < cost) {
     toast('\u7CBE\u529B\u4E0D\u8DB3\uFF08\u9700' + cost + '\uFF0C\u5F53\u524D' + Math.round(GM._energy) + '\uFF09\uFF0C\u8BF7\u7ED3\u675F\u56DE\u5408\u4F11\u606F');
     return false;
   }
-  GM._energy -= cost;
+  _restoreEnergySnapshot({ hadEnergy: true, energy: GM._energy - cost });
   _dbg('[Energy] ' + actionName + ' -' + cost + ' 剩余' + GM._energy);
-  // 轻量更新精力条（避免重建整个左面板）
-  var _enBar = document.getElementById('_energyBar');
-  if (_enBar) {
-    var _pct = Math.round((GM._energy / (GM._energyMax || 100)) * 100);
-    var _col = _pct > 60 ? 'var(--celadon-400)' : _pct > 30 ? 'var(--gold-400)' : 'var(--vermillion-400)';
-    _enBar.innerHTML = '<div style="font-size:0.72rem;color:var(--txt-d);margin-bottom:2px;">\u7CBE\u529B ' + Math.round(GM._energy) + '/' + (GM._energyMax || 100) + '</div>'
-      + '<div style="height:4px;background:var(--bg-4);border-radius:2px;overflow:hidden;"><div style="height:100%;width:' + _pct + '%;background:' + _col + ';border-radius:2px;transition:width 0.3s;"></div></div>';
-  }
   return true;
 }
 

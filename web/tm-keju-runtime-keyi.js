@@ -12,6 +12,65 @@
 
 var KEYI_STATE = null;  // { attendees, speakers, round, phase:'discuss'|'vote'|'decide', speeches, stances, support, abort }
 
+function _keyiReportOpenError(error, label) {
+  var manager = (typeof window !== 'undefined' && window.TM && window.TM.errors) || null;
+  if (manager && typeof manager.capture === 'function') {
+    try {
+      manager.capture(error, label);
+      return;
+    } catch (reportError) {
+      console.error('[科议] 错误记录器失败', reportError);
+    }
+  }
+  console.error('[科议] ' + label, error);
+}
+
+function _keyiCaptureOpenTransaction() {
+  if (typeof _captureEnergySnapshot !== 'function' || typeof _restoreEnergySnapshot !== 'function') {
+    throw new Error('科议精力账本不可用');
+  }
+  var hasKeju = Object.prototype.hasOwnProperty.call(GM, 'keju');
+  var keju = hasKeju ? GM.keju : undefined;
+  return {
+    hasKeju: hasKeju,
+    keju: keju,
+    energy: _captureEnergySnapshot(),
+    keyiState: KEYI_STATE,
+    modal: document.getElementById('keyi-modal')
+  };
+}
+
+function _keyiReplaceKeju(hasKeju, value) {
+  if (hasKeju) GM.keju = value; else delete GM.keju;
+}
+
+function _keyiRestoreOpenTransaction(txn) {
+  if (!txn) return;
+  _restoreEnergySnapshot(txn.energy);
+  _keyiReplaceKeju(txn.hasKeju, txn.keju);
+  KEYI_STATE = txn.keyiState;
+
+  var currentModal = document.getElementById('keyi-modal');
+  if (currentModal && currentModal !== txn.modal) currentModal.remove();
+}
+
+function _keyiHandleRunFailure(error, sessionToken) {
+  _keyiReportOpenError(error, '科议异步议论失败');
+  if (!KEYI_STATE || KEYI_STATE._sessionToken !== sessionToken) return;
+  KEYI_STATE._busy = false;
+  KEYI_STATE._busyText = '';
+  KEYI_STATE._runFailed = true;
+  KEYI_STATE._runError = String(error && error.message || error || '科议议论失败');
+  KEYI_STATE.speeches = (KEYI_STATE.speeches || []).filter(function(speech) {
+    return !speech || speech._streaming !== true;
+  });
+  try {
+    _keyiRender();
+  } catch (renderError) {
+    _keyiReportOpenError(renderError, '科议异步失败状态渲染失败');
+  }
+}
+
 function _keyiGetActiveProposal() {
   return (KEYI_STATE && KEYI_STATE._pendingProposal) || (GM.keju && GM.keju._pendingProposal) || null;
 }
@@ -49,6 +108,10 @@ function _keyiDecisionContent(method, topicType) {
 
 /** 入口：打开科议（v2·自动邀请·无选人页） */
 function openKeyiSession(opts) {
+  if (KEYI_STATE || document.getElementById('keyi-modal')) {
+    toast('已有科议正在进行');
+    return false;
+  }
   // v7.1·B3·接参化·支持 9 议题路由·不传 opts 时 fallback 走 kaike (向后兼容)
   opts = opts || {};
   var topicType = opts.topicType || 'kaike';
@@ -57,7 +120,6 @@ function openKeyiSession(opts) {
     ? _kjResolveTopic(topicType, topicData)
     : { topicType: 'kaike', title: '筹办科举', shortLabel: '科议·筹办', threshold: 0.5, callback: null, callbackName: 'startKejuByMethod', sliceOwner: 'B3' };
 
-  if (!GM.keju) GM.keju = {};
   var pendingProposal = {
     proposalId: 'keyi_' + (GM.turn || 0) + '_' + Date.now() + '_' + Math.floor(Math.random() * 100000),
     topic: resolved.title,
@@ -108,10 +170,19 @@ function openKeyiSession(opts) {
 
   // 弹确认窗·不再挑人
   if (!confirm('\u5F00\u79D1\u8BAE\uFF1F\n\u5C06\u53EC\u96C6 ' + attendees.length + ' \u540D\u5728\u4EAC\u5B98\u5458\u8BAE\u300C' + _keyiTopicTitle(pendingProposal, '\u79D1\u8BAE\u8BAE\u9898') + '\u300D\u00B7\u8017\u7CBE\u529B 15\u3002')) return false;
-  if (typeof _spendEnergy === 'function' && !_spendEnergy(15, '\u79D1\u8BAE')) { toast('\u7CBE\u529B\u4E0D\u8DB3'); return false; }
-  GM.keju._pendingProposal = pendingProposal;
+  var openTxn = null;
+  try {
+    openTxn = _keyiCaptureOpenTransaction();
+    if (typeof _spendEnergy === 'function' && !_spendEnergy(15, '\u79D1\u8BAE')) {
+      _keyiRestoreOpenTransaction(openTxn);
+      toast('\u7CBE\u529B\u4E0D\u8DB3');
+      return false;
+    }
+    var nextKeju = Object.assign({}, (GM.keju && typeof GM.keju === 'object') ? GM.keju : {});
+    nextKeju._pendingProposal = pendingProposal;
+    _keyiReplaceKeju(true, nextKeju);
 
-  KEYI_STATE = {
+    KEYI_STATE = {
     attendees: attendees.map(function(c){ return { name: c.name, title: c.officialTitle || c.title || '', party: c.party || '', loyalty: c.loyalty || 50, _ch: c }; }),
     speakers: [],
     round: 0,
@@ -128,6 +199,7 @@ function openKeyiSession(opts) {
     _topicTitle: resolved.title,
     _topicThreshold: resolved.threshold,
     _callbackName: resolved.callbackName,
+    _sessionToken: pendingProposal.proposalId,
     playerStance: null,
     playerSpeeches: []
   };
@@ -160,10 +232,19 @@ function openKeyiSession(opts) {
   KEYI_STATE.speakers = speakers.slice(0, 6);
   KEYI_STATE.round = 1;
 
-  _renderKeyiModal();
-  // v3·立刻自动跑两轮流式讨论
-  _keyiRunBothRounds();
-  return true;
+    _renderKeyiModal();
+    // v3·立刻自动跑两轮流式讨论。异步错误绑定当前 session；旧会话的
+    // 晚到拒绝只能记错，不得清理或关闭后来打开的新会话。
+    var sessionToken = KEYI_STATE._sessionToken;
+    Promise.resolve(_keyiRunBothRounds()).catch(function(error) {
+      _keyiHandleRunFailure(error, sessionToken);
+    });
+    return true;
+  } catch (error) {
+    if (openTxn) _keyiRestoreOpenTransaction(openTxn);
+    _keyiReportOpenError(error, '打开科议失败');
+    return false;
+  }
 }
 
 /** 创建 modal 容器 */

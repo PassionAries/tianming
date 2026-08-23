@@ -10,6 +10,16 @@
 // ============================================================
 (function(){
   'use strict';
+  function perfCount(name, delta) {
+    var perf = typeof window !== 'undefined' && window.TM && window.TM.perf;
+    if (perf && typeof perf.count === 'function') perf.count(name, delta == null ? 1 : delta);
+  }
+
+  function perfSpan(name, fn, metadata) {
+    var perf = typeof window !== 'undefined' && window.TM && window.TM.perf;
+    if (perf && typeof perf.withSpan === 'function') return perf.withSpan(name, fn, metadata);
+    return fn();
+  }
   function resolve(stage, scale, band, opts){
     opts = opts || {};
     if (!stage || !stage.querySelector) return;
@@ -40,25 +50,66 @@
     }
     if (opts.noCollide) return;                          // LOD 门已应用·跳贪心占位
     // 纯几何贪心占位(可离线复算验证)：高优先级先占·后来者与已放置相交则隐。
-    items.sort(function(a, b){ return b.pr - a.pr; });
+    items.forEach(function(item, index) { item._tmLabelOrder = index; });
+    items.sort(function(a, b){ return (b.pr - a.pr) || (a._tmLabelOrder - b._tmLabelOrder); });
     var hidden = placeGreedy(items);
     for (var h = 0; h < items.length; h++) if (hidden[h]) items[h].g.classList.add('tmf-collide-hidden');
   }
 
   // 纯函数：items 已按 pr 降序·返回等长布尔数组(true=被挡该隐)。无 DOM 依赖·供单测/离线复算。
-  function placeGreedy(items){
-    var out = new Array(items.length);
-    var placed = [];
-    for (var k = 0; k < items.length; k++) {
-      var it = items[k], hit = false;
-      for (var m = 0; m < placed.length; m++) {
-        var q = placed[m];
-        if (Math.abs(it.cx - q.cx) < (it.hw + q.hw) && Math.abs(it.cy - q.cy) < (it.hh + q.hh)) { hit = true; break; }
+  function placeGreedy(items, options){
+    options = options || {};
+    var cellSize = Number(options.cellSize);
+    if (!isFinite(cellSize) || cellSize <= 0) cellSize = 64;
+    return perfSpan('map.labelCollision', function() {
+      var out = new Array(items.length);
+      var placed = [];
+      var grid = Object.create(null);
+      function cellsFor(item) {
+        var minX = Math.floor((item.cx - item.hw) / cellSize);
+        var maxX = Math.floor((item.cx + item.hw) / cellSize);
+        var minY = Math.floor((item.cy - item.hh) / cellSize);
+        var maxY = Math.floor((item.cy + item.hh) / cellSize);
+        var cells = [];
+        for (var gx = minX; gx <= maxX; gx++) {
+          for (var gy = minY; gy <= maxY; gy++) cells.push(gx + ':' + gy);
+        }
+        return cells;
       }
-      out[k] = hit;
-      if (!hit) placed.push(it);
-    }
-    return out;
+      for (var k = 0; k < items.length; k++) {
+        var it = items[k];
+        var hit = false;
+        var cells = cellsFor(it);
+        var candidateIds = Object.create(null);
+        var candidates = [];
+        for (var c = 0; c < cells.length; c++) {
+          perfCount('map.labelGridLookups', 1);
+          var bucket = grid[cells[c]] || [];
+          for (var b = 0; b < bucket.length; b++) {
+            var candidateId = bucket[b];
+            if (candidateIds[candidateId]) continue;
+            candidateIds[candidateId] = true;
+            candidates.push(candidateId);
+          }
+        }
+        candidates.sort(function(a, b) { return a - b; });
+        for (var m = 0; m < candidates.length; m++) {
+          var q = placed[candidates[m]];
+          perfCount('map.labelPairChecks', 1);
+          if (Math.abs(it.cx - q.cx) < (it.hw + q.hw) && Math.abs(it.cy - q.cy) < (it.hh + q.hh)) { hit = true; break; }
+        }
+        out[k] = hit;
+        if (!hit) {
+          var placedIndex = placed.length;
+          placed.push(it);
+          for (var insert = 0; insert < cells.length; insert++) {
+            if (!grid[cells[insert]]) grid[cells[insert]] = [];
+            grid[cells[insert]].push(placedIndex);
+          }
+        }
+      }
+      return out;
+    }, { itemCount: items.length, cellSize: cellSize });
   }
 
   var api = { resolve: resolve, placeGreedy: placeGreedy };

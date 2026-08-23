@@ -191,11 +191,14 @@ const sc1Runtime = {
   getPromptBudget() {
     return { contextK: 8, budget: 6144, warn80: 4915, warn95: 5836 };
   },
+  TM: { Endturn: { AI: {} } },
   window: null
 };
 sc1Runtime.window = sc1Runtime;
 sc1Runtime.globalThis = sc1Runtime;
 vm.createContext(sc1Runtime);
+vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-endturn-ai-sc1-budget.js'), 'utf8'), sc1Runtime,
+  { filename: 'tm-endturn-ai-sc1-budget.js' });
 vm.runInContext(endturnAiSource, sc1Runtime, { filename: 'tm-endturn-ai.js' });
 const sc1Api = sc1Runtime.TM.Endturn.AI.subcalls;
 const finalRule = '=== 输出格式强约束 (FINAL RULE·不可违反) === YOU MUST RETURN JSON ONLY.';

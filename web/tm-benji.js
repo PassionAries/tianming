@@ -105,8 +105,8 @@
     for (var i = 0; i < segCount; i++) chain = chain.then(_mkSeg(i));
     return chain.then(function () {
       GM._benji.composedTurn = GM.turn || 0;
-      try { attachToPlayHistory(GM); } catch (_) {}
-      return { ok: true, sections: GM._benji.sections.length };
+      var playHistory = attachToPlayHistory(GM);
+      return { ok: true, sections: GM._benji.sections.length, playHistory: playHistory };
     }).catch(function (e) {
       // 中途断卷：已成之卷保留（诚实半卷·可重触发续修）
       return { ok: false, reason: 'ai_error', error: (e && e.message) || String(e), sections: (GM._benji.sections || []).length };
@@ -123,18 +123,89 @@
   }
 
   // 战绩侧留存（A1 tm_playHistory·主菜单「历代亲历」重读历局本纪）——匹配本局 sid+回合的最近一条
+  function _historyStorageError(reason, error, extra) {
+    var out = { ok: false, reason: reason };
+    if (error) out.error = error;
+    if (extra) {
+      Object.keys(extra).forEach(function (key) { out[key] = extra[key]; });
+    }
+    return out;
+  }
+
+  function _isQuotaError(error) {
+    if (!error) return false;
+    return error.name === 'QuotaExceededError'
+      || error.name === 'NS_ERROR_DOM_QUOTA_REACHED'
+      || error.code === 22
+      || error.code === 1014;
+  }
+
+  function _quarantineCorruptHistory(storage, raw) {
+    var key = 'tm_playHistory_corrupt_' + Date.now();
+    try {
+      storage.setItem(key, raw);
+      return { ok: true, key: key };
+    } catch (error) {
+      return { ok: false, key: key, error: error };
+    }
+  }
+
   function attachToPlayHistory(GM) {
-    if (typeof global.localStorage === 'undefined' || !global.localStorage) return;
+    var storage = null;
+    try {
+      storage = (typeof global.localStorage !== 'undefined') ? global.localStorage : null;
+    } catch (error) {
+      return _historyStorageError('storage-unavailable', error);
+    }
+    if (!storage || typeof storage.getItem !== 'function' || typeof storage.setItem !== 'function') {
+      return _historyStorageError('storage-unavailable');
+    }
     var txt = fullText(GM);
-    if (!txt || txt.length > 100000) return;
-    var raw = global.localStorage.getItem('tm_playHistory');
-    var arr = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(arr)) return;
+    if (!txt) return _historyStorageError('benji-empty');
+    if (txt.length > 100000) return _historyStorageError('benji-too-large');
+    var raw;
+    try {
+      raw = storage.getItem('tm_playHistory');
+    } catch (error) {
+      return _historyStorageError('storage-unavailable', error);
+    }
+    var arr;
+    try {
+      arr = raw ? JSON.parse(raw) : [];
+    } catch (error) {
+      var quarantine = _quarantineCorruptHistory(storage, raw);
+      return _historyStorageError('history-json-corrupt', error, {
+        quarantineKey: quarantine.ok ? quarantine.key : null,
+        quarantineError: quarantine.ok ? null : quarantine.error
+      });
+    }
+    if (!Array.isArray(arr)) return _historyStorageError('history-not-array');
+    var matched = false;
     for (var i = 0; i < arr.length; i++) {
       var rec = arr[i];
-      if (rec && rec.sid === GM.sid && rec.turns === GM.turn) { rec.benji = txt; break; }
+      if (rec && rec.sid === GM.sid && rec.turns === GM.turn) {
+        rec.benji = txt;
+        matched = true;
+        break;
+      }
     }
-    global.localStorage.setItem('tm_playHistory', JSON.stringify(arr));
+    if (!matched) return _historyStorageError('history-record-not-found');
+    try {
+      storage.setItem('tm_playHistory', JSON.stringify(arr));
+    } catch (error) {
+      return _historyStorageError(_isQuotaError(error) ? 'quota-exceeded' : 'write-failed', error);
+    }
+    return { ok: true };
+  }
+
+  function _historyFailureText(reason) {
+    if (reason === 'storage-unavailable') return '本地存储不可用';
+    if (reason === 'history-json-corrupt') return '历代亲历数据损坏，原数据已保留';
+    if (reason === 'history-not-array') return '历代亲历格式异常';
+    if (reason === 'quota-exceeded') return '存储空间不足';
+    if (reason === 'history-record-not-found') return '未找到本局战绩条目';
+    if (reason === 'benji-too-large') return '本纪超过战绩侧容量上限';
+    return '战绩侧写入失败';
   }
 
   // 终局富屏集成：#_endgame 内追加「本纪」区·逐卷上屏（史馆修纂进度感·先显既有太史公不空等）
@@ -156,7 +227,7 @@
     host.appendChild(box);
     var deathLine = '';
     if (ctx.failGoal) deathLine = String(ctx.failGoal.title || '') + '。' + String(ctx.failGoal.description || '');
-    compose(GM, {
+    return compose(GM, {
       deathLine: deathLine,
       playerName: pName,
       onSection: function (idx, total, text) {
@@ -172,12 +243,18 @@
     }).then(function (r) {
       var st = global.document.getElementById('_benji_status');
       if (!st) return;
-      if (r && r.ok) st.textContent = '本纪修讫 · 凡' + r.sections + '卷（已存入历代亲历）';
+      if (r && r.ok && r.playHistory && r.playHistory.ok) {
+        st.textContent = '本纪修讫 · 凡' + r.sections + '卷（已存入历代亲历）';
+      } else if (r && r.ok) {
+        st.textContent = '本纪修讫 · 凡' + r.sections + '卷（历代亲历保存失败：'
+          + _historyFailureText(r.playHistory && r.playHistory.reason) + '）';
+      }
       else if (r && r.reason === 'ai_error') st.textContent = '史馆搁笔（' + (r.sections || 0) + '卷已成·余卷因故未竟）';
+      return r;
     });
   }
 
-  var api = { compose: compose, composeForEndgame: composeForEndgame, fullText: fullText, collectWindow: collectWindow, buildPrompt: buildPrompt, enabled: enabled, SEG_TURNS: SEG_TURNS };
+  var api = { compose: compose, composeForEndgame: composeForEndgame, attachToPlayHistory: attachToPlayHistory, fullText: fullText, collectWindow: collectWindow, buildPrompt: buildPrompt, enabled: enabled, SEG_TURNS: SEG_TURNS };
   if (typeof global.TM === 'undefined') global.TM = {};
   global.TM.Benji = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

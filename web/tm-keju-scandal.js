@@ -9,7 +9,7 @@
  *      隋唐至明清通用·引擎不含任何朝代专属机构。
  *
  * ★ 跨朝代通用红线 (见 memory tianming-engine-cross-dynasty)·
- *   - 触发只用通用量·主考偏私 examiner.factionBias / 党争 GM.keju.tension / 吏治 corruption
+ *   - 触发只用通用量·当前考试 examinerView / 党争 GM._factionTension / 吏治 corruption
  *   - 「特务/监察机构干预阅卷」是朝代特例·不进引擎·改剧本声明的中立 hook：
  *     P.keju.scandalOversight = { label:'<剧本填·该朝监察机构名>', biasWeight, triggerCorruption }
  *     引擎只认 P.keju.scandalOversight 这个中立字段·机构专名一律由剧本数据提供。
@@ -66,6 +66,21 @@
 
   function _scGM() { return (typeof GM !== 'undefined' && GM) ? GM : null; }
 
+  function _scFiniteNumber(value, fallback) {
+    var n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  function _scCaptureError(error, label) {
+    if (typeof TM !== 'undefined' && TM && TM.errors && typeof TM.errors.capture === 'function') {
+      TM.errors.capture(error, label);
+      return;
+    }
+    if (typeof console !== 'undefined' && console && typeof console.warn === 'function') {
+      console.warn('[科举·弊案] ' + label, error);
+    }
+  }
+
   function _getCurYear() {
     var g = _scGM();
     if (!g) return 0;
@@ -97,23 +112,102 @@
   }
 
   function _scGetTension() {
-    var g = _scGM(); if (!g || !g.keju) return 0;
-    return (typeof g.keju.tension === 'number') ? g.keju.tension : 0;
-  }
-
-  function _scGetExaminer() {
-    if (typeof window !== 'undefined' && typeof window._kjGetExaminerForScandal === 'function') {
-      try { var e = window._kjGetExaminerForScandal(); if (e) return e; } catch (_) {}
+    var g = _scGM(); if (!g) return 0;
+    if (typeof _kjCalcTotalPartyTension === 'function') {
+      try {
+        var calculated = _kjCalcTotalPartyTension();
+        if (Number.isFinite(calculated)) return calculated;
+      } catch (error) {
+        _scCaptureError(error, '读取党争总张力失败');
+      }
     }
-    var g = _scGM();
-    return (g && g.keju && g.keju.examiner) || null;
+    if (g._factionTension && typeof g._factionTension === 'object') {
+      var keys = Object.keys(g._factionTension);
+      var total = 0;
+      var hasFinite = false;
+      keys.forEach(function(key) {
+        var value = Number(g._factionTension[key]);
+        if (!Number.isFinite(value)) return;
+        total += value;
+        hasFinite = true;
+      });
+      if (hasFinite) return total;
+    }
+    return (g.keju && Number.isFinite(g.keju.tension)) ? g.keju.tension : 0;
   }
 
-  // 科举须办过 (有主考且未在 idle)·弊案依附一场科举
+  function _scFindCharacterById(id) {
+    var g = _scGM();
+    if (!g || !Array.isArray(g.chars) || id === undefined || id === null || String(id).trim() === '') return null;
+    var wanted = String(id);
+    return g.chars.find(function(character) {
+      return character && character.id !== undefined && character.id !== null && String(character.id) === wanted;
+    }) || null;
+  }
+
+  function _scFindCharactersByName(name) {
+    var g = _scGM();
+    if (!g || !Array.isArray(g.chars) || !name) return [];
+    return g.chars.filter(function(character) {
+      return character && character.name === name;
+    });
+  }
+
+  /** 正式考试状态唯一解析入口；仅为旧档缺 ID 时按姓名迁移一次。 */
+  function resolveScandalExamContext() {
+    var p = (typeof P !== 'undefined' && P) ? P : null;
+    var exam = p && p.keju && p.keju.currentExam;
+    var stage = exam && typeof exam.stage === 'string' ? exam.stage : 'idle';
+    var examiner = null;
+    var examinerId = exam && exam.chiefExaminerId != null ? String(exam.chiefExaminerId).trim() : '';
+    var examinerName = exam && exam.chiefExaminer ? String(exam.chiefExaminer) : '';
+
+    if (examinerId) {
+      examiner = _scFindCharacterById(examinerId);
+    } else if (examinerName) {
+      var nameMatches = _scFindCharactersByName(examinerName);
+      if (nameMatches.length === 1 && nameMatches[0].id != null && String(nameMatches[0].id).trim()) {
+        examiner = nameMatches[0];
+        examinerId = String(examiner.id);
+        exam.chiefExaminerId = examinerId;
+      }
+    }
+    if (examiner && !examinerName) {
+      examinerName = examiner.name || '';
+      exam.chiefExaminer = examinerName;
+    }
+
+    var examinerView = exam && exam.examinerView && typeof exam.examinerView === 'object'
+      ? exam.examinerView
+      : null;
+    if ((!examinerView || !Number.isFinite(Number(examinerView.factionBias)))
+        && examiner && typeof _kejuExaminerView === 'function') {
+      try {
+        examinerView = _kejuExaminerView(examiner) || null;
+      } catch (error) {
+        _scCaptureError(error, '派生主考视角失败');
+      }
+    }
+    var factionBias = examinerView
+      ? _scFiniteNumber(examinerView.factionBias, 0)
+      : 0;
+    return {
+      exam: exam || null,
+      stage: stage,
+      examiner: examiner,
+      examinerId: examinerId,
+      examinerName: examinerName,
+      examinerView: examinerView,
+      factionBias: factionBias,
+      tension: _scGetTension()
+    };
+  }
+
+  // 科举须办过 (有稳定主考且未在 idle/finished)·弊案依附一场科举
   function _scExamActive() {
-    var g = _scGM(); if (!g || !g.keju) return false;
-    if (!_scGetExaminer()) return false;
-    return (g.keju.stage || 'idle') !== 'idle';
+    var context = resolveScandalExamContext();
+    return !!(context.examiner && context.examinerId
+      && context.stage !== 'idle' && context.stage !== 'finished');
   }
 
   // 朝代中立监察 hook·剧本声明才生效·引擎不认任何朝代专名
@@ -159,11 +253,12 @@
   // §3 ───────────── 触发检测 (endTurn) ─────────────
   // 综合 3 通用因子·任 2 达阈即触发·并算 severity
   function _scAssess() {
-    var examiner = _scGetExaminer();
-    if (!examiner) return null;
+    var context = resolveScandalExamContext();
+    var examiner = context.examiner;
+    if (!examiner || !context.examinerId) return null;
     var corruption = _scGetCorruption();
-    var tension = _scGetTension();
-    var bias = (typeof examiner.factionBias === 'number') ? examiner.factionBias : 0;
+    var tension = context.tension;
+    var bias = context.factionBias;
     bias += _scOversightBiasBoost(corruption); // 剧本监察 hook 加权 (中立)
     var th = _scThresh();
     var hits = 0;
@@ -175,7 +270,10 @@
     var sev = (Math.min(1, corruption / 100) + Math.min(1, tension / 100) + Math.min(1, bias)) / 3;
     return {
       corruption: corruption, tension: tension, bias: bias,
-      hits: hits, severity: sev, examiner: examiner
+      hits: hits, severity: sev, examiner: examiner,
+      examinerId: context.examinerId,
+      examinerName: context.examinerName,
+      examId: context.exam && context.exam.id != null ? String(context.exam.id) : ''
     };
   }
 
@@ -204,7 +302,9 @@
     var type = _scPickType(a, seedIdx);
     var reason = _scReasonText(type, a.examiner);
     return _kjSpawnScandal(type, reason, {
-      examinerName: (a.examiner && a.examiner.name) || '',
+      examinerId: a.examinerId,
+      examinerName: a.examinerName || (a.examiner && a.examiner.name) || '',
+      examId: a.examId,
       severity: a.severity,
       bias: a.bias,
       corruption: a.corruption,
@@ -232,7 +332,9 @@
       label: SCANDAL_TYPES[type].label,
       reason: reason || '',
       detail: detail || {},
+      examinerId: (detail && detail.examinerId != null) ? String(detail.examinerId) : '',
       examinerName: (detail && detail.examinerName) || '',
+      examId: (detail && detail.examId != null) ? String(detail.examId) : '',
       severity: sev,
       severityTier: _scSeverityName(sev),
       spawnedTurn: (g && g.turn) || 0,
@@ -267,22 +369,58 @@
   // §5 ───────────── 议政回调 (三路径) ─────────────
   // _kjScandalKeyiCallback(method, ctx)·method = investigate / dismiss / protect
   //   (council/edict 等议政方式 fallback 视作查办)
+  function _scResolveTopicExaminer(td) {
+    td = td || {};
+    var examiner = null;
+    var examinerId = td.examinerId != null ? String(td.examinerId).trim() : '';
+    var examinerName = td.examinerName || td.accused || '';
+    if (examinerId) {
+      examiner = _scFindCharacterById(examinerId);
+      if (!examiner) return { ok: false, reason: 'examiner-not-found' };
+    } else if (examinerName) {
+      var matches = _scFindCharactersByName(examinerName);
+      if (matches.length > 1) return { ok: false, reason: 'examiner-name-ambiguous' };
+      examiner = matches[0] || null;
+      if (!examiner) return { ok: false, reason: 'examiner-not-found' };
+      if (examiner.id == null || !String(examiner.id).trim()) {
+        return { ok: false, reason: 'examiner-missing-stable-id' };
+      }
+      examinerId = String(examiner.id);
+      td.examinerId = examinerId;
+      if (!td.examinerName) td.examinerName = examiner.name || examinerName;
+    } else {
+      return { ok: false, reason: 'examiner-identity-missing' };
+    }
+    if (examiner.alive === false || examiner.dead === true) {
+      return { ok: false, reason: 'examiner-unavailable' };
+    }
+    return {
+      ok: true,
+      examiner: examiner,
+      examinerId: examinerId,
+      examinerName: examiner.name || examinerName || '主考'
+    };
+  }
+
   function _kjScandalKeyiCallback(method, ctx) {
-    if (!_scEnabled()) return;
+    if (!_scEnabled()) return { ok: false, reason: 'feature-disabled' };
     ctx = ctx || {};
     var td = ctx.topicData || {};
     var s = _scState();
-    var examiner = _scGetExaminer();
-    var examinerName = td.examinerName || (examiner && examiner.name) || '主考';
+    var resolved = _scResolveTopicExaminer(td);
+    if (!resolved.ok) return resolved;
+    var examiner = resolved.examiner;
+    var examinerId = resolved.examinerId;
+    var examinerName = resolved.examinerName;
     var tier = td.severityTier || _scSeverityName(td.severity || 0);
     var curY = _getCurYear();
 
     // 议政未通过·不了了之 (主考无事·吏治受损)
     if (ctx.passed === false) {
       _scChron('keju_scandal_dropped', curY + '·' + examinerName + '弊案之议未决·不了了之', ['科举', '弊案']);
-      _scResolveHistory(td, 'unresolved', examinerName);
+      _scResolveHistory(td, 'unresolved', examinerId, examinerName);
       _scAdjust('corruption', +3);
-      return;
+      return { ok: true, outcome: 'unresolved', examinerId: examinerId };
     }
 
     var outcome = _scNormalizeMethod(method);
@@ -290,22 +428,23 @@
     if (outcome === 'protect') {
       // 庇护·压下·主考保全·吏治民心受损·留败露隐患
       _scChron('keju_scandal_protected', curY + '·诏宥' + examinerName + '·科场之事寝议', ['科举', '弊案', '庇护']);
-      if (s) s.coveredUp.push({ examinerName: examinerName, year: curY, type: td.type || '', tier: tier });
+      if (s) s.coveredUp.push({ examinerId: examinerId, examinerName: examinerName, year: curY, type: td.type || '', tier: tier });
       _scAdjust('corruption', +6);
       _scAdjust('minxin', -4);
-      _scAdjustTension(+3);
-      _scResolveHistory(td, 'protected', examinerName);
-      return;
+      _scAdjustTension(+3, examiner);
+      _scResolveHistory(td, 'protected', examinerId, examinerName);
+      return { ok: true, outcome: 'protected', examinerId: examinerId };
     }
 
     if (outcome === 'dismiss') {
       // 罢免·仅去主考之职·不深究
-      if (examiner) _scPunish(examiner, 'dismiss', '坐科场不谨·罢职');
+      var dismissResult = _scPunish(examiner, 'dismiss', '坐科场不谨·罢职');
+      if (!dismissResult.ok) return dismissResult;
       _scChron('keju_scandal_dismissed', curY + '·罢' + examinerName + '典试之任', ['科举', '弊案', '罢免']);
       _scAdjust('corruption', -3);
-      _scAdjustTension(+2);
-      _scResolveHistory(td, 'dismissed', examinerName);
-      return;
+      _scAdjustTension(+2, examiner);
+      _scResolveHistory(td, 'dismissed', examinerId, examinerName);
+      return { ok: true, outcome: 'dismissed', examinerId: examinerId };
     }
 
     // investigate (查办·默认)·按 severity 定罪
@@ -320,12 +459,14 @@
       kind = 'demote'; reasonStr = '坐校士不谨·夺俸记过';
       chronText = curY + '·议' + examinerName + '失察·夺俸记过';
     }
-    if (examiner) _scPunish(examiner, kind, reasonStr);
+    var punishResult = _scPunish(examiner, kind, reasonStr);
+    if (!punishResult.ok) return punishResult;
     _scChron('keju_scandal_investigated', chronText, ['科举', '弊案', '查办']);
     _scAdjust('corruption', -8);   // 肃贪
     _scAdjust('minxin', +3);       // 大快人心
-    _scAdjustTension(+5);          // 牵连树敌
-    _scResolveHistory(td, 'investigated:' + kind, examinerName);
+    _scAdjustTension(+5, examiner);          // 牵连树敌
+    _scResolveHistory(td, 'investigated:' + kind, examinerId, examinerName);
+    return { ok: true, outcome: 'investigated:' + kind, examinerId: examinerId };
   }
 
   function _scNormalizeMethod(method) {
@@ -339,8 +480,19 @@
   // §6 ───────────── 后果应用 (复用标准状态字段·不自造) ─────────────
   // 复用 tm-ai-change-applier 的状态语义：execute→alive=false·exile→_exiled·dismiss→去职·demote→记过
   function _scPunish(ch, kind, reason) {
-    if (!ch) return;
     var g = _scGM();
+    if (!ch || typeof ch !== 'object' || Array.isArray(ch)) {
+      return { ok: false, reason: 'invalid-examiner-object' };
+    }
+    if (ch.id == null || !String(ch.id).trim()) {
+      return { ok: false, reason: 'examiner-missing-stable-id' };
+    }
+    if (!g || !Array.isArray(g.chars) || g.chars.indexOf(ch) < 0) {
+      return { ok: false, reason: 'examiner-not-in-current-world' };
+    }
+    if (ch.alive === false || ch.dead === true) {
+      return { ok: false, reason: 'examiner-unavailable' };
+    }
     var turn = (g && g.turn) || 0;
     if (!Array.isArray(ch.careerHistory)) ch.careerHistory = [];
     if (kind === 'execute') {
@@ -356,6 +508,7 @@
       ch._demerit = (ch._demerit || 0) + 1;
     }
     ch.careerHistory.push({ turn: turn, event: '科场案·' + reason });
+    return { ok: true, examinerId: String(ch.id), kind: kind };
   }
 
   // 通用变量安全调整 (多源·改不动则 noop·不崩)
@@ -370,9 +523,20 @@
     }
   }
 
-  function _scAdjustTension(delta) {
-    var g = _scGM(); if (!g || !g.keju) return;
-    if (typeof g.keju.tension === 'number') g.keju.tension = _clamp(g.keju.tension + delta, 0, 100);
+  function _scAdjustTension(delta, examiner) {
+    var g = _scGM(); if (!g) return;
+    var party = examiner && examiner.party;
+    if (party && typeof _kjUpdateFactionTension === 'function') {
+      _kjUpdateFactionTension({ party: party, delta: delta, reason: '科场弊案处置' });
+      return;
+    }
+    if (party && g._factionTension && Number.isFinite(Number(g._factionTension[party]))) {
+      g._factionTension[party] = _clamp(Number(g._factionTension[party]) + delta, 0, 20);
+      return;
+    }
+    if (g.keju && Number.isFinite(g.keju.tension)) {
+      g.keju.tension = _clamp(g.keju.tension + delta, 0, 100);
+    }
   }
 
   function _clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -383,10 +547,11 @@
     g._chronicle.push({ turn: (g.turn || 0), type: type, text: text, tags: tags || [] });
   }
 
-  function _scResolveHistory(td, resolution, examinerName) {
+  function _scResolveHistory(td, resolution, examinerId, examinerName) {
     var s = _scState(); if (!s) return;
     s.history.push({
       type: (td && td.type) || '',
+      examinerId: examinerId || '',
       examinerName: examinerName || '',
       resolution: resolution,
       year: _getCurYear()
@@ -401,6 +566,7 @@
     window._kjSpawnScandal            = _kjSpawnScandal;
     window._kjScandalKeyiCallback     = _kjScandalKeyiCallback;
     window._kjMaybeRaiseScandalKeyi   = _kjMaybeRaiseScandalKeyi;
+    window.resolveScandalExamContext  = resolveScandalExamContext;
   }
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
@@ -411,7 +577,9 @@
       _kjScandalKeyiCallback: _kjScandalKeyiCallback,
       _kjMaybeRaiseScandalKeyi: _kjMaybeRaiseScandalKeyi,
       // test 用
+      resolveScandalExamContext: resolveScandalExamContext,
       _scAssess: _scAssess,
+      _scPunish: _scPunish,
       _scNormalizeMethod: _scNormalizeMethod,
       _scSeverityName: _scSeverityName,
       SCANDAL_TYPES: SCANDAL_TYPES

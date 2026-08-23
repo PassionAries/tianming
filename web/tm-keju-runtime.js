@@ -360,6 +360,7 @@ function startKejuExam(opts) {
     preliminaryStats: null,
     preliminaryProvincialStats: null,
     // 考官
+    chiefExaminerId: '',
     chiefExaminer: '',
     examinerParty: '',
     examinerStance: '',
@@ -515,6 +516,23 @@ function _kejuUpgradeExamSchema(exam) {
   if (exam.stageStartTurn == null) exam.stageStartTurn = exam.startTurn || GM.turn;
   if (!exam.launchMethod) exam.launchMethod = 'council';
   if (exam.libuSupport === undefined) exam.libuSupport = null;
+  if (exam.chiefExaminerId == null) exam.chiefExaminerId = '';
+  if (!exam.chiefExaminerId && exam.chiefExaminer && Array.isArray(GM.chars)) {
+    var legacyExaminerMatches = GM.chars.filter(function(character) {
+      return character && character.name === exam.chiefExaminer;
+    });
+    if (legacyExaminerMatches.length === 1 && legacyExaminerMatches[0].id != null
+        && String(legacyExaminerMatches[0].id).trim()) {
+      exam.chiefExaminerId = String(legacyExaminerMatches[0].id);
+    }
+  }
+  if (exam.chiefExaminerId && !exam.chiefExaminer && Array.isArray(GM.chars)) {
+    var examinerById = GM.chars.find(function(character) {
+      return character && character.id != null
+        && String(character.id) === String(exam.chiefExaminerId);
+    });
+    if (examinerById) exam.chiefExaminer = examinerById.name || '';
+  }
   if (!exam.chiefExaminerMemorial) exam.chiefExaminerMemorial = null;
   if (!Array.isArray(exam.subExaminers)) exam.subExaminers = [];
   if (!Array.isArray(exam.huishiTopicCandidates)) exam.huishiTopicCandidates = [];
@@ -826,8 +844,13 @@ function selectExaminer(name) {
     toast('\u4e3b\u8003\u5b98\u5fc5\u987b\u4e3a\u73a9\u5bb6\u540c\u52bf\u529b\u7684\u5728\u4efb\u5b98\u5458');
     return;
   }
+  if (ch.id == null || !String(ch.id).trim()) {
+    toast('\u4E3B\u8003\u5B98\u7F3A\u5C11\u7A33\u5B9A\u4EBA\u7269 ID\uFF0C\u65E0\u6CD5\u4EFB\u547D');
+    return;
+  }
   if (typeof _kejuClearUrgentBanner === 'function') _kejuClearUrgentBanner();
-  exam.chiefExaminer = name;
+  exam.chiefExaminerId = String(ch.id);
+  exam.chiefExaminer = ch.name || name;
   exam.examinerParty = ch.party || '';
   exam.examinerStance = ch.stance || ch.personality || '';
   exam.examinerIntelligence = ch.intelligence || 50;

@@ -104,11 +104,11 @@ function openKeyiSession(opts) {
     }
     return true;
   });
-  if (attendees.length < 3) { toast('\u4EAC\u4E2D\u5B98\u5458\u4E0D\u8DB3\u4E09\u4EBA\u00B7\u65E0\u6CD5\u5F00\u79D1\u8BAE'); return; }
+  if (attendees.length < 3) { toast('\u4EAC\u4E2D\u5B98\u5458\u4E0D\u8DB3\u4E09\u4EBA\u00B7\u65E0\u6CD5\u5F00\u79D1\u8BAE'); return false; }
 
   // 弹确认窗·不再挑人
-  if (!confirm('\u5F00\u79D1\u8BAE\uFF1F\n\u5C06\u53EC\u96C6 ' + attendees.length + ' \u540D\u5728\u4EAC\u5B98\u5458\u8BAE\u300C' + _keyiTopicTitle(pendingProposal, '\u79D1\u8BAE\u8BAE\u9898') + '\u300D\u00B7\u8017\u7CBE\u529B 15\u3002')) return;
-  if (typeof _spendEnergy === 'function' && !_spendEnergy(15, '\u79D1\u8BAE')) { toast('\u7CBE\u529B\u4E0D\u8DB3'); return; }
+  if (!confirm('\u5F00\u79D1\u8BAE\uFF1F\n\u5C06\u53EC\u96C6 ' + attendees.length + ' \u540D\u5728\u4EAC\u5B98\u5458\u8BAE\u300C' + _keyiTopicTitle(pendingProposal, '\u79D1\u8BAE\u8BAE\u9898') + '\u300D\u00B7\u8017\u7CBE\u529B 15\u3002')) return false;
+  if (typeof _spendEnergy === 'function' && !_spendEnergy(15, '\u79D1\u8BAE')) { toast('\u7CBE\u529B\u4E0D\u8DB3'); return false; }
   GM.keju._pendingProposal = pendingProposal;
 
   KEYI_STATE = {
@@ -163,6 +163,7 @@ function openKeyiSession(opts) {
   _renderKeyiModal();
   // v3·立刻自动跑两轮流式讨论
   _keyiRunBothRounds();
+  return true;
 }
 
 /** 创建 modal 容器 */

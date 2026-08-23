@@ -183,6 +183,28 @@ check('换科后只处罚条目保存的主考甲',
 check('生成后的 cooldown 阻止同年重复弊案', scandal._kjCheckScandalTriggers() === 0);
 
 world = resetWorld();
+check('队列耐久性 fixture 生成一条待议弊案', scandal._kjCheckScandalTriggers() === 1);
+const queuedScandal = GM.keju._scandal.spawned[0];
+let capturedOpenError = null;
+global.TM = { errors: { capture(error) { capturedOpenError = error; } } };
+global.openKeyiSession = function() { throw new Error('injected agenda open failure'); };
+check('议政界面抛错时弊案仍原样留队且返回失败', scandal._kjMaybeRaiseScandalKeyi() === false
+  && GM.keju._scandal.spawned.length === 1
+  && GM.keju._scandal.spawned[0] === queuedScandal
+  && capturedOpenError && capturedOpenError.message === 'injected agenda open failure');
+global.openKeyiSession = function() { return false; };
+check('议政界面明确取消时不消费弊案', scandal._kjMaybeRaiseScandalKeyi() === false
+  && GM.keju._scandal.spawned.length === 1);
+let openedTopic = null;
+global.openKeyiSession = function(options) { openedTopic = options; return true; };
+check('首次失败后第二次成功只消费原案一次', scandal._kjMaybeRaiseScandalKeyi() === true
+  && openedTopic && openedTopic.topicData === queuedScandal
+  && GM.keju._scandal.spawned.length === 0
+  && scandal._kjMaybeRaiseScandalKeyi() === false);
+delete global.openKeyiSession;
+delete global.TM;
+
+world = resetWorld();
 const postExamEntry = spawnOne();
 P.keju.currentExam.stage = 'finished';
 P.keju.currentExam.chiefExaminerId = '';

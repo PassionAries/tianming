@@ -358,12 +358,24 @@
   function _kjMaybeRaiseScandalKeyi() {
     if (!_scEnabled()) return false;
     if (typeof openKeyiSession !== 'function') return false;
-    var list = _kjConsumeScandalForAgenda();
-    if (!list.length) return false;
+    var state = _scState();
+    if (!state || !Array.isArray(state.spawned) || !state.spawned.length) return false;
+    var entry = state.spawned[0];
     try {
-      openKeyiSession({ topicType: 'scandal', topicData: list[0] });
+      var opened = openKeyiSession({ topicType: 'scandal', topicData: entry });
+      if (opened !== true) return false;
+      // 只消费本次实际打开的同一条记录；失败/取消/重入均保留原队列。
+      if (state.spawned[0] === entry) state.spawned.shift();
+      else {
+        var entryIndex = state.spawned.indexOf(entry);
+        if (entryIndex < 0) return false;
+        state.spawned.splice(entryIndex, 1);
+      }
       return true;
-    } catch (_) { return false; }
+    } catch (error) {
+      _scCaptureError(error, '打开科场弊案议政失败');
+      return false;
+    }
   }
 
   // §5 ───────────── 议政回调 (三路径) ─────────────

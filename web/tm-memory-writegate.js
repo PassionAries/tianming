@@ -13,6 +13,16 @@
     auditEvents: 120
   };
 
+  function bumpEdgeRevision(GM) {
+    var retrieval = root.TM && root.TM.MemoryRetrieval;
+    if (retrieval && typeof retrieval.bumpRevision === 'function') retrieval.bumpRevision(GM, 'edges');
+  }
+
+  function bumpMemoryRevision(GM) {
+    var retrieval = root.TM && root.TM.MemoryRetrieval;
+    if (retrieval && typeof retrieval.bumpRevision === 'function') retrieval.bumpRevision(GM, 'memory');
+  }
+
   function clean(value, maxLen) {
     var s = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
     return maxLen ? s.slice(0, maxLen) : s;
@@ -305,6 +315,7 @@
       source: 'MemoryWriteGate'
     };
     GM._memEdges.push(edge);
+    bumpEdgeRevision(GM);
     var MC = root.TM && root.TM.MemoryControls;
     if (MC && typeof MC.pruneControls === 'function') {
       try { MC.pruneControls(GM, opts); } catch (_) {}
@@ -625,6 +636,7 @@
     GM._memoryAuditEvents.push({ id: item.id, action: 'enqueue', status: item.status, turn: item.enqueuedAtTurn });
     if (item.status === 'active' && item.reviewStatus === 'accepted') flushAccepted(GM, { reviewer: item.reviewedBy || 'system', governanceCooldownTurns: opts && opts.governanceCooldownTurns });
     pruneQueues(GM, opts);
+    bumpMemoryRevision(GM);
     return item;
   }
 
@@ -665,6 +677,7 @@
       items: [item]
     });
     pruneQueues(GM, opts);
+    bumpMemoryRevision(GM);
     return item;
   }
 
@@ -691,6 +704,7 @@
       items: [item]
     });
     pruneQueues(GM, opts);
+    bumpMemoryRevision(GM);
     return item;
   }
 
@@ -737,6 +751,7 @@
         accepted: added,
         items: addedItems
       });
+      bumpMemoryRevision(GM);
     }
     pruneQueues(GM, opts);
     return { added: added, total: GM._memoryAccepted.length };

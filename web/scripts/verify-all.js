@@ -147,6 +147,7 @@ const checks = [
   { name: 'huji-deep-fields-and-presets', file: 'smoke-huji-deep-fields-and-presets.js', estSec: 1, expectExit: 0 },
   { name: 'memory-read-contract', file: 'smoke-memory-read-contract.js', estSec: 1, expectExit: 0 },
   { name: 'memory-manifest', file: 'smoke-memory-manifest.js', estSec: 1, expectExit: 0 },
+  { name: 'memory-relation-index', file: 'smoke-memory-relation-index.js', estSec: 2, expectExit: 0 },
   { name: 'memory-compress-consumer', file: 'smoke-memory-compress-consumer.js', estSec: 1, expectExit: 0 },  // 2026-07-09·记忆 M1 压缩消费者
   { name: 'keju-indicators', file: 'smoke-keju-indicators.js', estSec: 1, expectExit: 0 },  // 2026-07-09·科举 J1 三指针
   { name: 'official-bundle-parity', file: 'smoke-official-bundle-parity.js', estSec: 1, expectExit: 0 },  // 2026-07-09·剧本单一真源

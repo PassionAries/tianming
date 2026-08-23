@@ -6,6 +6,11 @@
 
   var ns = root.TM.MemoryContextCompiler = root.TM.MemoryContextCompiler || {};
 
+  function perfWithSpan(name, fn, metadata) {
+    var perf = root.TM && root.TM.perf;
+    return perf && typeof perf.withSpan === 'function' ? perf.withSpan(name, fn, metadata) : fn();
+  }
+
   var SECTION_ORDER = [
     'coreFacts',
     'courtRecords',
@@ -276,7 +281,75 @@
       '  </' + meta[0] + '>\n';
   }
 
+  function perfCount(name, delta) {
+    var perf = root.TM && root.TM.perf;
+    if (perf && typeof perf.count === 'function') perf.count(name, delta == null ? 1 : delta);
+  }
+
+  function tokenCharCounts(text) {
+    var value = String(text || '');
+    var cjk = 0;
+    var other = 0;
+    var usesGlobalEstimator = typeof root.estimateTokens === 'function';
+    for (var i = 0; i < value.length; i++) {
+      var code = value.charCodeAt(i);
+      var isCjk = usesGlobalEstimator
+        ? ((code >= 0x4e00 && code <= 0x9fff) || (code >= 0x3040 && code <= 0x30ff))
+        : (code >= 0x3400 && code <= 0x9fff);
+      if (isCjk) cjk++;
+      else other++;
+    }
+    return { cjk: cjk, other: other };
+  }
+
+  function tokenCostFromCounts(counts) {
+    var usesGlobalEstimator = typeof root.estimateTokens === 'function';
+    var cost = Math.ceil(counts.cjk * (usesGlobalEstimator ? 1.3 : 0.75) + counts.other * 0.25);
+    return counts.cjk || counts.other ? Math.max(1, cost) : 0;
+  }
+
+  function buildSectionPlan(key, hits) {
+    var meta = SECTION_META[key] || [key, key];
+    var opening = '  <' + meta[0] + ' label="' + xml(meta[1]) + '">\n';
+    var closing = '  </' + meta[0] + '>\n';
+    var fragments = arr(hits).map(function(hit) {
+      perfCount('memory.renderedFragments', 1);
+      return renderHit(hit);
+    });
+    var base = tokenCharCounts(opening + closing);
+    var prefixCounts = [{ cjk: base.cjk, other: base.other }];
+    var fragmentTokenCosts = [];
+    fragments.forEach(function(fragment) {
+      var counts = tokenCharCounts(fragment);
+      var previous = prefixCounts[prefixCounts.length - 1];
+      prefixCounts.push({ cjk: previous.cjk + counts.cjk, other: previous.other + counts.other });
+      fragmentTokenCosts.push(tokenCostFromCounts(counts));
+    });
+    return {
+      key: key,
+      opening: opening,
+      closing: closing,
+      fragments: fragments,
+      prefixCounts: prefixCounts,
+      fragmentTokenCosts: fragmentTokenCosts,
+      text: fragments.length ? opening + fragments.join('') + closing : '',
+      textForCount: function(count) {
+        if (!count) return '';
+        return opening + fragments.slice(0, count).join('') + closing;
+      },
+      tokenCostForCount: function(count) {
+        return count > 0 ? tokenCostFromCounts(prefixCounts[Math.min(count, prefixCounts.length - 1)]) : 0;
+      }
+    };
+  }
+
   function compileHits(hits, opts) {
+    return perfWithSpan('memory.compile', function() {
+      return compileHitsInner(hits, opts);
+    }, { hitCount: Array.isArray(hits) ? hits.length : 0 });
+  }
+
+  function compileHitsInner(hits, opts) {
     opts = opts || {};
     var suppressed = arr(opts.suppressed).slice();
     var normalizedInput = (Array.isArray(hits) ? hits : [])
@@ -307,8 +380,12 @@
       sections[sectionFor(hit)].push(hit);
     });
 
+    var sectionPlans = {};
+    SECTION_ORDER.forEach(function(key) {
+      sectionPlans[key] = buildSectionPlan(key, sections[key]);
+    });
     var body = SECTION_ORDER.map(function(key) {
-      return renderSection(key, sections[key]);
+      return sectionPlans[key].text;
     }).filter(Boolean).join('');
     var text = '<memory-context schema-version="memory-context/v0">\n' + body + '</memory-context>\n';
     var packed = null;
@@ -329,7 +406,8 @@
       // S4: 低权威/大体量 section 的 per-zone 上限(占预算比)，防其 balloon 挤占其余高价值区。
       var ZONE_CAP_FRAC = { warnings: 0.25 };
       SECTION_ORDER.forEach(function(key) {
-        var sectionText = renderSection(key, sections[key]);
+        var plan = sectionPlans[key];
+        var sectionText = plan.text;
         if (!sectionText) return;
         var z = {
           id: 'memory-context-' + key,
@@ -344,22 +422,20 @@
         if (key === 'coreFacts') z.mustKeep = true;
         z.compress = function(info) {
           var limit = info && info.maxTokens || 0;
-          var rows = sections[key] || [];
           var low = 0;
-          var high = rows.length;
-          var best = '';
+          var high = plan.fragments.length;
+          var bestCount = 0;
           while (low <= high) {
             var mid = Math.floor((low + high) / 2);
-            var candidate = mid > 0 ? renderSection(key, rows.slice(0, mid)) : '';
-            var cost = CZ.estimateTokens(candidate);
-            if (candidate && cost <= limit) {
-              best = candidate;
+            var cost = plan.tokenCostForCount(mid);
+            if (mid > 0 && cost <= limit) {
+              bestCount = mid;
               low = mid + 1;
             } else {
               high = mid - 1;
             }
           }
-          return best;
+          return plan.textForCount(bestCount);
         };
         if (ZONE_CAP_FRAC[key]) z.maxTokens = Math.max(1, Math.floor(maxTokens * ZONE_CAP_FRAC[key]));
         zones.push(z);
@@ -374,6 +450,15 @@
       ? packed.tokenEstimate
       : (CZ && typeof CZ.estimateTokens === 'function' ? CZ.estimateTokens(text) : 0);
 
+    var compilationIndex = {
+      renderedFragments: Object.create(null),
+      fragmentTokenCosts: Object.create(null)
+    };
+    SECTION_ORDER.forEach(function(key) {
+      compilationIndex.renderedFragments[key] = sectionPlans[key].fragments;
+      compilationIndex.fragmentTokenCosts[key] = sectionPlans[key].fragmentTokenCosts;
+    });
+
     return {
       ok: !packed || packed.ok !== false,
       reason: packed && packed.reason || '',
@@ -384,6 +469,7 @@
       zones: packed ? packed.items : [],
       suppressed: suppressed,
       mandatoryOverflow: packed ? packed.mandatoryOverflow : [],
+      compilationIndex: compilationIndex,
       diagnostics: packed ? packed.diagnostics : { kept: normalized.map(function(hit) { return { id: hit.id, source: hit.source, stage: 'compiled' }; }), suppressed: [] },
       tokenEstimate: tokenEstimate,
       maxTokens: maxTokens

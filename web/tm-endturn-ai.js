@@ -3844,7 +3844,7 @@
       try {
         if (p1 && Array.isArray(p1.edict_relations) && p1.edict_relations.length > 0) {
           if (!Array.isArray(GM._edictRelations)) GM._edictRelations = [];
-          var _curT = GM.turn || 1;
+          var _relationAdded = false, _curT = GM.turn || 1;
           p1.edict_relations.forEach(function(er) {
             if (!er || !er.from || !er.to || !er.type) return;
             var validTypes = ['supersedes', 'contradicts', 'continues', 'elaborates'];
@@ -3855,10 +3855,10 @@
               type: er.type,
               reason: String(er.reason || '').slice(0, 80),
               turn: _curT
-            });
+            }); _relationAdded = true;
           });
-          // LRU 100 条
           if (GM._edictRelations.length > 100) GM._edictRelations = GM._edictRelations.slice(-100);
+          if (_relationAdded && global.TM && global.TM.MemoryRetrieval) global.TM.MemoryRetrieval.bumpRevision(GM, 'edges');
           _dbg('[EdictRelations] 本回合新增', p1.edict_relations.length, '条·总计', GM._edictRelations.length);
         }
       } catch(_erE) { _dbg('[EdictRelations] 解析失败:', _erE); }

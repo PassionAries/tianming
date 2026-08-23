@@ -8,6 +8,11 @@
   var DEFAULT_CONTROL_LIMIT = 80;
   var DEFAULT_EDGE_LIMIT = 80;
 
+  function bumpEdgeRevision(GM) {
+    var retrieval = root.TM && root.TM.MemoryRetrieval;
+    if (retrieval && typeof retrieval.bumpRevision === 'function') retrieval.bumpRevision(GM, 'edges');
+  }
+
   function clean(value, maxLen) {
     var s = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
     return maxLen ? s.slice(0, maxLen) : s;
@@ -36,6 +41,7 @@
     if (!limit || GM._memEdges.length <= limit) return 0;
     var removed = GM._memEdges.length - limit;
     GM._memEdges.splice(0, removed);
+    bumpEdgeRevision(GM);
     return removed;
   }
 
@@ -159,6 +165,7 @@
         turn: Number((GM && GM.turn) || opts.turn || 0),
         source: 'memoryControls'
       });
+      bumpEdgeRevision(GM);
       pruneControls(GM, opts);
     }
     return ctrl;

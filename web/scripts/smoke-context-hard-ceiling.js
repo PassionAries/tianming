@@ -11,6 +11,7 @@ const zoneSource = fs.readFileSync(path.join(ROOT, 'tm-context-zones.js'), 'utf8
 const compilerSource = fs.readFileSync(path.join(ROOT, 'tm-memory-context-compiler.js'), 'utf8');
 const infraSource = fs.readFileSync(path.join(ROOT, 'tm-ai-infra.js'), 'utf8');
 const coreSource = fs.readFileSync(path.join(ROOT, 'tm-endturn-core.js'), 'utf8');
+const endturnAiSource = fs.readFileSync(path.join(ROOT, 'tm-endturn-ai.js'), 'utf8');
 
 function sliceFunction(source, marker) {
   const start = source.indexOf(marker);
@@ -124,6 +125,11 @@ function compileLongCampaign(turn) {
     buildIndices() {},
     renderGameState() {},
     closeTurnResult() {},
+    _buildSaveState(options) {
+      return { GM: JSON.parse(JSON.stringify(options.gm)), P: JSON.parse(JSON.stringify(options.p)) };
+    },
+    _tmAdoptCommittedWorldSnapshot() { return true; },
+    _tmInvalidateCommittedWorldSnapshot() {},
     window: null
   };
   tx.window = tx;
@@ -137,6 +143,7 @@ function compileLongCampaign(turn) {
     'function _tmEndTurnTransactionCurrent(',
     'function _tmReportEndTurnBoundaryError(',
     'function _tmRequestEndTurnDesktopAutoSaveFlush(',
+    'function _tmRestoreCommittedBaselineAfterRollback(',
     'function _tmRollbackEndTurnTransaction('
   ].forEach((marker) => vm.runInContext(sliceFunction(coreSource, marker), tx));
   const before = JSON.parse(JSON.stringify(tx.GM));
@@ -159,6 +166,73 @@ function compileLongCampaign(turn) {
   assert.strictEqual(transaction.rolledBack, true);
   assert.strictEqual(transaction.committed, false);
 }
+
+// Execute the same final SC1 request constructor and production call options used by runMain.
+const sc1Runtime = {
+  console,
+  Date,
+  Math,
+  JSON,
+  Number,
+  String,
+  Object,
+  Array,
+  Error,
+  estimateTokens(text) {
+    const value = String(text || '');
+    let cjk = 0;
+    let other = 0;
+    for (const char of value) {
+      if (/[^\x00-\xff]/.test(char)) cjk++;
+      else other++;
+    }
+    return Math.ceil(cjk * 1.3 + other * 0.25);
+  },
+  getPromptBudget() {
+    return { contextK: 8, budget: 6144, warn80: 4915, warn95: 5836 };
+  },
+  window: null
+};
+sc1Runtime.window = sc1Runtime;
+sc1Runtime.globalThis = sc1Runtime;
+vm.createContext(sc1Runtime);
+vm.runInContext(endturnAiSource, sc1Runtime, { filename: 'tm-endturn-ai.js' });
+const sc1Api = sc1Runtime.TM.Endturn.AI.subcalls;
+const finalRule = '=== 输出格式强约束 (FINAL RULE·不可违反) === YOU MUST RETURN JSON ONLY.';
+const assembledSc1Body = {
+  model: 'test-model',
+  messages: [
+    { role: 'system', content: 'SC1 system truth '.repeat(220) },
+    {
+      role: 'user',
+      content: '玩家输入与权威账本 '.repeat(900)
+        + '\n=== SC1_PRE_CONTEXT ===\n' + '持续法令与记忆 '.repeat(900)
+        + '\n=== sc1q 硬性要求 ===\n' + Array.from({ length: 5 }, (_, i) => (i + 1) + '. required action ' + '甲'.repeat(100)).join('\n')
+        + '\n=== 非常规举措 ===\n' + '异常链路 '.repeat(300)
+        + '\n' + finalRule
+    }
+  ],
+  response_format: {
+    type: 'json_schema',
+    json_schema: { name: 'sc1', strict: true, schema: { type: 'object', properties: { turn_summary: { type: 'string' } } } }
+  },
+  max_tokens: 2048
+};
+const finalizedSc1 = sc1Api.finalizeSc1RequestBody(assembledSc1Body, {
+  contextTokens: 8192,
+  completionTokens: 2048
+});
+assert(finalizedSc1.diagnostics.rawInputTokens > finalizedSc1.diagnostics.finalInputTokens,
+  'the real final SC1 constructor trims after memory/actions/anomaly/final rules are appended');
+assert(finalizedSc1.diagnostics.finalInputTokens <= finalizedSc1.diagnostics.inputTokenLimit);
+assert(finalizedSc1.diagnostics.finalTotalTokens <= finalizedSc1.diagnostics.contextTokens,
+  'system + final user + schema overhead + completion reserve obey the physical context ceiling');
+assert(finalizedSc1.body.messages[1].content.includes(finalRule), 'final JSON rule remains in the retained tail');
+const productionSc1Options = sc1Api.sc1ProductionCallOptions('结构化数据',
+  sc1Api.createSc1ContextOverflowReducer({ contextTokens: 8192, completionTokens: 2048 }));
+assert.strictEqual(productionSc1Options.id, 'sc1');
+assert.strictEqual(typeof productionSc1Options.contextOverflowReducer, 'function',
+  'the production SC1 call carries the one-shot context reducer');
 
 async function testContextLengthRetry() {
   const requests = [];
@@ -196,17 +270,17 @@ async function testContextLengthRetry() {
   ai.globalThis = ai;
   vm.createContext(ai);
   vm.runInContext(infraSource, ai, { filename: 'tm-ai-infra.js' });
-  const original = { max_tokens: 10, messages: [{ role: 'user', content: '超长上下文'.repeat(1000) }] };
+  const original = assembledSc1Body;
   const result = await ai._aiFetchWithRetryInner('https://example.invalid/v1', original, null, {
     apiKey: 'test-key',
     maxRetries: 3,
-    contextOverflowReducer(body) {
-      return Object.assign({}, body, { messages: [{ role: 'user', content: '严格压缩上下文' }] });
-    }
+    contextOverflowReducer: productionSc1Options.contextOverflowReducer
   });
   assert.strictEqual(result.choices[0].message.content, 'ok');
   assert.strictEqual(requests.length, 2, 'context length 400 gets exactly one stricter emergency retry');
   assert(JSON.stringify(requests[1]).length < JSON.stringify(requests[0]).length);
+  assert.strictEqual(requests[1].response_format.type, 'json_object',
+    'SC1 emergency retry compacts strict schema overhead as well as user context');
 
   let failedRequests = 0;
   ai.fetch = async () => {

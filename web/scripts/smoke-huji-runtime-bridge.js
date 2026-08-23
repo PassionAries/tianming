@@ -132,6 +132,7 @@ sandbox.GM = {
 };
 
 vm.createContext(sandbox);
+load('tm-perf.js', sandbox);
 load('tm-social-political-signals.js', sandbox);
 load('tm-player-action-signals.js', sandbox);
 load('tm-minxin-ledger.js', sandbox);
@@ -201,11 +202,45 @@ sandbox.TM.PlayerActionSignals.record(sandbox.GM, {
 Bridge.maintain(sandbox.GM, { scenario, turn: 88, source: 'smoke-player-scan', includePlayerSignals: true });
 assert(sandbox.GM._hujiRuntimeBridge.operations.some(x => x.text.indexOf('招抚流民') >= 0), 'bridge should scan player action signals');
 
+const firstHardLinkPass = Bridge.maintain(sandbox.GM, { scenario, turn: 88, source: 'smoke-before-hard-links' });
 sandbox.TM.MinxinHardLinks.tick(sandbox.GM, { turn: 88, source: 'smoke-hard-links' });
-sandbox.TM.MinxinHardLinkConsumers.consume(sandbox.GM, { turn: 88, source: 'smoke-hard-link-consumer' });
-Bridge.maintain(sandbox.GM, { scenario, turn: 88, source: 'smoke-after-hard-links' });
+const hardLinkConsumerResult = sandbox.TM.MinxinHardLinkConsumers.consume(sandbox.GM, { turn: 88, source: 'smoke-hard-link-consumer' });
+Bridge.maintainAfterHardLinks(sandbox.GM, firstHardLinkPass, hardLinkConsumerResult, { scenario, turn: 88, source: 'smoke-after-hard-links' });
 assert(sandbox.GM.hukou.minxinConsumer, 'bridge should coexist with minxin hard-link consumer');
 assert(sandbox.GM.population.national.effectiveTaxHouseholds === sandbox.GM.hukou.effectiveTaxHouseholds, 'effective tax households should stay synchronized');
+
+sandbox.TM.perf.reset();
+const skippedSecondPass = Bridge.maintainAfterHardLinks(sandbox.GM, firstHardLinkPass, {
+  dirtyDomains: {
+    populationChanged: false,
+    hukouChanged: false,
+    corveeChanged: false,
+    militaryPoolChanged: false,
+    fiscalHardEffectChanged: false,
+    dirtyRegionIds: [],
+    globalPopulationChanged: false
+  }
+}, { scenario, turn: 88, source: 'smoke-after-hard-links-no-dirty' });
+assert(skippedSecondPass && skippedSecondPass.skipped, 'second maintain should be skipped when hard-link consumers report no huji dirty domain');
+assert(sandbox.TM.perf.workReport().counters['huji.secondPassSkipped'] === 1, 'skip should increment the deterministic work counter');
+assert(!sandbox.TM.perf.workReport().counters['huji.fullMaintainCount'], 'skip should not visit the full huji ledger');
+
+sandbox.TM.perf.reset();
+const dirtyFallback = Bridge.maintainAfterHardLinks(sandbox.GM, firstHardLinkPass, {
+  dirtyDomains: {
+    populationChanged: false,
+    hukouChanged: true,
+    corveeChanged: false,
+    militaryPoolChanged: false,
+    fiscalHardEffectChanged: false,
+    dirtyRegionIds: ['capital'],
+    globalPopulationChanged: false
+  }
+}, { scenario, turn: 88, source: 'smoke-after-hard-links-dirty' });
+assert(dirtyFallback && dirtyFallback.ok && !dirtyFallback.skipped, 'dirty huji inputs should conservatively run the second maintain');
+assert(dirtyFallback.incrementalFallbackReason === 'full-maintain-required-for-cross-ledger-invariants', 'single-region dirty state should record the explicit safe full-maintain fallback reason');
+assert(sandbox.TM.perf.workReport().counters['huji.fullMaintainCount'] === 1, 'dirty fallback should execute one full second pass');
+assert(sandbox.TM.perf.workReport().counters['huji.leafVisits'] === 3, 'dirty fallback should report exact leaf visits');
 
 const prompt = Bridge.formatForPrompt(sandbox.GM, { limit: 8 });
 assert(/Huji Runtime Bridge/.test(prompt), 'prompt should identify bridge');

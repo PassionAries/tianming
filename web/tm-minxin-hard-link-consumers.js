@@ -283,9 +283,32 @@
     });
   }
 
+  function dirtyScalarState(root) {
+    var national = root && root.population && root.population.national || {};
+    var hukou = root && root.hukou || {};
+    var military = root && root.military || {};
+    var guoku = root && root.guoku || {};
+    var fiscal = root && root.fiscal || {};
+    return {
+      population: [national.mouths, national.households, national.ding, national.hiddenCount, national.fugitives, national.effectiveTaxHouseholds],
+      hukou: [hukou.registeredHouseholds, hukou.mouths, hukou.registeredMouths, hukou.estimatedHidden, hukou.refugees, hukou.effectiveTaxHouseholds, hukou.taxBaseRatio],
+      military: [military.availableRecruits, military.recruitmentCapacity, military.approvedRecruitment, military.recruitmentShortfall],
+      fiscal: [guoku.turnIncome, guoku.monthlyIncome, fiscal.effectiveRevenue]
+    };
+  }
+
+  function scalarListChanged(before, after) {
+    if (!before || !after || before.length !== after.length) return true;
+    for (var i = 0; i < before.length; i++) {
+      if (before[i] !== after[i]) return true;
+    }
+    return false;
+  }
+
   function consume(root, options) {
     root = pickRoot(root);
     options = options || {};
+    var beforeDirtyState = dirtyScalarState(root);
     var turn = Number(options.turn != null ? options.turn : root.turn) || 0;
     var store = ensureStore(root);
     var snapshot = getHardLinkSnapshot(root, options);
@@ -306,7 +329,22 @@
     pushEvent(store, 'hukouConsumer', hukou, turn);
     pushEvent(store, 'executionConsumer', execution, turn);
     recordSignal(root, summary);
-    return { ok: true, summary: clone(summary), events: store.events.slice(-4).map(clone) };
+    var afterDirtyState = dirtyScalarState(root);
+    var dirtyDomains = {
+      populationChanged: scalarListChanged(beforeDirtyState.population, afterDirtyState.population),
+      hukouChanged: scalarListChanged(beforeDirtyState.hukou, afterDirtyState.hukou),
+      corveeChanged: false,
+      militaryPoolChanged: scalarListChanged(beforeDirtyState.military, afterDirtyState.military),
+      fiscalHardEffectChanged: scalarListChanged(beforeDirtyState.fiscal, afterDirtyState.fiscal),
+      dirtyRegionIds: [],
+      globalPopulationChanged: scalarListChanged(beforeDirtyState.population, afterDirtyState.population)
+    };
+    return {
+      ok: true,
+      summary: clone(summary),
+      events: store.events.slice(-4).map(clone),
+      dirtyDomains: dirtyDomains
+    };
   }
 
   function snapshot(root, options) {

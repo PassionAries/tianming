@@ -177,7 +177,10 @@
     var bg = String(ch.background || '');
     if (tier.indexOf('imperial') >= 0 || statusTier.indexOf('imperial') >= 0 || ch.isRoyal) return 'imperial';
     if (/general|commander|military|marshal|将|帅|都督|总兵|提督/.test(title + bg)) return 'militaryOfficial';
-    if (ch.officialTitle || (num(ch.rankLevel) >= 1 && num(ch.rankLevel) <= 18) || (num(ch.rank) >= 1 && num(ch.rank) <= 9)) return 'civilOfficial';
+    var legacyRank = Number(ch.rankLevel !== undefined ? ch.rankLevel : ch.rank);
+    if (ch.officialTitle
+      || (typeof global.getRankMeta === 'function' && global.getRankMeta(ch))
+      || (Number.isFinite(legacyRank) && legacyRank >= 1 && legacyRank <= 18)) return 'civilOfficial';
     if (tier.indexOf('noble') >= 0 || statusTier.indexOf('noble') >= 0 || /公|侯|伯/.test(title)) return 'noble';
     if (tier.indexOf('merchant') >= 0 || statusTier.indexOf('merchant') >= 0 || /商/.test(bg)) return 'merchant';
     if (tier.indexOf('land') >= 0 || /地主|乡绅/.test(bg)) return 'landlord';
@@ -254,7 +257,7 @@
       bribery:           c1(0.1 + (money < 0 ? 0.4 : 0) + (money < BW_MIDCLASS ? 0.2 : 0) + ambition / 100 * 0.3),
       embezzle:          c1(0.05 + (money < 0 ? 0.3 : 0) + corruption * 0.5 + (ptMoney > 100000 ? 0.1 : 0)),
       politicalClout:    Math.round(clamp(0.2 + fame / 100 * 0.3 + merit / 15000 * 0.3 + money / (BW_RICH * 5) * 0.2, 0, 2) * 100) / 100,
-      luxury:            c1(0.2 + money / BW_RICH * 0.4 + (num(ch.rankLevel) >= 1 && num(ch.rankLevel) <= 2 ? 0.2 : 0)),
+      luxury:            c1(0.2 + money / BW_RICH * 0.4 + (rankIsHigh(ch, 2) ? 0.2 : 0)),
       partyFunding:      c1(money / BW_RICH * 0.5 + ptMoney / 1000000 * 0.3),
       antiCorruptSens:   c1(0.5 - (fame < 0 ? 0.3 : 0) - clanInf * 0.3),
       resignRisk:        c1(stress / 100 * 0.4 + (100 - health) / 100 * 0.3 + (fame < -50 ? 0.2 : 0)),
@@ -319,6 +322,22 @@
     return 1;
   }
 
+  function rankSeniority(ch) {
+    return typeof global.getRankSeniorityScore === 'function' ? global.getRankSeniorityScore(ch) : 0;
+  }
+  function rankInferiority(ch) {
+    return typeof global.getRankInferiorityScore === 'function' ? global.getRankInferiorityScore(ch) : 0;
+  }
+  function rankSalary(ch) {
+    return typeof global.getRankSalary === 'function' ? global.getRankSalary(ch) : 0;
+  }
+  function rankGrainSalary(ch) {
+    return typeof global.getRankGrainSalary === 'function' ? global.getRankGrainSalary(ch) : 0;
+  }
+  function rankIsHigh(ch, topCount) {
+    return typeof global.isHighOfficial === 'function' ? global.isHighOfficial(ch, topCount) : false;
+  }
+
   // ═════════════════════════════════════════════════════════════
   // 资源模型保障
   // ═════════════════════════════════════════════════════════════
@@ -329,8 +348,8 @@
     if (!ch) return 0;
     var f = 0;
     // 官品越高，默认公众认知越广（但不一定正面）
-    var rank = 9 - (ch.rankLevel || 9);  // 1-9，越小越高
-    if (rank > 0) f += rank * 2;  // 正一品约 +18
+    var rank = rankSeniority(ch);
+    if (rank > 0) f += rank * 2;
     // 廉洁度高 → 正向声望
     if (ch.integrity != null) f += (ch.integrity - 50) * 0.4;  // +/- 20
     // 五常之"信"影响名望
@@ -378,8 +397,8 @@
     if (ch.integrity > 70) v += 30;
     else if (ch.integrity < 30) v -= 20;  // 贪墨→贤能低
     // 官品
-    var rankN = 10 - (ch.rankLevel || 9);
-    if (rankN > 0 && rankN <= 9) v += rankN * 8;  // 正一品约 +72
+    var rankN = rankSeniority(ch);
+    if (rankN > 0) v += rankN * 8;
     // 学识/科举
     if (ch.background && /进士/.test(ch.background)) v += 30;
     else if (ch.background && /举人/.test(ch.background)) v += 12;
@@ -619,8 +638,8 @@
     // 1. 俸禄
     salary: function(ch) {
       if (!ch.officialTitle) return 0;
-      var rank = ch.rankLevel || 5;
-      var base = rank * 15;  // 每阶 15 两/月
+      var base = rankSalary(ch);
+      if (base <= 0) return 0;
       var classMult = (CLASS_PARAMS[ch.socialClass] || {}).salaryMult || 1;
       // 养廉银
       var reformMult = 1;
@@ -632,8 +651,7 @@
     // 2. 俸米
     salaryGrain: function(ch) {
       if (!ch.officialTitle) return 0;
-      var rank = ch.rankLevel || 5;
-      return rank * 2;  // 石/月
+      return rankGrainSalary(ch);
     },
     // 3. 赏赐
     imperialReward: function(ch) {
@@ -668,8 +686,7 @@
         deptCorr = GM.corruption.subDepts[ch.department].true;
       }
       var rate = (100 - (ch.integrity || 50)) / 100 * cls.corruptionAccept * (deptCorr / 100) * 0.2;
-      var rank = ch.rankLevel || 5;
-      return rank * 30 * rate;  // 每月
+      return rankSeniority(ch) * 30 * rate;  // 每月
     },
     // 7. 挪用（侵公）
     embezzle: function(ch) {
@@ -685,7 +702,7 @@
       if (ch.integrity > 40) return 0;
       var cls = CLASS_PARAMS[ch.socialClass] || {};
       if (cls.corruptionAccept < 0.4) return 0;
-      return (ch.rankLevel || 1) * 8 * (50 - (ch.integrity||50)) / 50;
+      return rankSeniority(ch) * 8 * (50 - (ch.integrity||50)) / 50;
     },
     // 9. 继承
     inheritance: function(ch) {
@@ -714,8 +731,8 @@
     },
     // 14. 投献（族人/门生孝敬）
     personalTribute: function(ch) {
-      if ((ch.rankLevel || 0) < 15) return 0;  // 高官才有
-      return (ch.rankLevel || 0) * (ch.influence || 50) / 50 * 5;
+      if (!rankIsHigh(ch)) return 0;  // 高官才有
+      return rankSeniority(ch) * (ch.influence || 50) / 50 * 5;
     },
     // 15. 商铺营收（细粒度·shops[] 各店年营收/12）
     shopRevenue: function(ch) {
@@ -795,13 +812,12 @@
     // 6. 驭下（塞银/孝敬上司）
     patronage: function(ch) {
       if (!ch.officialTitle) return 0;
-      var rank = ch.rankLevel || 1;
-      return rank * 10;  // 低阶官员孝敬多
+      return rankInferiority(ch) * 10;  // 低阶官员孝敬多
     },
     // 7. 扶亲
     clanSupport: function(ch) {
       if (!ch.family || !ch.family.clanId) return 0;
-      return (ch.rankLevel || 1) * 5;
+      return rankSeniority(ch) * 5;
     },
     // 8. 香火供奉（宗教）
     religiousOffering: function(ch) {
@@ -813,7 +829,8 @@
     },
     // 10. 医药
     medicine: function(ch) {
-      if ((ch.health || 100) < 60) return 100 + (60 - ch.health) * 10;
+      var health = num(firstDefined(ch.health, ch.resources && ch.resources.health, 100));
+      if (health < 60) return 100 + (60 - health) * 10;
       return 20;
     },
     // 11. 罚款/赎罪
@@ -1135,7 +1152,7 @@
   function tickStressHealth(ch, mr) {
     // 压力消长
     var stressDelta = 0;
-    if (ch.officialTitle && (ch.rankLevel || 0) > 15) stressDelta += 0.3;  // 高官压力
+    if (ch.officialTitle && rankIsHigh(ch)) stressDelta += 0.3;  // 高官压力
     if (ch._recentFailures) stressDelta += ch._recentFailures * 2;
     if (ch.health < 50) stressDelta += 0.5;
     // 自然衰减
@@ -1149,7 +1166,7 @@
       if (_hobN > 0) stressDelta -= Math.min(_hobN, 3) * 0.3;   // 每项 -0.3·至多三项(-0.9/月)·与自然衰减(-0.4)同量级·不喧宾夺主
     }
     // traits（压力特质 hooks）
-    ch.stress = clamp((ch.stress || 20) + stressDelta * mr, 0, 100);
+    ch.stress = clamp(num(firstDefined(ch.stress, 20)) + stressDelta * mr, 0, 100);
 
     // 健康
     var healthDelta = -0.1;  // 自然老化
@@ -1157,7 +1174,7 @@
     if (ch.age > 70) healthDelta -= 0.3;
     if (ch.stress > 70) healthDelta -= 0.3;
     if (ch.resources.privateWealth.money > 5000) healthDelta += 0.1;  // 富贵可养身
-    ch.health = clamp((ch.health || 70) + healthDelta * mr, 0, 100);
+    ch.health = clamp(num(firstDefined(ch.health, 70)) + healthDelta * mr, 0, 100);
 
     // 健康 = 0 → 死亡
     if (ch.health <= 0 && !ch.dead) {

@@ -9,23 +9,25 @@
 // ───────────────────────────────────────────
 
 /** 从 GM.chars 构建 CHARS 字典（preview 期望的格式） */
+function _cc3RuntimePlayer() {
+  if (typeof GM === 'undefined' || !GM) return null;
+  if (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getCharacter === 'function') return TM.Player.getCharacter(GM);
+  return Array.isArray(GM.chars) ? (GM.chars.find(function(ch) { return ch && ch.isPlayer === true; }) || null) : null;
+}
+
 /** 旧档兼容·解析玩家本朝势力名·多源回退 */
 function _cc3_resolvePlayerFaction() {
-  // ① 直接读 P.playerInfo.factionName
-  let pf = (typeof P !== 'undefined' && P.playerInfo && P.playerInfo.factionName) || '';
+  // ① 当前世界玩家角色/运行态 playerInfo（P.playerInfo 仅作初始化模板）
+  const runtimePlayer = _cc3RuntimePlayer();
+  let pf = (runtimePlayer && runtimePlayer.faction)
+    || (typeof GM !== 'undefined' && GM.playerInfo && GM.playerInfo.factionName) || '';
   if (pf) return pf;
-  // ② 兜底：从玩家角色查 faction
-  const pname = (typeof P !== 'undefined' && P.playerInfo && P.playerInfo.characterName) || '';
-  if (pname && typeof GM !== 'undefined' && Array.isArray(GM.chars)) {
-    const pch = GM.chars.find(c => c && (c.name === pname || c.isPlayer));
-    if (pch && pch.faction) return pch.faction;
-  }
-  // ③ 兜底：找 isPlayer 角色
+  // ② 旧档兜底：找唯一 isPlayer 角色
   if (typeof GM !== 'undefined' && Array.isArray(GM.chars)) {
     const pch = GM.chars.find(c => c && c.isPlayer);
     if (pch && pch.faction) return pch.faction;
   }
-  // ④ 兜底：从剧本读
+  // ③ 新局初始化兜底：从剧本模板读
   const sc = (typeof P !== 'undefined' && P.scenario) || {};
   if (sc.playerInfo && sc.playerInfo.factionName) return sc.playerInfo.factionName;
   return '';
@@ -60,7 +62,8 @@ function _cc3_buildSummonablePool() {
   const pool = [];
   if (typeof GM === 'undefined' || !Array.isArray(GM.chars)) return pool;
   const playerFaction = _cc3_resolvePlayerFaction();
-  const playerName = (typeof P !== 'undefined' && P.playerInfo && P.playerInfo.characterName) || '';
+  const playerChar = _cc3RuntimePlayer();
+  const playerName = playerChar ? playerChar.name : '';
   GM.chars.forEach(function(ch) {
     if (!ch || !ch.name || ch.alive === false) return;
     if (ch.isPlayer || (playerName && ch.name === playerName)) return;
@@ -138,7 +141,8 @@ function _cc3_buildCharsFromGM() {
   const chars = (typeof GM !== "undefined" && GM.chars) || [];
   // 玩家本朝势力名（如「明朝廷」）·非本朝者（后金/蒙古/起义军/朝鲜等）不入朝议
   const playerFaction = _cc3_resolvePlayerFaction();
-  const playerName = (typeof P !== 'undefined' && P.playerInfo && P.playerInfo.characterName) || '';
+  const playerChar = _cc3RuntimePlayer();
+  const playerName = playerChar ? playerChar.name : '';
   chars.forEach(function(ch) {
     if (!ch || !ch.name || ch.alive === false) return;
     // 2026-06-11·治「下狱/流放/逃亡后仍参与朝会」：法律上已不在朝者直接不入百官列(不只标 absent·
@@ -597,7 +601,8 @@ function _cc3_fallbackAgenda() {
 function _cc3_buildSystemPromptStable() {
   const sc = (typeof P !== 'undefined' && P.scenario) || {};
   const cfg = (typeof _cc3_getScenarioConfig === 'function') ? _cc3_getScenarioConfig() : {};
-  const playerName = (typeof P !== 'undefined' && P.playerInfo && P.playerInfo.characterName) || '皇帝';
+  const playerChar = _cc3RuntimePlayer();
+  const playerName = (playerChar && playerChar.name) || '皇帝';
   const playerFaction = (typeof _cc3_resolvePlayerFaction === 'function' && _cc3_resolvePlayerFaction()) || '本朝';
   const dynasty = (typeof P !== 'undefined' && P.dynasty) || sc.name || '本朝';
   const style = (typeof P !== 'undefined' && P.conf && P.conf.style) || '文学化';

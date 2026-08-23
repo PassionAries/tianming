@@ -16,7 +16,7 @@
  *   TM.FactionMembership.renameFaction(oldName, newName)     — 改名·cascade
  *
  * opts:
- *   { reason: '说明', byTurn: GM.turn, silent: false }
+ *   { reason: '说明', byTurn: GM.turn, silent: false, targetFactionId: '稳定势力ID' }
  *
  * 副作用:
  *   1. char._factionHistory.push({from, to, turn, reason})
@@ -53,6 +53,11 @@
     if (!g || !Array.isArray(g.facs)) return null;
     for (var i = 0; i < g.facs.length; i++) if (g.facs[i] && g.facs[i].id === id) return g.facs[i];
     return null;
+  }
+  function _resolveAssignmentTarget(newFacName, opts) {
+    var stableId = opts && opts.targetFactionId != null ? String(opts.targetFactionId).trim() : '';
+    if (stableId) return { target: _findFacById(stableId), explicitId: stableId };
+    return { target: _findFac(newFacName), explicitId: '' };
   }
 
   function _inferArmyFaction(a) {
@@ -143,8 +148,16 @@
     if (!char) return false;
     opts = opts || {};
     var newName = newFacName || '';
+    var resolved = _resolveAssignmentTarget(newName, opts);
+    if (resolved.explicitId && !resolved.target) {
+      try { console.warn('[FactionMembership.assignChar] 目标势力 ID "' + resolved.explicitId + '" 不在 GM.facs·拒绝写入'); } catch(_){}
+      return false;
+    }
+    if (resolved.target) newName = resolved.target.name || newName;
     var oldName = char.faction || '';
-    if (oldName === newName) return false;
+    var oldId = char.factionId == null ? '' : String(char.factionId);
+    var newId = resolved.target && resolved.target.id != null ? String(resolved.target.id) : '';
+    if (oldName === newName && (!newId || oldId === newId)) return false;
 
     // 验证新势力 (空允许·非空不存在 → warn 但仍写)
     if (newName && !_findFac(newName)) {
@@ -154,7 +167,7 @@
     char.faction = newName;
     // Slice G 同步: 若已有 factionId·按新名 lookup 更新；若无·按新势力补
     if (newName) {
-      var fNew = _findFac(newName);
+      var fNew = resolved.target || _findFac(newName);
       if (fNew && fNew.id) char.factionId = fNew.id;
     } else if (newName === '') {
       char.factionId = '';
@@ -169,7 +182,7 @@
 
     if (oldName) _stamp(oldName);
     if (newName) _stamp(newName);
-    _refreshIndex();
+    if (!opts.deferRefresh) _refreshIndex();
 
     if (!opts.silent) {
       if (oldName) _emit('faction:memberLeft', { char: char.name, from: oldName, to: newName, reason: opts.reason });
@@ -189,8 +202,16 @@
     if (!army) return false;
     opts = opts || {};
     var newName = newFacName || '';
+    var resolved = _resolveAssignmentTarget(newName, opts);
+    if (resolved.explicitId && !resolved.target) {
+      try { console.warn('[FactionMembership.assignArmy] 目标势力 ID "' + resolved.explicitId + '" 不在 GM.facs·拒绝写入'); } catch(_){}
+      return false;
+    }
+    if (resolved.target) newName = resolved.target.name || newName;
     var oldName = army.faction || army.owner || '';
-    if (oldName === newName) return false;
+    var oldId = army.factionId == null ? '' : String(army.factionId);
+    var newId = resolved.target && resolved.target.id != null ? String(resolved.target.id) : '';
+    if (oldName === newName && (!newId || oldId === newId)) return false;
 
     if (newName && !_findFac(newName)) {
       try { console.warn('[FactionMembership.assignArmy] 目标势力 "' + newName + '" 不在 GM.facs·仍写入'); } catch(_){}
@@ -200,7 +221,7 @@
     // Slice E·删 a.owner 字段·避免双源·读路径全部走 a.faction
     if ('owner' in army) try { delete army.owner; } catch(_){ army.owner = undefined; }
     if (newName) {
-      var fNew = _findFac(newName);
+      var fNew = resolved.target || _findFac(newName);
       if (fNew && fNew.id) army.factionId = fNew.id;
     } else {
       army.factionId = '';
@@ -215,7 +236,7 @@
 
     if (oldName) _stamp(oldName);
     if (newName) _stamp(newName);
-    _refreshIndex();
+    if (!opts.deferRefresh) _refreshIndex();
 
     if (!opts.silent) {
       _emit('faction:armyTransferred', { army: army.name, from: oldName, to: newName, reason: opts.reason });
@@ -587,4 +608,8 @@
     bulkReassignProvinces: bulkReassignProvinces,
     migrateProvinceOwnership: migrateProvinceOwnership
   };
+  if (global.TM.Factions && typeof global.TM.Factions.configureMembershipProvider === 'function') {
+    var configured = global.TM.Factions.configureMembershipProvider(global.TM.FactionMembership);
+    if (!configured || configured.ok !== true) throw new Error('势力成员写口注入失败');
+  }
 })(typeof window !== 'undefined' ? window : globalThis);

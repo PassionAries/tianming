@@ -36,8 +36,25 @@ function mk(opts) {
   opts = opts || {};
   var ebs = [], mems = [], emits = [];
   var ctx = {
-    GM: { turn: 20, chars: opts.chars || [] },
-    P: { playerInfo: { characterName: '天子' } },
+    Date: Date, JSON: JSON, Math: Math, RegExp: RegExp, Array: Array, Object: Object,
+    String: String, Number: Number, Boolean: Boolean, Map: Map, Set: Set,
+    parseInt: parseInt, parseFloat: parseFloat, isFinite: isFinite, isNaN: isNaN,
+    deepClone: function (value) { return JSON.parse(JSON.stringify(value)); },
+    GM: {
+      _campaignId: 'natural-death-smoke', turn: 20, chars: opts.chars || [],
+      facs: [], armies: [], parties: [], classes: [], officeTree: [],
+      playerInfo: opts.playerInfo || { characterId: 'p1', characterName: '天子', characterTitle: '皇帝' }
+    },
+    P: {
+      playerInfo: { characterName: '天子', characterTitle: '皇帝' }, scenarios: [],
+      engineConstants: {}, buildings: [], armyTemplates: [], parties: [], classes: [],
+      factions: [], unitSystem: { enabled: false }
+    },
+    TM: {
+      errors: { capture: function () {}, captureSilent: function () {} },
+      FactionIndex: { rebuild: function () {} }
+    },
+    initDataListeners: function () {},
     addEB: function (cat, txt) { ebs.push(cat + '|' + txt); },
     distributeInheritance: function () {},
     resolveHeir: opts.resolveHeir,
@@ -46,8 +63,10 @@ function mk(opts) {
     console: { warn: function () {}, log: function () {} }
   };
   if (opts.noResolve) delete ctx.resolveHeir;
-  ctx.window = ctx; ctx.global = ctx;
+  ctx.window = ctx; ctx.global = ctx; ctx.globalThis = ctx;
   vm.createContext(ctx);
+  vm.runInContext(read('tm-indices.js'), ctx, { filename: 'tm-indices.js' });
+  ctx.buildIndices = function () {};
   if (!opts.noAdjudicator) vm.runInContext(mk._adjCode, ctx, { filename: 'adjudicator-slice.js' });
   vm.runInContext(code, ctx, { filename: 'death-slice.js' });
   ctx._ebs = ebs; ctx._mems = mems; ctx._emits = emits;
@@ -66,9 +85,9 @@ console.log('— §a · triggerCharacterDeath 行为 —');
   ok(c1._ebs.some(function (x) { return x.indexOf('薨') > 0; }), 'NPC 讣文仍称薨');
 
   // 玩家死+有嗣：世代传承
-  var heir = { name: '皇长子', alive: true };
-  var c2 = mk({ chars: [{ name: '旧臣', alive: true }], resolveHeir: function () { return heir; } });
+  var heir = { id: 'h1', name: '皇长子', alive: true };
   var emperor = { name: '天子', isPlayer: true, id: 'p1' };
+  var c2 = mk({ chars: [emperor, heir, { id: 'c-old', name: '旧臣', alive: true }], resolveHeir: function () { return heir; } });
   c2.triggerCharacterDeath(emperor, '疾');
   ok(emperor.isPlayer === false && heir.isPlayer === true, '有嗣：先帝退位·继承人接玩家位');
   ok(c2.GM.playerInfo.characterName === '皇长子', 'GM.playerInfo 随继位更新');

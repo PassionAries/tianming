@@ -337,7 +337,8 @@ function designateHeir(charName, heirName) {
   if (!char) { toast('角色不存在'); return false; }
   var heir = findCharByName(heirName);
   if (!heir) { toast('继承人不存在'); return false; }
-  char.designatedHeirId = heirName;
+  if (!heir.id || !String(heir.id).trim()) { toast('继承人缺少稳定身份'); return false; }
+  char.designatedHeirId = heir.id;
   _dbg('[Heir] ' + charName + ' 指定继承人: ' + heirName);
   if (typeof addEB === 'function') addEB('继承', charName + '指定' + heirName + '为继承人');
   return true;
@@ -492,9 +493,17 @@ function adjudicatePlayerDeath(ch, cause, opts) {
       return { outcome: 'gameover', blockedFallback: true };
     }
     if (heir && heir.alive !== false && !heir.dead) {
-      ch.isPlayer = false;
-      heir.isPlayer = true; // arch-ok: 世代传承唯一裁决口(R1a 收拢两镜像·2026-07-07)
-      GM.playerInfo = Object.assign({}, (GM.playerInfo || (typeof P !== 'undefined' && P && P.playerInfo) || {}), { characterName: heir.name }); // arch-ok: 运行期继位只写 GM，不污染剧本配置 P
+      var transfer = (typeof TM !== 'undefined' && TM.Succession && typeof TM.Succession.transferPlayerControl === 'function')
+        ? TM.Succession.transferPlayerControl({
+            from: ch, to: heir, reason: 'inheritance', eventReason: cause || '', causeKind: opts.kind || ''
+          })
+        : { ok: false, reason: 'succession-provider-missing' };
+      if (!transfer.ok) {
+        GM._playerDead = true; // arch-ok 玩家继承事务失败回落终局·本函数为裁决写口
+        GM._playerDeathReason = opts.deadReason || cause || ''; // arch-ok 同上
+        GM._playerDeathKind = opts.kind || ''; // arch-ok 同上
+        return { outcome: 'gameover', successionError: transfer.reason || 'transaction-failed' };
+      }
       if (typeof addEB === 'function') { try { addEB('继承', ch.name + '驾崩，' + heir.name + '继位'); } catch (_) {} }
       if (typeof NpcMemorySystem !== 'undefined' && NpcMemorySystem.addMemory) {
         try {
@@ -504,7 +513,6 @@ function adjudicatePlayerDeath(ch, cause, opts) {
           });
         } catch (_) {}
       }
-      GM._successionEvent = { from: ch.name, to: heir.name, reason: cause || '', causeKind: opts.kind || '' }; // arch-ok: 帝位更迭事件唯一裁决口(既有叙事消费点)
       if (typeof GameEventBus !== 'undefined' && GameEventBus.emit) { try { GameEventBus.emit('succession', { from: ch.name, to: heir.name, reason: cause }); } catch (_) {} }
       return { outcome: 'succession', heir: heir.name };
     }
@@ -1697,7 +1705,8 @@ SettlementPipeline.register('npcEventProposal', 'NPC事件提案', function() {
     var loy = c.loyalty || 50;
     var amb = c.ambition || 50;
     var stress = c.stress || 0;
-    var health = c.health || 100;
+    var health = Number(c.health);
+    if (!Number.isFinite(health)) health = 100;
     // 叛乱条件
     if (loy < 20 && amb > 80) proposals.push({name:c.name, type:'rebellion', desc:c.name+'忠诚极低('+loy+')且野心极高('+amb+')，可能叛乱'});
     // 辞官/崩溃
@@ -1740,7 +1749,7 @@ SettlementPipeline.register('healthDecay', '\u89D2\u8272\u5065\u5EB7\u5206\u6790
   GM.chars.forEach(function(c) {
     if (c.alive === false) return;
     if (c.health === undefined) c.health = 100;
-    var age = c.age || 30;
+    var age = typeof getValidAge === 'function' ? getValidAge(c, 30) : (Number.isFinite(c.age) && c.age >= 0 ? Math.floor(c.age) : 30);
     // 基础自然老化（极缓慢，代表生理规律，非AI可控范围）
     var decay = monthlyDecay * monthScale;
     if (age > ageThreshold) decay += ageAccelRate * monthScale;
@@ -1859,7 +1868,8 @@ SettlementPipeline.register('playerGrowth', '主角成长', function() {
   if (GM.turn > 1 && GM.turn % _learnTurns === 0) pc.intelligence = Math.min(100, (pc.intelligence || 50) + 0.1);
   // 年龄增长带来的衰退（65岁以上）
   var _elderTurns = (typeof turnsForMonths === 'function') ? turnsForMonths(6) : 6;
-  if ((pc.age || 30) > 65 && GM.turn % _elderTurns === 0) {
+  var _playerAge = typeof getValidAge === 'function' ? getValidAge(pc, 30) : (Number.isFinite(pc.age) && pc.age >= 0 ? Math.floor(pc.age) : 30);
+  if (_playerAge > 65 && GM.turn % _elderTurns === 0) {
     pc.valor = Math.max(10, (pc.valor || 50) - 0.3);
     pc.military = Math.max(10, (pc.military || 50) - 0.2);
   }

@@ -34,6 +34,16 @@
     return Math.max(min, Math.min(max, n));
   }
 
+  function firstFiniteDefined(values, fallback) {
+    for (var i = 0; i < values.length; i++) {
+      var value = values[i];
+      if (value === undefined || value === null || value === '') continue;
+      var number = Number(value);
+      if (isFinite(number)) return number;
+    }
+    return fallback;
+  }
+
   function toArray(v) {
     if (Array.isArray(v)) return v.slice();
     if (v === undefined || v === null || v === '') return [];
@@ -231,10 +241,12 @@
     var pi = source.playerInfo || (source.scriptData && source.scriptData.playerInfo) || {};
     var ruler = findRulerCandidate(source);
     var turn = Number(source.turn || 0) || 0;
-    var age = ruler ? Number(ruler.age || ruler.characterAge || ruler.yearsOld || ruler.ageYears || 0) : 0;
-    var health = ruler ? Number(ruler.health || (ruler.resources && ruler.resources.health) || ruler.hp || ruler.vitality || 100) : 100;
-    if (!isFinite(age)) age = 0;
-    if (!isFinite(health)) health = 100;
+    var age = ruler ? firstFiniteDefined([
+      ruler.age, ruler.characterAge, ruler.yearsOld, ruler.ageYears
+    ], null) : null;
+    var health = ruler ? firstFiniteDefined([
+      ruler.health, ruler.resources && ruler.resources.health, ruler.hp, ruler.vitality
+    ], 100) : 100;
     var ageMin = Number(ec.regentTriggerAgeMin);
     if (!isFinite(ageMin) || ageMin <= 0) ageMin = 14;
     var healthMax = Number(ec.regentTriggerHealthMax);
@@ -253,7 +265,7 @@
       hardCeiling = true;
       reasons.push('playerRole=regent');
     }
-    if (ruler && age > 0 && age <= ageMin) {
+    if (ruler && age !== null && age >= 0 && age <= ageMin) {
       active = true;
       reasons.push('age<=' + ageMin);
     }
@@ -261,7 +273,7 @@
       active = true;
       reasons.push('health<=' + healthMax);
     }
-    if (ruler && age > 0 && age <= forceAgeMax) {
+    if (ruler && age !== null && age >= 0 && age <= forceAgeMax) {
       active = true;
       hardCeiling = true;
       reasons.push('forceAge<=' + forceAgeMax);
@@ -276,7 +288,7 @@
       hardCeiling: hardCeiling,
       rulerName: ruler && ruler.name || '',
       rulerTitle: ruler ? (ruler.officialTitle || ruler.title || ruler.position || '') : '',
-      rulerAge: ruler ? (age || null) : null,
+      rulerAge: ruler ? age : null,
       rulerHealth: ruler ? health : null,
       playerRole: role || '',
       turn: turn,

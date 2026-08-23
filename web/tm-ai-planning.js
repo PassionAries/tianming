@@ -367,8 +367,10 @@ async function aiDeepReadScenario(options) {
   // 压缩模式下，按重要性排序：玩家>后妃>高品级>高记忆>其他
   if (_compressChars) {
     _aliveChars.sort(function(a, b) {
-      var sa = (a.isPlayer ? 100 : 0) + ((typeof _tmIsPlayerConsort === 'function' ? _tmIsPlayerConsort(a) : a.spouse === true) ? 30 : 0) + ((10 - (a.rankLevel||9)) * 5) + ((a._memory||[]).length * 2) + ((a._scars||[]).length * 5);
-      var sb = (b.isPlayer ? 100 : 0) + ((typeof _tmIsPlayerConsort === 'function' ? _tmIsPlayerConsort(b) : b.spouse === true) ? 30 : 0) + ((10 - (b.rankLevel||9)) * 5) + ((b._memory||[]).length * 2) + ((b._scars||[]).length * 5);
+      var aRankWeight = typeof getRankSeniorityScore === 'function' ? getRankSeniorityScore(a.rankLevel) : Math.max(0, 10 - (a.rankLevel || 9));
+      var bRankWeight = typeof getRankSeniorityScore === 'function' ? getRankSeniorityScore(b.rankLevel) : Math.max(0, 10 - (b.rankLevel || 9));
+      var sa = (a.isPlayer ? 100 : 0) + ((typeof _tmIsPlayerConsort === 'function' ? _tmIsPlayerConsort(a) : a.spouse === true) ? 30 : 0) + (aRankWeight * 5) + ((a._memory||[]).length * 2) + ((a._scars||[]).length * 5);
+      var sb = (b.isPlayer ? 100 : 0) + ((typeof _tmIsPlayerConsort === 'function' ? _tmIsPlayerConsort(b) : b.spouse === true) ? 30 : 0) + (bRankWeight * 5) + ((b._memory||[]).length * 2) + ((b._scars||[]).length * 5);
       return sb - sa;
     });
     blockB += '（角色较多，前30位高重要角色详述，其余精简。精简角色可参与群体事件但不宜作为独立行动主角）\n';

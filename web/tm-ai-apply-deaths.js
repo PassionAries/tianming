@@ -257,7 +257,10 @@ function applyOneDeath(cd) {
 // E10: 玩家角色死亡 → 统一走玩家之死裁决器（鼎革R1a·2026-07-07）：
   //   原地内联的世代传承镜像已收拢进 adjudicatePlayerDeath@tm-endturn-helpers
   //   （行为等价：有嗣继统续玩/无嗣 _playerDead 终局/异常回落）。
-  if (ch.isPlayer || (GM.playerInfo && GM.playerInfo.characterName === cd.name) || (P.playerInfo && P.playerInfo.characterName === cd.name)) {
+  var _runtimePlayerForDeath = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getCharacter === 'function')
+    ? TM.Player.getCharacter(GM)
+    : ((GM.chars || []).find(function(row) { return row && row.isPlayer === true; }) || null);
+  if (ch === _runtimePlayerForDeath) {
     if (typeof adjudicatePlayerDeath === 'function') {
       adjudicatePlayerDeath(ch, cd.reason, { kind: 'narrative' });
     } else {

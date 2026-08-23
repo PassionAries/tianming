@@ -16,6 +16,7 @@ function read(p) { return fs.readFileSync(path.join(ROOT, p), 'utf8'); }
 console.log('smoke-heir-guoben');
 
 var hgSrc = read('tm-houguong.js');
+var indexSrc = read('tm-indices.js');
 
 function mkHg(opts) {
   opts = opts || {};
@@ -23,13 +24,18 @@ function mkHg(opts) {
   var ctx = {
     GM: {
       turn: opts.turn || 10,
-      chars: opts.chars || [{ name: '天子', isPlayer: true, faction: '大明', alive: true }],
+      _campaignId: 'heir-guoben-smoke',
+      chars: opts.chars || [{ id: 'char-emperor', name: '天子', isPlayer: true, faction: '大明', alive: true }],
       harem: {
         heirs: opts.heirs || [],
         consorts: opts.consorts || [],
         succession: 'eldest_legitimate', pregnancies: []
       }
     },
+    P: { playerInfo: { characterName: '天子' }, scenarios: [], engineConstants: {}, buildings: [], armyTemplates: [], parties: [], classes: [], factions: [], unitSystem: { enabled: false } },
+    TM: { errors: { capture: function(){}, captureSilent: function(){} } },
+    initDataListeners: function () {},
+    SettlementPipeline: { register: function () {} },
     rng: function () { return rngQ.length ? rngQ.shift() : 0.99; },
     addEB: function (cat, txt) { ebs.push(cat + '|' + txt); },
     confirm: opts.confirm === undefined ? function () { return true; } : opts.confirm,
@@ -41,10 +47,13 @@ function mkHg(opts) {
       readyState: 'complete', addEventListener: function () {}
     },
     setTimeout: function () {}, console: { warn: function(){}, log: function(){} },
-    Math: Math, Array: Array, Object: Object, String: String, JSON: JSON, Date: Date
+    Math: Math, Array: Array, Object: Object, String: String, Number: Number, Boolean: Boolean,
+    RegExp: RegExp, Map: Map, Set: Set, JSON: JSON, Date: Date,
+    parseInt: parseInt, parseFloat: parseFloat, isNaN: isNaN, isFinite: isFinite
   };
-  ctx.window = ctx; ctx.global = ctx;
+  ctx.window = ctx; ctx.global = ctx; ctx.globalThis = ctx;
   vm.createContext(ctx);
+  vm.runInContext(indexSrc, ctx, { filename: 'tm-indices.js' });
   vm.runInContext(hgSrc, ctx, { filename: 'tm-houguong.js' });
   ctx._ebs = ebs;
   return ctx;
@@ -67,8 +76,8 @@ console.log('— §a · 诞育入宗牒 —');
   ok(!!kid && kid.name === '皇长子' && kid.gender === 'male' && kid.age === 0, '皇长子入宗牒(真char·总序命名)');
   ok(kid && kid.faction === '大明' && kid.father === '天子' && kid.mother === '王氏', '皇子承玩家 faction·父母俱记');
   var pc1 = c1.GM.chars.find(function (x) { return x.isPlayer; });
-  ok(pc1 && Array.isArray(pc1.childrenIds) && pc1.childrenIds.indexOf('皇长子') >= 0, '玩家 childrenIds 回填(resolveHeir 可及)');
-  ok(c1.GM.harem.heirs.length === 1 && c1.GM.harem.heirs[0].name === '皇长子', 'heirs 台账同步');
+  ok(pc1 && kid && Array.isArray(pc1.childrenIds) && pc1.childrenIds.indexOf(kid.id) >= 0, '玩家 childrenIds 回填真实稳定 ID(resolveHeir 可及)');
+  ok(c1.GM.harem.heirs.length === 1 && c1.GM.harem.heirs[0].name === '皇长子' && c1.GM.harem.heirs[0].id === kid.id, 'heirs 台账同步稳定 ID');
 
   // 第二胎(另一妃)总序不撞名
   var c2 = mkHg({
@@ -90,14 +99,15 @@ console.log('— §a · 诞育入宗牒 —');
   var girl = c3.GM.chars.find(function (x) { return x._royalChild; });
   ok(!!girl && girl.name === '皇长女' && girl.gender === 'female', '皇女同入宗牒(皇长女)');
 
-  // 玩家缺位：不抛·heirs 照记(char 不入)
+  // 玩家缺位：明确失败且不留下半注册皇嗣
   var c4 = mkHg({
     turn: 20, chars: [],
     consorts: [{ name: '刘氏', rank: '嫔', age: 21, favor: 30, status: '有孕', pregnant: true, pregnantSince: 11, children: [], childCount: 0, lastFavoredTurn: 19 }],
     rng: [0.5, 0.3, 0.9]
   });
-  c4.TM.hougong.processTurn();
-  ok(c4.GM.harem.heirs.length === 1 && c4.GM.chars.length === 0, '玩家缺位：不抛·heirs 照记 char 不入(守卫)');
+  var missingPlayerFailed = false;
+  try { c4.TM.hougong.processTurn(); } catch (e) { missingPlayerFailed = /统一名册入口|玩家角色/.test(e.message); }
+  ok(missingPlayerFailed && c4.GM.harem.heirs.length === 0 && c4.GM.chars.length === 0, '玩家缺位：明确失败且不留下半注册皇嗣');
 })();
 
 /* ── §b 册立皇太子 ─────────────────────────────────────────── */
@@ -108,9 +118,9 @@ console.log('— §b · 册立皇太子 —');
     return mkHg({
       turn: 30,
       chars: [
-        { name: '天子', isPlayer: true, faction: '大明', alive: true },
-        { name: '皇长子', _royalChild: true, alive: true, faction: '大明', title: '皇子' },
-        { name: '某尚书', alive: true, faction: '大明', officialTitle: '尚书' }
+        { id: 'char-emperor', name: '天子', isPlayer: true, faction: '大明', alive: true },
+        { id: 'char-prince', name: '皇长子', _royalChild: true, alive: true, faction: '大明', title: '皇子' },
+        { id: 'char-minister', name: '某尚书', alive: true, faction: '大明', officialTitle: '尚书' }
       ],
       heirs: [{ name: '皇长子', mother: '王氏', isPrince: true, alive: true }, { name: '皇长女', mother: '李氏', isPrince: false, alive: true }],
       confirm: opts.confirm
@@ -120,7 +130,7 @@ console.log('— §b · 册立皇太子 —');
   var r1 = c1.TM.hougong.crownPrince('皇长子');
   var pc = c1.GM.chars.find(function (x) { return x.isPlayer; });
   var hc = c1.GM.chars.find(function (x) { return x.name === '皇长子'; });
-  ok(r1 === true && pc.designatedHeirId === '皇长子' && c1.GM.harem.crownPrince === '皇长子', '册立：designatedHeirId 落(resolveHeir 最高优先级)');
+  ok(r1 === true && pc.designatedHeirId === hc.id && c1.GM.harem.crownPrinceId === hc.id, '册立：designatedHeirId 落稳定 ID(resolveHeir 最高优先级)');
   ok(hc.title === '皇太子', '皇子改衔皇太子');
   ok(c1._ebs.some(function (x) { return x.indexOf('国本|') === 0 && /皇太子/.test(x); }), '编年入册(国本以定)');
   ok(c1.TM.hougong.crownPrince('皇长子') === false, '重复册立拒绝');

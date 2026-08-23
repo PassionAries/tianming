@@ -159,7 +159,6 @@
     var ageBase = 50 + Math.floor(Math.random() * 15);   // 50-64 学者偏长
 
     var shanzhang = {
-      id:         'shanzhang_' + foundedYear + '_' + Date.now(),
       name:       academyConfig.founder,
       alive:      true,
       gender:     '男',
@@ -234,7 +233,7 @@
       _disciples:        [],
       _academyLifecycle: 'founding'
     };
-    (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(shanzhang);
+    createRuntimeCharacter(shanzhang);
     return shanzhang;
   }
 

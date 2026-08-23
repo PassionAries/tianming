@@ -493,8 +493,11 @@ function _endTurn_collectInput() {
   // 主角行止（单一输入框）
   var xinglu = (_$("xinglu-pub") ? _$("xinglu-pub").value : "").trim() || (_$("xinglu") ? _$("xinglu").value : "").trim();
   // 行止记入玩家角色记忆
-  if (xinglu && typeof NpcMemorySystem !== 'undefined' && P.playerInfo && P.playerInfo.characterName) {
-    NpcMemorySystem.remember(P.playerInfo.characterName, xinglu, '\u5E73', 5);
+  var _prepPlayer = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getCharacter === 'function')
+    ? TM.Player.getCharacter(GM)
+    : (GM.chars || []).find(function(c) { return c && c.isPlayer === true; });
+  if (xinglu && typeof NpcMemorySystem !== 'undefined' && _prepPlayer) {
+    NpcMemorySystem.remember(_prepPlayer.name, xinglu, '\u5E73', 5);
   }
   var memRes=GM.memorials.map(function(m){return{from:m.from,type:m.type,status:m.status,reply:m.reply};});
   // 判定本回合 edicts 来源：已颁行润色稿 / 玩家原文（不含润色）
@@ -639,8 +642,8 @@ function _endTurn_collectInput() {
   // 勤政之苦 vs 怠政之乐——核心机制
   var _virtuousKeywords = /改革|整饬|肃清|减税|轻赋|赈灾|兴修|操练|整顿|巡查|督办|革弊|惩贪|开仓|抚民|科举|选贤|严查|问责|清查/;
   var _edictWordCount = allEdictText.length;
-  if (P.playerInfo && P.playerInfo.characterName) {
-    var _pCh = findCharByName(P.playerInfo.characterName);
+  if (_prepPlayer) {
+    var _pCh = _prepPlayer;
     if (_pCh) {
       if (_edictWordCount > 30 && _virtuousKeywords.test(allEdictText)) {
         // 写了大量勤政诏令→压力增加（操心的代价）
@@ -667,13 +670,13 @@ function _endTurn_collectInput() {
       var _visitCh = findCharByName(_visitName);
       if (_visitCh && _visitCh.alive !== false && (typeof _tmIsPlayerConsort === 'function' ? _tmIsPlayerConsort(_visitCh) : _visitCh.spouse === true)) {
         // 增加亲疏度
-        if (typeof AffinityMap !== 'undefined' && P.playerInfo) {
-          AffinityMap.add(P.playerInfo.characterName, _visitCh.name, 5, '\u5BA0\u5E78');
+        if (typeof AffinityMap !== 'undefined' && _prepPlayer) {
+          AffinityMap.add(_prepPlayer.name, _visitCh.name, 5, '\u5BA0\u5E78');
           // 其他妃嫔的嫉妒
           GM.chars.forEach(function(other) {
             if (other.alive !== false && other.name !== _visitCh.name && (typeof _tmIsPlayerConsort === 'function' ? _tmIsPlayerConsort(other) : other.spouse === true)) {
               AffinityMap.add(other.name, _visitCh.name, -3, '\u5AC9\u5992');
-              if ((other.loyalty || 50) < 50) AffinityMap.add(other.name, P.playerInfo.characterName, -2, '\u88AB\u51B7\u843D');
+              if ((other.loyalty || 50) < 50) AffinityMap.add(other.name, _prepPlayer.name, -2, '\u88AB\u51B7\u843D');
             }
           });
         }

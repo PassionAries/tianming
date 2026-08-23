@@ -1156,12 +1156,17 @@
               // \u2605\u6279\u4E19 C2 \u53BB\u91CD\u88C1\u5B9A(2026-07-22)\uFF1A\u6210\u5458\u6811\u5012\u7300\u72F2\u6563\u53CD\u5E94(\u54C0 imp7+loyalty-3+stress+8\u00B7\u4EAC\u4E2D\u4FA7\u76EE)
               //   \u5DF2\u6536\u53E3\u5230 _factionCollapseRipple(tm-endturn-helpers.js\u00B7faction:defeated \u8BA2\u9605\u00B7\u4E0A\u884C emit \u540C\u6B65\u8DD1)\u3002
               //   \u539F\u6B64\u5904\u5185\u8054\u7ED9\u5168\u4F53\u6210\u5458\u5199\u300C\u6240\u5C5E\u52BF\u529B\u8986\u706D\u00B7\u5FE7imp8\u300D\u8BB0\u5FC6\u00B7\u4E0E\u6D9F\u6F2A\u6210\u5458\u8BB0\u5FC6\u91CD\u53E0=\u53CC\u6CE8\u5165\u00B7\u6545\u4E0D\u518D\u5185\u8054\u5199(\u5355 chokepoint\u6536\u53E3)\u3002
-              if (typeof window !== 'undefined' && window.TM && TM.FactionMembership && TM.FactionMembership.dissolveFaction) {
-                TM.FactionMembership.dissolveFaction(fc.name, { reason: fc.reason || '\u5176\u529B\u8870\u7AF8', conqueror: fc.conqueror || '' });
-              } else if (GM.chars) {
-                GM.chars.forEach(function(c) {
-                  if (c.alive !== false && c.faction === fc.name) c.faction = '';
-                });
+              var _collapseLifecycle = (typeof TM !== 'undefined' && TM.Factions) || null;
+              if (!_collapseLifecycle || typeof _collapseLifecycle.removeFaction !== 'function') {
+                throw new Error('势力覆灭缺少统一生命周期入口');
+              }
+              var _collapseTransfer = fc.conqueror && (GM.facs || []).find(function(f) { return f && f.name === fc.conqueror; });
+              var _collapseResult = _collapseLifecycle.removeFaction(fac.id || fac, {
+                world: GM, reason: 'strength-collapse', removeArmies: true,
+                transferTo: _collapseTransfer ? (_collapseTransfer.id || _collapseTransfer) : null
+              });
+              if (!_collapseResult || _collapseResult.ok !== true) {
+                throw new Error('势力覆灭注销失败：' + ((_collapseResult && _collapseResult.reason) || fc.name));
               }
               if (GM.armies) {
                 GM.armies.forEach(function(a) {
@@ -1569,7 +1574,7 @@
               _spawnedFromOffice: { dept: targetDept.name, position: sp.position, turn: GM.turn, reason: sp.reason || '' }
             };
             if (!Array.isArray(GM.chars)) GM.chars = [];
-            (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(newChar);
+            createRuntimeCharacter(newChar);
             _spawnedCount++;
             addEB('\u5B98\u5236', '\u3010\u5B9E\u4F53\u5316\u3011' + sp.holderName + '\u5C31\u4EFB' + targetDept.name + sp.position + (sp.reason ? '\uFF08' + sp.reason + '\uFF09' : ''));
             if (GM.qijuHistory) {
@@ -2122,7 +2127,7 @@
               else if (rv.ideology === 'warlord' || rv.organizationType === 'militaryMutiny') { _abBase.military += 15; _abBase.valor += 10; }
               else if (rv.ideology === 'nobleClaim') { _abBase.administration += 15; _abBase.intelligence += 10; _abBase.charisma += 10; }
               else if (rv.ideology === 'populist') { _abBase.benevolence += 15; _abBase.charisma += 10; }
-              (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })({
+              createRuntimeCharacter({
                 name: rv.leaderName,
                 title: rv.class + '领袖',
                 faction: rv.class + '起义军',
@@ -2146,7 +2151,7 @@
             if (Array.isArray(rv.secondaryLeaders) && GM.chars) {
               rv.secondaryLeaders.forEach(function(sln) {
                 if (!sln || findCharByName(sln)) return;
-                (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })({
+                createRuntimeCharacter({
                   name: sln, title: rv.class + '义军副将', faction: rv.class + '起义军', class: rv.class, alive: true,
                   age: 32, loyalty: 70, stance: '反对',
                   intelligence: 45, administration: 35, military: 60, valor: 65, charisma: 50, diplomacy: 35, benevolence: 45,
@@ -2319,12 +2324,14 @@
                 var _ch = findCharByName(nm);
                 if (_ch) {
                   // [Slice J\u00B72026-05-10] \u8D70 Membership API
-                  var _newFac = (P.playerInfo && P.playerInfo.factionName) || _ch.faction;
-                  if (typeof window !== 'undefined' && window.TM && TM.FactionMembership && _newFac !== _ch.faction) {
-                    TM.FactionMembership.assignChar(_ch, _newFac, { reason: '\u62DB\u5B89\u5F52\u9644' });
-                  } else {
-                    _ch.faction = _newFac;
+                  var _runtimePlayerInfo = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getInfo === 'function')
+                    ? TM.Player.getInfo()
+                    : ((GM.playerInfo && typeof GM.playerInfo === 'object') ? GM.playerInfo : {});
+                  var _newFac = _runtimePlayerInfo.factionName || _ch.faction;
+                  if (typeof window === 'undefined' || !window.TM || !TM.FactionMembership || typeof TM.FactionMembership.assignChar !== 'function') {
+                    throw new Error('招安归附缺少统一势力成员入口');
                   }
+                  if (_newFac !== _ch.faction) TM.FactionMembership.assignChar(_ch, _newFac, { reason: '\u62DB\u5B89\u5F52\u9644' });
                   _tmApplyLoyaltySet(_ch, 45, '\u62DB\u5B89\u5F52\u9644', 'revolt-amnesty-accepted');
                   _ch._cooptedTurn = GM.turn;
                   _ch.title = '归附·' + (_ch.title || '将领');
@@ -2337,12 +2344,14 @@
                   var _ch = findCharByName(nm);
                   if (_ch) {
                     // [Slice J\u00B72026-05-10] \u8D70 Membership API
-                    var _newFac = (P.playerInfo && P.playerInfo.factionName) || _ch.faction;
-                    if (typeof window !== 'undefined' && window.TM && TM.FactionMembership && _newFac !== _ch.faction) {
-                      TM.FactionMembership.assignChar(_ch, _newFac, { reason: '\u5206\u5316\u5F52\u9644' });
-                    } else {
-                      _ch.faction = _newFac;
+                    var _runtimePlayerInfo = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getInfo === 'function')
+                      ? TM.Player.getInfo()
+                      : ((GM.playerInfo && typeof GM.playerInfo === 'object') ? GM.playerInfo : {});
+                    var _newFac = _runtimePlayerInfo.factionName || _ch.faction;
+                    if (typeof window === 'undefined' || !window.TM || !TM.FactionMembership || typeof TM.FactionMembership.assignChar !== 'function') {
+                      throw new Error('分化归附缺少统一势力成员入口');
                     }
+                    if (_newFac !== _ch.faction) TM.FactionMembership.assignChar(_ch, _newFac, { reason: '\u5206\u5316\u5F52\u9644' });
                     _tmApplyLoyaltySet(_ch, 40, '\u5206\u5316\u5F52\u9644', 'revolt-amnesty-split');
                     _ch._cooptedTurn = GM.turn;
                   }
@@ -2625,25 +2634,24 @@
                 if (_r) { _r._refugee = true; _r._refugeeTurn = GM.turn; _tmApplyLoyaltyDelta(_r, -10, '\u52BF\u529B\u8986\u706D\u51FA\u9003', 'faction-dissolve-refugee'); }
               });
             }
-            // 从 activeWars 移除相关条目（该势力已灭）——条目形状多样(enemy/attacker/defender/faction)·
-            // 只滤 enemy 曾让 declare_war 形战争成幽灵条目(2026-07-04 审查定罪)
-            if (Array.isArray(GM.activeWars)) {
-              GM.activeWars = GM.activeWars.filter(function(w) {
-                return !(w && (w.enemy === fd.name || w.attacker === fd.name || w.defender === fd.name || w.faction === fd.name));
-              });
+            // 势力主实体最后注销；战争、围城、军队、条约、停战、关系、外交待办、占领和索引由唯一入口一并清算。
+            var _factionLifecycle = (typeof TM !== 'undefined' && TM.Factions) || null;
+            if (!_factionLifecycle || typeof _factionLifecycle.removeFaction !== 'function') {
+              throw new Error('势力消亡缺少统一生命周期入口');
             }
-            // 从 factions 中移除
-            GM.facs = GM.facs.filter(function(f){return f.name !== fd.name;});
-            if (typeof removeFromIndex === 'function') removeFromIndex('fac', fd.name);
-            // 关系矩阵清理
-            if (typeof removeFactionRelationsForFaction === 'function') {
-              removeFactionRelationsForFaction(fd.name);
-            } else if (GM.factionRelationsMap) {
-              delete GM.factionRelationsMap[fd.name];
-              Object.keys(GM.factionRelationsMap).forEach(function(k) {
-                if (GM.factionRelationsMap[k] && typeof GM.factionRelationsMap[k] === 'object') delete GM.factionRelationsMap[k][fd.name];
-                if (k.indexOf(fd.name + '->') === 0 || k.indexOf('->' + fd.name) > 0) delete GM.factionRelationsMap[k];
-              });
+            var _dissolvingFaction = (GM.facs || []).find(function(f) { return f && f.name === fd.name; });
+            var _transferFaction = _newFac && (GM.facs || []).find(function(f) { return f && f.name === _newFac; });
+            var _removeFactionResult = _factionLifecycle.removeFaction(
+              _dissolvingFaction ? (_dissolvingFaction.id || _dissolvingFaction) : fd.name,
+              {
+                world: GM,
+                reason: 'faction_' + (fd.cause || 'dissolved'),
+                transferTo: _transferFaction ? (_transferFaction.id || _transferFaction) : null,
+                removeArmies: true
+              }
+            );
+            if (!_removeFactionResult || _removeFactionResult.ok !== true) {
+              throw new Error('势力注销失败：' + ((_removeFactionResult && _removeFactionResult.reason) || fd.name));
             }
             var _fcLbl = {conquered:'被征服',absorbed:'被并入',collapsed:'内部崩解',seceded_all:'分崩离析',replaced:'被取代'}[fd.cause] || fd.cause || '覆灭';
             addEB('\u52BF\u529B', '\u3010\u52BF\u529B\u89E6\u706D\u3011' + fd.name + _fcLbl + (fd.conqueror?'\uFF08\u4E3A' + fd.conqueror + '\u6240\u7EC8\uFF09':'') + (fd.territoryFate?'\uFF0C\u7586\u571F:' + fd.territoryFate:'') + (fd.leaderFate?'\u2014\u2014\u9996\u8111:' + fd.leaderFate:'') + (fd.reason?'\uFF1A' + fd.reason:''));

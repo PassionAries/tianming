@@ -109,10 +109,13 @@
       }
       existing.sourceRevoltId = r.id;
     } else if (!existing) {
-      G.chars.push({  // arch-ok 民变实体唯一写口·渠帅人物入档
+      var roster = global.TM && global.TM.Roster;
+      if (!roster || typeof roster.createChar !== 'function') throw new Error('民变渠帅创建缺少统一名册入口');
+      existing = roster.createChar({
         name: lname, alive: true, faction: facName, officialTitle: '义军渠帅',
-        loyalty: 0, sourceRevoltId: r.id, _revoltEntity: true, _createdTurn: G.turn || 0
-      });
+        loyalty: 0, sourceRevoltId: r.id, _revoltEntity: true, _createdTurn: G.turn || 0,
+        _origin: 'revolt-leader'
+      }, { world: G, defaultAge: 30 });
       r._entityLeaderName = lname;
     } else {
       r._entityLeaderName = lname;
@@ -191,8 +194,23 @@
         if (div && div.occupiedBy === fac.name) { delete div.occupiedBy; delete div._occupiedTurn; }
       });
     } catch (_eOc) {}
-    var idx = G.facs.indexOf(fac);
-    if (idx >= 0) G.facs.splice(idx, 1);  // arch-ok 民变实体唯一写口·自建势力对称除档
+    var factions = global.TM && global.TM.Factions;
+    if (!factions || typeof factions.removeFaction !== 'function') {
+      throw new Error('民变势力注销缺少统一生命周期入口');
+    }
+    var removed = factions.removeFaction(fac.id, {
+      world: G,
+      reason: pac ? 'revolt_pacified' : 'revolt_defeated',
+      terminateWars: true,
+      removeDiplomacy: true,
+      clearTreaties: true,
+      clearTruces: true,
+      releaseOccupations: true,
+      removeArmies: true
+    });
+    if (!removed || removed.ok !== true) {
+      throw new Error('民变势力注销失败：' + ((removed && removed.reason) || 'unknown'));
+    }
     _eb(pac ? ('「' + (fac.name || '义军') + '」受抚罢兵·遣散归农') : ('「' + (fac.name || '义军') + '」烟消云散·余党四散'));
   }
 

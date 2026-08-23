@@ -32,8 +32,11 @@ function loadInto(sb, files) {
 
 // ── 民变实体化：真 RevoltEntity.sync ──
 function revoltSandbox(conf) {
-  var sb = { console: console, _ebs: [] };
+  var sb = { console: console, _ebs: [], Date: Date, JSON: JSON, Math: Math, Object: Object, Array: Array, Number: Number, String: String, Boolean: Boolean, RegExp: RegExp, Map: Map, Set: Set, parseInt: parseInt, parseFloat: parseFloat, isNaN: isNaN, isFinite: isFinite };
   sb.addEB = function (cat, msg) { sb._ebs.push(cat + '·' + msg); };
+  sb.TM = { errors: { capture: function(){}, captureSilent: function(){} } };
+  sb.initDataListeners = function() {};
+  sb.SettlementPipeline = { register: function() {} };
   sb.GM = {
     turn: 10,
     facs: [{ id: 'f1', name: '大明', strength: 80, economy: 70, playerRelation: 100 }],
@@ -41,8 +44,8 @@ function revoltSandbox(conf) {
     armies: [{ id: 'a1', name: '京营', faction: '大明', soldiers: 50000 }],
     minxin: { revolts: [] }
   };
-  sb.P = { conf: conf || {} };
-  return loadInto(sb, ['tm-revolt-entity.js']);
+  sb.P = { conf: conf || {}, scenarios: [] };
+  return loadInto(sb, ['tm-utils.js', 'tm-indices.js', 'tm-relations.js', 'tm-faction-membership.js', 'tm-revolt-entity.js']);
 }
 
 // ── 边患真入侵：真 BorderInvasion.tick ──

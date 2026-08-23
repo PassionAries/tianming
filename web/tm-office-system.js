@@ -54,7 +54,8 @@ function _offMigratePosition(pos) {
     // 新字段已设 → 反向同步 actualCount
     var _derivedActual = Math.max(0, pos.establishedCount - pos.vacancyCount);
     if (pos.actualCount < _derivedActual) pos.actualCount = _derivedActual;
-    else if (pos.actualCount > _derivedActual && _matCount <= _derivedActual) pos.actualCount = _derivedActual;
+    // 旧档可能只用 actualCount 表达超编、尚无具象 holder 行；不得把该信息压回编制数。
+    // 后续 actualHolders 迁移会为这些实有人数补占位，统计层再分别报告缺员/超编。
   }
 
   // ── Step 3: actualHolders——若未存在则从老字段(holder + additionalHolders)构建 ──
@@ -96,20 +97,56 @@ function _offMigrateTree(tree) {
 /** 获取职位的具象人数——优先新模型 actualHolders，降级老模型 */
 function _offMaterializedCount(pos) {
   if (Array.isArray(pos.actualHolders)) {
-    return pos.actualHolders.filter(function(h){return h && h.name && h.generated!==false;}).length;
+    var seen = {};
+    return pos.actualHolders.filter(function(h) {
+      if (!h || !h.name || h.generated === false) return false;
+      var key = String(h.name);
+      if (seen[key]) return false;
+      seen[key] = true;
+      return true;
+    }).length;
   }
-  return (pos.holder ? 1 : 0) + (pos.additionalHolders ? pos.additionalHolders.length : 0);
+  return _offAllHolders(pos).length;
 }
 
 /** 获取职位的所有具象角色名列表——优先新模型 */
 function _offAllHolders(pos) {
+  var seen = {};
+  function uniqueName(value) {
+    var name = value == null ? '' : String(value).trim();
+    if (!name || seen[name]) return false;
+    seen[name] = true;
+    return true;
+  }
   if (Array.isArray(pos.actualHolders)) {
-    return pos.actualHolders.filter(function(h){return h && h.name && h.generated!==false;}).map(function(h){return h.name;});
+    return pos.actualHolders.filter(function(h){return h && h.name && h.generated!==false && uniqueName(h.name);}).map(function(h){return h.name;});
   }
   var arr = [];
   if (pos.holder) arr.push(pos.holder);
   if (pos.additionalHolders) arr = arr.concat(pos.additionalHolders);
-  return arr;
+  return arr.filter(uniqueName);
+}
+
+function _offPositionStats(pos) {
+  _offMigratePosition(pos);
+  var established = Number(pos && pos.establishedCount);
+  if (!Number.isFinite(established) || established < 0) established = Number(pos && pos.headCount);
+  if (!Number.isFinite(established) || established < 0) established = 1;
+  established = Math.floor(established);
+  var holders = _offAllHolders(pos);
+  var placeholders = Array.isArray(pos && pos.actualHolders)
+    ? pos.actualHolders.filter(function(h) { return h && h.generated === false; }).length
+    : 0;
+  var actual = holders.length + placeholders;
+  return {
+    headCount: established,
+    actualCount: actual,
+    materialized: holders.length,
+    vacant: Math.max(0, established - actual),
+    overstaffed: Math.max(0, actual - established),
+    unmaterialized: Math.max(0, actual - holders.length),
+    holders: holders
+  };
 }
 
 function _offWalkOfficeTree(nodes, visitor, chain) {
@@ -402,12 +439,38 @@ function _offDismissPerson(pos, person) {
   pos.additionalHolders = named.slice(1);
 }
 
+/** 真正腾空一个具名席位；用于继承等必须产生官缺的控制权交接。 */
+function _offVacatePersonSlot(pos, person) {
+  if (!pos || !person) return;
+  _offMigratePosition(pos);
+  if (!Array.isArray(pos.holderHistory)) pos.holderHistory = [];
+  pos.holderHistory.push({
+    name: person,
+    until: (typeof GM !== 'undefined' && GM.turn) || 0,
+    reason: 'succession'
+  });
+  if (Array.isArray(pos.actualHolders)) {
+    pos.actualHolders = pos.actualHolders.filter(function(h) {
+      return !(h && h.name === person && h.generated !== false);
+    });
+  }
+  var named = _offAllHolders(pos);
+  pos.holder = named[0] || '';
+  pos.additionalHolders = named.slice(1);
+  pos.actualCount = Array.isArray(pos.actualHolders) ? pos.actualHolders.length : named.length;
+  var established = Number(pos.establishedCount);
+  if (!Number.isFinite(established) || established < 0) established = Number(pos.headCount);
+  if (!Number.isFinite(established) || established < 0) established = 1;
+  pos.vacancyCount = Math.max(0, Math.floor(established) - pos.actualCount);
+}
+
 /** 扫遍官制树·清除指定姓名的所有 holder 登记（死亡/贬谪/退隐级联）
  * 返回 { vacated: [{dept, pos, rank}...] } 供事件日志使用
  * reason: 'death' | 'demote' | 'retire' | 'exile' | 'execute'
  */
-function _offVacateByCharName(charName, reason, tree) {
+function _offVacateByCharName(charName, reason, tree, options) {
   if (!charName) return { vacated: [] };
+  options = options || {};
   tree = tree || (typeof GM !== 'undefined' && GM.officeTree) || [];
   var vacated = [];
   _offWalkOfficeTree(tree, function(n, curChain) {
@@ -417,7 +480,8 @@ function _offVacateByCharName(charName, reason, tree) {
       if (Array.isArray(p.actualHolders)) {
         var hitNew = p.actualHolders.some(function(h){ return h && h.name === charName && h.generated !== false; });
         if (hitNew) {
-          _offDismissPerson(p, charName);
+          if (options.leaveVacancy === true) _offVacatePersonSlot(p, charName);
+          else _offDismissPerson(p, charName);
           vacated.push({ dept: n.name, pos: p.name, rank: p.rank || '', chain: curChain, reason: reason || '' });
         }
       }
@@ -477,32 +541,35 @@ function _offSweepGhostHolders() {
 
 /** 获取部门的聚合统计 */
 function _offDeptStats(dept) {
-  var stats = { headCount: 0, actualCount: 0, materialized: 0, vacant: 0, unmaterialized: 0, holders: [] };
+  var stats = { headCount: 0, actualCount: 0, materialized: 0, vacant: 0, overstaffed: 0, unmaterialized: 0, holders: [] };
   _offWalkOfficeTree([dept], function(n) {
     (n.positions||[]).forEach(function(p) {
-      _offMigratePosition(p);
-      stats.headCount += (p.headCount||1);
-      stats.actualCount += (p.actualCount||0);
-      var m = _offMaterializedCount(p);
-      stats.materialized += m;
-      _offAllHolders(p).forEach(function(h) { stats.holders.push(h); });
+      var posStats = _offPositionStats(p);
+      stats.headCount += posStats.headCount;
+      stats.actualCount += posStats.actualCount;
+      stats.materialized += posStats.materialized;
+      stats.vacant += posStats.vacant;
+      stats.overstaffed += posStats.overstaffed;
+      stats.unmaterialized += posStats.unmaterialized;
+      posStats.holders.forEach(function(h) { stats.holders.push(h); });
     });
   });
-  stats.vacant = stats.headCount - stats.actualCount;
-  stats.unmaterialized = stats.actualCount - stats.materialized;
   return stats;
 }
 
 /** 获取整棵树的聚合统计 */
 function _offTreeStats(tree) {
-  var stats = { headCount: 0, actualCount: 0, materialized: 0, depts: 0 };
+  var stats = { headCount: 0, actualCount: 0, materialized: 0, vacant: 0, overstaffed: 0, unmaterialized: 0, depts: 0 };
   _offWalkOfficeTree(tree||[], function(n) {
     stats.depts++;
     (n.positions||[]).forEach(function(p) {
-      _offMigratePosition(p);
-      stats.headCount += (p.headCount||1);
-      stats.actualCount += (p.actualCount||0);
-      stats.materialized += _offMaterializedCount(p);
+      var posStats = _offPositionStats(p);
+      stats.headCount += posStats.headCount;
+      stats.actualCount += posStats.actualCount;
+      stats.materialized += posStats.materialized;
+      stats.vacant += posStats.vacant;
+      stats.overstaffed += posStats.overstaffed;
+      stats.unmaterialized += posStats.unmaterialized;
     });
   });
   return stats;
@@ -561,6 +628,104 @@ function getRankInfo(rankStr) {
   return null;
 }
 
+/**
+ * 规范官阶数值。官阶表以 level 数值越小越高为唯一契约；非法值不猜测。
+ * @param {number|string|Object} value
+ * @returns {number|null}
+ */
+function normalizeRankLevel(value) {
+  if (value && typeof value === 'object') {
+    if (value.rankLevel !== undefined) value = value.rankLevel;
+    else if (value.level !== undefined) value = value.level;
+    else value = value.rank || value.officialTitle || value.title;
+  }
+  var H = _activeRankHierarchy();
+  if (typeof value === 'string' && value.trim() && !/^[-+]?\d+(?:\.\d+)?$/.test(value.trim())) {
+    var fromText = getRankInfo(value);
+    return fromText && Number.isFinite(Number(fromText.level)) ? Number(fromText.level) : null;
+  }
+  var n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  for (var i = 0; i < H.length; i++) {
+    if (Number(H[i] && H[i].level) === n) return n;
+  }
+  return null;
+}
+
+/** 按 level 或角色对象取得当前朝代官阶元数据。 */
+function getRankMeta(value, rankText) {
+  var H = _activeRankHierarchy();
+  var level = normalizeRankLevel(value);
+  if (level == null && rankText) level = normalizeRankLevel(rankText);
+  if (level == null && value && typeof value === 'object') {
+    level = normalizeRankLevel(value.officialTitle || value.title || value.rank);
+  }
+  if (level == null) return null;
+  for (var i = 0; i < H.length; i++) {
+    if (Number(H[i] && H[i].level) === level) return H[i];
+  }
+  return null;
+}
+
+function _orderedRankHierarchy() {
+  return _activeRankHierarchy().filter(function(meta) {
+    return meta && Number.isFinite(Number(meta.level));
+  }).slice().sort(function(a, b) { return Number(a.level) - Number(b.level); });
+}
+
+/** 官阶资序权重：最高官为表长，最低官为 1；不依赖固定十八级。 */
+function getRankSeniorityScore(value, rankText) {
+  var meta = getRankMeta(value, rankText);
+  if (!meta) return 0;
+  var H = _orderedRankHierarchy();
+  for (var i = 0; i < H.length; i++) {
+    if (Number(H[i].level) === Number(meta.level)) return H.length - i;
+  }
+  return 0;
+}
+
+/** 低阶负担权重：最高官为 1，最低官为表长，用于向上孝敬等明确的低阶负担。 */
+function getRankInferiorityScore(value, rankText) {
+  var meta = getRankMeta(value, rankText);
+  if (!meta) return 0;
+  var H = _orderedRankHierarchy();
+  for (var i = 0; i < H.length; i++) {
+    if (Number(H[i].level) === Number(meta.level)) return i + 1;
+  }
+  return 0;
+}
+
+/** 优先使用本朝 rank metadata 的俸禄；缺少 salary 时按资序给出有限兼容值。 */
+function getRankSalary(value, rankText) {
+  var meta = getRankMeta(value, rankText);
+  if (!meta) return 0;
+  var salary = Number(meta.salary !== undefined ? meta.salary : meta.monthlySalary);
+  if (Number.isFinite(salary) && salary >= 0) return salary;
+  return getRankSeniorityScore(meta) * 8;
+}
+
+function getRankGrainSalary(value, rankText) {
+  var meta = getRankMeta(value, rankText);
+  if (!meta) return 0;
+  var grain = Number(meta.grainSalary !== undefined ? meta.grainSalary : meta.salaryGrain);
+  if (Number.isFinite(grain) && grain >= 0) return grain;
+  return getRankSalary(meta) * 0.2;
+}
+
+/** 默认将当前官阶表最高三分之一视为高官；topCount 可用于更窄的礼遇门槛。 */
+function isHighOfficial(value, topCount) {
+  var meta = getRankMeta(value);
+  if (!meta) return false;
+  var H = _orderedRankHierarchy();
+  var limit = Number(topCount);
+  if (!Number.isFinite(limit) || limit < 1) limit = Math.max(1, Math.ceil(H.length / 3));
+  limit = Math.min(H.length, Math.floor(limit));
+  for (var i = 0; i < limit; i++) {
+    if (Number(H[i].level) === Number(meta.level)) return true;
+  }
+  return false;
+}
+
 /** 计算官员满意度（大材小用/小材大用检测） */
 function calcOfficialSatisfaction(charName, posRank, deptName) {
   var ch = findCharByName(charName);
@@ -568,11 +733,13 @@ function calcOfficialSatisfaction(charName, posRank, deptName) {
   // 能力综合分
   var abilityScore = ((ch.intelligence||50) + (ch.administration||50) + (ch.military||50)) / 3;
   var rankLevel = getRankLevel(posRank);
-  // 品级越高(level越小)→需要越高能力
-  var expectedAbility = Math.max(30, 90 - rankLevel * 3.5);
+  // 品级越高→需要越高能力；按当前朝代实际 hierarchy 长度归一，不硬编码 18/19。
+  var hierarchyLength = Math.max(1, _orderedRankHierarchy().length);
+  var seniority = getRankSeniorityScore(rankLevel);
+  var expectedAbility = hierarchyLength <= 1 ? 60 : 30 + ((seniority - 1) / (hierarchyLength - 1)) * 60;
   var diff = abilityScore - expectedAbility;
   // 野心影响：野心高的人在低品级更不满
-  var ambitionPenalty = rankLevel > 10 ? (ch.ambition||50) * 0.3 : 0;
+  var ambitionPenalty = getRankInferiorityScore(rankLevel) > Math.ceil(hierarchyLength * 0.55) ? (ch.ambition||50) * 0.3 : 0;
   var satisfaction = 50 + diff * 0.8 - ambitionPenalty;
   satisfaction = Math.max(0, Math.min(100, Math.round(satisfaction)));
   var label = satisfaction > 75 ? '志得意满' : satisfaction > 55 ? '安于其位' : satisfaction > 35 ? '郁郁不得志' : '怀才不遇';
@@ -609,7 +776,7 @@ async function _offMaterialize(deptName, posName) {
     if (parsed && parsed.name) {
       if (!GM.chars) GM.chars = [];
       if (!GM.chars.find(function(ch){ return ch.name === parsed.name; })) {
-        (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })({
+        createRuntimeCharacter({
           name: parsed.name, title: posName, officialTitle: posName,
           personality: parsed.personality||'', intelligence: parsed.intelligence||55,
           administration: parsed.administration||55, military: parsed.military||40,
@@ -1460,6 +1627,7 @@ if (typeof window !== 'undefined') {
   window._offAddCharOfficeTitle = _offAddCharOfficeTitle;
   window._offRemoveCharOfficeTitle = _offRemoveCharOfficeTitle;
   window._offGetCharOfficeTitles = _offGetCharOfficeTitles;
+  window._offPositionStats = _offPositionStats;
   window._offFormatCharTitles = _offFormatCharTitles;
   window._offSyncHoldersFromChars = _offSyncHoldersFromChars;
   window._offTitleSlotScore = _offTitleSlotScore;

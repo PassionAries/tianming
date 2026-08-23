@@ -727,11 +727,11 @@
     var scholarship = abilityValue(abilities.scholarship, null, 60);
     var bio = p.bio || p.background || '';
     var ch = {
-      id: opts.id || 'char_' + profileId + '_' + Math.random().toString(36).slice(2, 5),
+      id: opts.id,
       name: p.name,
       zi: p.zi,
       gender: opts.gender || p.gender || '男',
-      age: age || null,
+      age: (age !== undefined && age !== null) ? age : null,
       birthYear: birthYear,
       deathYear: deathYear,
       alternateNames: p.alternateNames ? p.alternateNames.slice() : [],
@@ -802,10 +802,10 @@
     scenarioObj.historicalChars.forEach(function(pid) {
       if (typeof pid === 'string') {
         var ch = createCharFromProfile(pid);
-        if (ch) { (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(ch); loaded++; }
+        if (ch) { createRuntimeCharacter(ch); loaded++; }
       } else if (typeof pid === 'object' && pid.id) {
         var ch2 = createCharFromProfile(pid.id, pid);
-        if (ch2) { (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(ch2); loaded++; }
+        if (ch2) { createRuntimeCharacter(ch2); loaded++; }
       }
     });
     return loaded;

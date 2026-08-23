@@ -819,11 +819,13 @@ function _ogRenderPosCard(fi, idx, NW, cardH) {
   var _rankCls = _ogRankClass(nd.rank);
   var _rankInfo = nd.rank && typeof getRankInfo === 'function' ? getRankInfo(nd.rank) : null;
 
-  var _hc = nd.headCount || 1;
-  var _ac = nd.actualCount || 0;
-  var _mc = typeof _offMaterializedCount === 'function' ? _offMaterializedCount(nd) : (nd.holder ? 1 : 0);
-  var _vacant = (_hc||1) - (_ac||0);
-  var _unmat = (_ac||0) - _mc;
+  var _posStats = typeof _offPositionStats === 'function' ? _offPositionStats(nd) : null;
+  var _hc = _posStats ? _posStats.headCount : (nd.headCount || 1);
+  var _ac = _posStats ? _posStats.actualCount : (nd.actualCount || 0);
+  var _mc = _posStats ? _posStats.materialized : (typeof _offMaterializedCount === 'function' ? _offMaterializedCount(nd) : (nd.holder ? 1 : 0));
+  var _vacant = _posStats ? _posStats.vacant : Math.max(0, (_hc||1) - (_ac||0));
+  var _overstaffed = _posStats ? _posStats.overstaffed : Math.max(0, (_ac||0) - (_hc||1));
+  var _unmat = _posStats ? _posStats.unmaterialized : Math.max(0, (_ac||0) - _mc);
 
   var _tenureKey = _deptName + (nd.name||'');
   var _tenureVal = (_holder && _holder._tenure && _tenureKey) ? (_holder._tenure[_tenureKey]||0) : 0;
@@ -900,9 +902,9 @@ function _ogRenderPosCard(fi, idx, NW, cardH) {
     html += '<div class="og-pos-portrait" style="background:var(--gold-d,#8a6d2f);color:#fff;font-weight:600;">群</div>';
     html += '<div class="og-pos-holder-info">';
     html += '<div class="og-pos-name-line"><span style="color:var(--gold);font-weight:600;">群僚·冗员</span>';
-    html += '<span class="og-hc-chip' + (_vacant<=0?' full':' part') + '">编' + _hc + '·实' + _ac + '</span>';
+    html += '<span class="og-hc-chip' + (_vacant<=0?' full':' part') + '">编' + _hc + '·实' + _ac + (_overstaffed > 0 ? '·超' + _overstaffed : '') + '</span>';
     html += '</div>';
-    html += '<div class="og-pos-sub-line" style="color:var(--txt-d);">在职 ' + _ac + ' 员·缺 ' + Math.max(0,_vacant) + '·岁耗俸禄</div>';
+    html += '<div class="og-pos-sub-line" style="color:var(--txt-d);">在职 ' + _ac + ' 员·缺 ' + _vacant + (_overstaffed > 0 ? '·超 ' + _overstaffed : '') + '·岁耗俸禄</div>';
     html += '</div>';
   } else if (_holder) {
     var _portrait = _holder.portrait ? '<img src="' + escHtml(_holder.portrait) + '">' : escHtml(String(_holder.name||'?').charAt(0));
@@ -918,7 +920,7 @@ function _ogRenderPosCard(fi, idx, NW, cardH) {
       var _ptyCls = _ogPartyClass(_pty);
       html += '<span class="og-party-tag' + (_ptyCls?' '+_ptyCls:'') + '">' + escHtml(String(_pty).slice(0,4)) + '</span>';
     }
-    if (_hc > 1) html += '<span class="og-hc-chip' + (_vacant===0?' full':_vacant>0?' part':'') + '">\u7F16' + _hc + '\u00B7\u5B9E' + _ac + '</span>';
+    if (_hc > 1 || _overstaffed > 0) html += '<span class="og-hc-chip' + (_vacant===0?' full':' part') + '">\u7F16' + _hc + '\u00B7\u5B9E' + _ac + (_overstaffed > 0 ? '\u00B7\u8D85' + _overstaffed : '') + '</span>';
     html += '</div>';
     // 年龄/任期/满意度
     var subLine = [];
@@ -1577,7 +1579,7 @@ function _ogRenderPosCardV10(fi, courtKey) {
     }
     if (_state === 'retire' && _holder._retirePending) {
       var refusals = _holder._retirePending.refusals || 1;
-      html += '<div class="og-v10-retire-note"><span>' + (_holder.age||70) + ' \u5C81\u00B7' + refusals + ' \u5EA6\u8BF7\u8F9E\u00B7\u965B\u4E0B\u672A\u5141</span></div>';
+      html += '<div class="og-v10-retire-note"><span>' + (typeof getValidAge === 'function' ? getValidAge(_holder, 70) : (Number.isFinite(_holder.age) && _holder.age >= 0 ? _holder.age : 70)) + ' \u5C81\u00B7' + refusals + ' \u5EA6\u8BF7\u8F9E\u00B7\u965B\u4E0B\u672A\u5141</span></div>';
     }
 
     // 待下诏书
@@ -1765,7 +1767,8 @@ function _officeApplyBindingHint(root, ch, dept, pos, grade, partyName, config) 
 function _officeDismissCandidateScore(item) {
   var ch = item.ch || {};
   var rankLevel = (typeof getRankLevel === 'function') ? getRankLevel(item.pos && item.pos.rank) : 18;
-  return (_officeCharStat(ch, 'prestige', 50) || 0) + Math.max(0, 20 - rankLevel) * 3 + (_officeCharStat(ch, 'power', 0) || 0);
+  var seniority = typeof getRankSeniorityScore === 'function' ? getRankSeniorityScore(rankLevel) : Math.max(1, 19 - rankLevel);
+  return (_officeCharStat(ch, 'prestige', 50) || 0) + seniority * 3 + (_officeCharStat(ch, 'power', 0) || 0);
 }
 
 function officeApplyDismissalPressure(root) {

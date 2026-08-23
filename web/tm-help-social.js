@@ -1007,7 +1007,10 @@ var OpinionSystem = {
     // 上下级关系 +5
     if (charA.superior === charB.name || charB.superior === charA.name) score += 5;
     // 忠诚度影响（对君主/上级，不硬编码头衔）
-    if (charB.isPlayer || charB.isRuler || (charB.rankLevel && charB.rankLevel >= 28)) {
+    var highOfficial = typeof isHighOfficial === 'function'
+      ? isHighOfficial(charB.rankLevel)
+      : (Number.isFinite(charB.rankLevel) && charB.rankLevel >= 1 && charB.rankLevel <= 6);
+    if (charB.isPlayer || charB.isRuler || highOfficial) {
       score += Math.round((charA.loyalty - 50) * 0.3);
     }
     // 特质匹配（CK3式：同特质加分，对立特质减分）

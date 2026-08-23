@@ -640,7 +640,10 @@ async function _aiGenerateHaremRanks() {
  */
 function updateConsortClanInfluence() {
   if (!GM.chars || !GM.facs) return;
-  var playerName = P.playerInfo && P.playerInfo.characterName;
+  var _player = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getCharacter === 'function')
+    ? TM.Player.getCharacter(GM)
+    : (GM.chars || []).find(function(c) { return c && c.isPlayer === true; });
+  var playerName = _player && _player.name;
   if (!playerName) return;
 
   GM.chars.forEach(function(sp) {
@@ -823,7 +826,10 @@ var HaremSettlement = {
   // 更新继承人排序
   updateSuccession: function() {
     if (!GM.harem || !GM.chars) return;
-    var playerName = P.playerInfo && P.playerInfo.characterName;
+    var _player = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getCharacter === 'function')
+      ? TM.Player.getCharacter(GM)
+      : (GM.chars || []).find(function(c) { return c && c.isPlayer === true; });
+    var playerName = _player && _player.name;
     if (!playerName) return;
 
     // 收集所有皇子（活着的男性子嗣）
@@ -1153,8 +1159,11 @@ var TyrantActivitySystem = {
     });
 
     // 减压效果
-    if (totalStress !== 0 && P.playerInfo && P.playerInfo.characterName) {
-      var pCh = findCharByName(P.playerInfo.characterName);
+    var _player = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getCharacter === 'function')
+      ? TM.Player.getCharacter(GM)
+      : (GM.chars || []).find(function(c) { return c && c.isPlayer === true; });
+    if (totalStress !== 0 && _player) {
+      var pCh = _player;
       if (pCh) {
         pCh.stress = clamp((pCh.stress || 0) + totalStress, 0, 100);
       }
@@ -1170,9 +1179,9 @@ var TyrantActivitySystem = {
     GM._tyrantHistory.forEach(function(h) { GM._tyrantDecadence += (h.acts ? h.acts.length : 0) * 5; });
 
     // 记入玩家角色记忆
-    if (typeof NpcMemorySystem !== 'undefined' && P.playerInfo && P.playerInfo.characterName) {
+    if (typeof NpcMemorySystem !== 'undefined' && _player) {
       var memDesc = activities.map(function(a) { return a.name; }).join('\u3001');
-      NpcMemorySystem.remember(P.playerInfo.characterName, memDesc, '\u559C', 5);
+      NpcMemorySystem.remember(_player.name, memDesc, '\u559C', 5);
     }
 
     // 清空选择

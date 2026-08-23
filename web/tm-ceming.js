@@ -229,7 +229,7 @@
     if (typeof GM !== 'undefined') {
       if (!GM.chars) GM.chars = [];
       // TM.Roster 写口一站收齐 push+charByName 索引+图志缓存失效(2026-07-04 收口·原三步手工配套随之退役)
-      (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(ch);
+      createRuntimeCharacter(ch);
     }
     _cmIntegrateSummoned(ch, profile);
 

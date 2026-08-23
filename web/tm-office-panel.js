@@ -1197,7 +1197,7 @@ function _offMenyin(officialName) {
   if (typeof CharFullSchema !== 'undefined' && CharFullSchema.ensureFullFields) { try { CharFullSchema.ensureFullFields(son); } catch (e) {} }
   son.officialTitle = '';   // 候选·未授官(ensureFullFields 后再确保空)
   if (!Array.isArray(GM.chars)) GM.chars = [];
-  (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(son);
+  createRuntimeCharacter(son);
   if (typeof TMGongming !== 'undefined' && TMGongming.grantPreset) { try { TMGongming.grantPreset(son, 'menyin', { turn: GM.turn }, GM); } catch (e) {} }
   ch._menyinGranted = { son: sonName, turn: GM.turn || 0 };
   if (!Array.isArray(ch.children)) ch.children = [];
@@ -1238,7 +1238,7 @@ function _offJianbi(officialName) {
   if (typeof CharFullSchema !== 'undefined' && CharFullSchema.ensureFullFields) { try { CharFullSchema.ensureFullFields(person); } catch (e) {} }
   person.officialTitle = '';
   if (!Array.isArray(GM.chars)) GM.chars = [];
-  (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(person);
+  createRuntimeCharacter(person);
   if (typeof TMGongming !== 'undefined' && TMGongming.grant) { try { TMGongming.grant(person, { path: 'jianxuan', tier: '荐辟', source: 'edict', turn: GM.turn }, GM); } catch (e) {} }
   ch._jianbiGranted = { person: name, turn: GM.turn || 0 };
   if (typeof addEB === 'function') addEB('功名', ch.name + ' 荐布衣 ' + name + ' 入仕（荐辟·待铨)');
@@ -1657,16 +1657,24 @@ function renderOfficeDeptV2(dept,path){
   var posH=(dept.positions||[]).map(function(pos,pi){
     var pp=path.concat(["p",pi]);var ppS=JSON.stringify(pp);var ppId="od-"+pp.join("-");
     // ── 三层统计：编制 / 缺员 / 已具名 ──
-    var _est = pos.establishedCount != null ? pos.establishedCount : (parseInt(pos.headCount,10) || 1);
-    var _vac = pos.vacancyCount != null ? pos.vacancyCount : 0;
-    var _occ = Math.max(0, _est - _vac);
+    var _psx = typeof _offPositionStats === 'function' ? _offPositionStats(pos) : null;
+    var _est = _psx ? _psx.headCount : (pos.establishedCount != null ? pos.establishedCount : (parseInt(pos.headCount,10) || 1));
+    var _vac = _psx ? _psx.vacant : Math.max(0, pos.vacancyCount != null ? pos.vacancyCount : 0);
+    var _occ = _psx ? _psx.actualCount : Math.max(0, _est - _vac);
+    var _over = _psx ? _psx.overstaffed : Math.max(0, _occ - _est);
     var _ah = Array.isArray(pos.actualHolders) ? pos.actualHolders : (pos.holder ? [{name:pos.holder,generated:true}] : []);
-    var _namedArr = _ah.filter(function(h){return h && h.name && h.generated!==false;});
+    var _namedSeen = {};
+    var _namedArr = _ah.filter(function(h){
+      if (!h || !h.name || h.generated===false || _namedSeen[h.name]) return false;
+      _namedSeen[h.name] = true;
+      return true;
+    });
     var _placeholderCount = _ah.filter(function(h){return h && h.generated===false;}).length;
     // 三栏标签
     var _triBar = '<div style="display:inline-flex;gap:4px;font-size:0.66rem;margin-left:4px;">'
       + '<span style="background:rgba(107,93,79,0.2);color:var(--ink-300);padding:0 4px;border-radius:2px;" title="编制">\u7F16'+_est+'</span>'
       + (_vac>0 ? '<span style="background:rgba(192,64,48,0.15);color:var(--vermillion-400);padding:0 4px;border-radius:2px;" title="缺员(史料记载)">\u7F3A'+_vac+'</span>' : '')
+      + (_over>0 ? '<span style="background:rgba(192,64,48,0.25);color:var(--vermillion-400);padding:0 4px;border-radius:2px;" title="超出编制">\u8D85'+_over+'</span>' : '')
       + '<span style="background:rgba(87,142,126,0.15);color:var(--celadon-400);padding:0 4px;border-radius:2px;" title="实际在职">\u5728'+_occ+'</span>'
       + '<span style="background:rgba(184,154,83,0.15);color:var(--gold-400);padding:0 4px;border-radius:2px;" title="已具名(有角色)">\u540D'+_namedArr.length+'</span>'
       + (_placeholderCount>0 ? '<span style="background:rgba(184,154,83,0.08);color:var(--ink-300);padding:0 4px;border-radius:2px;" title="在职但无角色内容——运行时 AI 按需生成">\u203B'+_placeholderCount+'</span>' : '')
@@ -1750,20 +1758,28 @@ function renderOfficeDeptV2(dept,path){
   // 部门头——职能标签+编制/缺员/在职/已名聚合统计
   var fnTags = (dept.functions||[]).map(function(f){ return '<span style="font-size:0.66rem;background:rgba(184,154,83,0.15);color:var(--gold-400);padding:1px 4px;border-radius:3px;">' + escHtml(f) + '</span>'; }).join(' ');
   var deptDesc = dept.desc || dept.description || '';
-  var _deptEst = 0, _deptVac = 0, _deptOcc = 0, _deptNamed = 0, _deptPH = 0;
+  var _deptEst = 0, _deptVac = 0, _deptOver = 0, _deptOcc = 0, _deptNamed = 0, _deptPH = 0;
   (dept.positions||[]).forEach(function(p) {
-    var est = p.establishedCount != null ? p.establishedCount : (parseInt(p.headCount,10) || 1);
-    var vac = p.vacancyCount != null ? p.vacancyCount : 0;
+    var psx = typeof _offPositionStats === 'function' ? _offPositionStats(p) : null;
+    var est = psx ? psx.headCount : (p.establishedCount != null ? p.establishedCount : (parseInt(p.headCount,10) || 1));
+    var vac = psx ? psx.vacant : Math.max(0, p.vacancyCount != null ? p.vacancyCount : 0);
     var ah = Array.isArray(p.actualHolders) ? p.actualHolders : (p.holder ? [{name:p.holder,generated:true}] : []);
     _deptEst += est;
     _deptVac += vac;
-    _deptOcc += Math.max(0, est - vac);
-    _deptNamed += ah.filter(function(h){return h && h.name && h.generated!==false;}).length;
+    _deptOver += psx ? psx.overstaffed : 0;
+    _deptOcc += psx ? psx.actualCount : Math.max(0, est - vac);
+    var namedSeen = {};
+    _deptNamed += ah.filter(function(h){
+      if (!h || !h.name || h.generated===false || namedSeen[h.name]) return false;
+      namedSeen[h.name] = true;
+      return true;
+    }).length;
     _deptPH += ah.filter(function(h){return h && h.generated===false;}).length;
   });
   var vacantTag = '<span style="display:inline-flex;gap:3px;font-size:0.66rem;margin-left:4px;">'
     + '<span style="background:rgba(107,93,79,0.2);color:var(--ink-300);padding:0 4px;border-radius:2px;" title="部门编制总额">\u7F16'+_deptEst+'</span>'
     + (_deptVac>0?'<span style="background:rgba(192,64,48,0.15);color:var(--vermillion-400);padding:0 4px;border-radius:2px;" title="缺员总数">\u7F3A'+_deptVac+'</span>':'')
+    + (_deptOver>0?'<span style="background:rgba(192,64,48,0.25);color:var(--vermillion-400);padding:0 4px;border-radius:2px;" title="超编总数">\u8D85'+_deptOver+'</span>':'')
     + '<span style="background:rgba(87,142,126,0.15);color:var(--celadon-400);padding:0 4px;border-radius:2px;" title="实际在职总数">\u5728'+_deptOcc+'</span>'
     + '<span style="background:rgba(184,154,83,0.15);color:var(--gold-400);padding:0 4px;border-radius:2px;" title="已具名角色总数">\u540D'+_deptNamed+'</span>'
     + (_deptPH>0?'<span style="background:rgba(184,154,83,0.08);color:var(--ink-300);padding:0 4px;border-radius:2px;" title="在职但无角色——运行时按需生成">\u203B'+_deptPH+'</span>':'')

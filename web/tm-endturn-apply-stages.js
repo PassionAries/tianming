@@ -96,8 +96,10 @@ inst._imprisonedTurn = GM.turn||0;
                 //   「玩家角色被杀」这一具体事件：标死+走 R1a 裁决器(有储君继统续玩/绝嗣终局)。
                 //   palace_coup/coup_succeeded 得逞≠必弑君(废立/挟持)·归 R1d 废帝态·此处不越界。
                 if (!_qamGated && _action === 'regicide' && _outcome === 'succeeded') {
-                  var _pcName = (typeof P !== 'undefined' && P && P.playerInfo && P.playerInfo.characterName) || '';
-                  var _sov = (GM.chars || []).find(function (c) { return c && (c.isPlayer || (_pcName && c.name === _pcName)); });
+                  var _sov = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getCharacter === 'function')
+                    ? TM.Player.getCharacter(GM)
+                    : (GM.chars || []).find(function(c) { return c && c.isPlayer === true; });
+                  var _pcName = _sov ? _sov.name : '';
                   if (!_sov) {
                     _stageSemanticFailure('conspiracy_events.regicide', _pcName || '(player)', 'player character not found');
                   } else if (_sov.alive !== false && !_sov.dead) {

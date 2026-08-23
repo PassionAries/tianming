@@ -1621,7 +1621,7 @@ function doActualStart(sid, requestToken){
 
     // 1) 在 GM.chars 中找到玩家角色并标记 isPlayer
     if (pName && GM.chars) {
-      var found = false;
+      var found = null;
       // 容错(跨剧本根治)：playerInfo.characterName 可能带注解(如绍宋"赵构(穿越者赵玖)")·与人物名"赵构"对不上→
       // 否则 2696 会误建一个空壳重复玩家角色(真角色的家谱/关系/记忆全废)+ 玩家势力派生失效(officeTree/阶层党派过滤不跑→显全势力)。剥括注重匹配。
       var pNameAlt = pName.replace(/[（(].*$/, '').trim();
@@ -1630,7 +1630,8 @@ function doActualStart(sid, requestToken){
         if (GM.chars[_pi].name === pName || (pNameAlt && pNameAlt !== pName && GM.chars[_pi].name === pNameAlt)) {
           GM.chars[_pi].isPlayer = true;
           // 同步 playerInfo 的详细字段到角色对象（角色对象优先，playerInfo补缺）
-          if (!GM.chars[_pi].age && pi.characterAge) GM.chars[_pi].age = pi.characterAge;
+          if ((GM.chars[_pi].age === undefined || GM.chars[_pi].age === null || GM.chars[_pi].age === '')
+            && pi.characterAge !== undefined && pi.characterAge !== null && pi.characterAge !== '') GM.chars[_pi].age = pi.characterAge;
           if (!GM.chars[_pi].gender && pi.characterGender) GM.chars[_pi].gender = pi.characterGender;
           if (!GM.chars[_pi].personality && pi.characterPersonality) GM.chars[_pi].personality = pi.characterPersonality;
           if (!GM.chars[_pi].title && pi.characterTitle) GM.chars[_pi].title = pi.characterTitle;
@@ -1642,7 +1643,7 @@ function doActualStart(sid, requestToken){
           if (!GM.chars[_pi].culture && pi.characterCulture) GM.chars[_pi].culture = pi.characterCulture;
           if (!GM.chars[_pi].appearance && pi.characterAppearance) GM.chars[_pi].appearance = pi.characterAppearance;
           if (!GM.chars[_pi].charisma && pi.characterCharisma) GM.chars[_pi].charisma = parseInt(pi.characterCharisma) || 60;
-          found = true;
+          found = GM.chars[_pi];
           break;
         }
       }
@@ -1650,7 +1651,7 @@ function doActualStart(sid, requestToken){
       if (!found) {
         var newChar = {
           name: pName, title: pi.characterTitle || '', faction: pi.characterFaction || fName || '',
-          age: pi.characterAge || '', gender: pi.characterGender || '男',
+          age: pi.characterAge !== undefined && pi.characterAge !== null ? pi.characterAge : '', gender: pi.characterGender || '男',
           personality: pi.characterPersonality || '', bio: pi.characterBio || '',
           desc: pi.characterDesc || '', faith: pi.characterFaith || '', culture: pi.characterCulture || '',
           appearance: pi.characterAppearance || '', charisma: parseInt(pi.characterCharisma) || 60,
@@ -1658,11 +1659,20 @@ function doActualStart(sid, requestToken){
           loyalty: 100, morale: 80, ambition: 50, benevolence: 50, intelligence: 60, valor: 50,
           isPlayer: true, isHistorical: true, alive: true, stress: 0
         };
-        GM.chars.push(newChar);
+        if (!window.TM || !TM.Roster || typeof TM.Roster.createChar !== 'function') throw new Error('玩家角色创建缺少统一名册入口');
+        newChar = TM.Roster.createChar(newChar, { world: GM, defaultAge: 30 });
+        found = newChar;
         GM.allCharacters.push({
-          name: newChar.name, title: newChar.title, age: newChar.age || '?', gender: newChar.gender,
+          name: newChar.name, title: newChar.title,
+          age: newChar.age !== undefined && newChar.age !== null ? newChar.age : '?', gender: newChar.gender,
           personality: newChar.personality, desc: newChar.desc, loyalty: 100, faction: newChar.faction,
           recruited: true, recruitTurn: 0, source: '初始'
+        });
+      }
+      if (found) {
+        GM.playerInfo = Object.assign({}, GM.playerInfo || pi, { // arch-ok 新游戏构造期绑定唯一运行态玩家身份
+          characterId: String(found.id),
+          characterName: found.name
         });
       }
     }

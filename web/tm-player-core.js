@@ -66,19 +66,26 @@ function closePause(){_$("pause-bg").classList.remove("show");}
 
 // N8: 退位/禅让系统
 function openAbdication() {
-  var pc = GM.chars && GM.chars.find(function(c){ return c.isPlayer; });
+  var pc = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getCharacter === 'function')
+    ? TM.Player.getCharacter(GM)
+    : (GM.chars || []).find(function(c){ return c && c.isPlayer === true; });
   if (!pc) { toast('未找到玩家角色'); return; }
   // 候选继承人：同势力存活角色——国本刀(2026-07-07)：储君/皇嗣置顶(此前只按官阶·亲子沉底甚至挤出前十)
-  var _cpName = pc.designatedHeirId || (GM.harem && GM.harem.crownPrince) || '';
+  var _cpRef = pc.designatedHeirId || (GM.harem && (GM.harem.crownPrinceId || GM.harem.crownPrince)) || '';
+  var _cpById = (GM.chars || []).filter(function(c){ return c && c.id != null && String(c.id) === String(_cpRef); });
+  var _cpByName = _cpById.length ? [] : (GM.chars || []).filter(function(c){ return c && c.name === _cpRef; });
+  var _cpChar = _cpById.length === 1 ? _cpById[0] : (_cpByName.length === 1 ? _cpByName[0] : null);
+  var _cpName = _cpChar ? _cpChar.name : '';
   var _kidSet = {};
-  (pc.childrenIds || []).forEach(function(n){ _kidSet[n] = true; });
-  function _abdRank(c) { return c.name === _cpName ? 2 : (_kidSet[c.name] || c._royalChild) ? 1 : 0; }
+  (pc.childrenIds || []).forEach(function(n){ _kidSet[String(n)] = true; });
+  function _abdRank(c) { return c.name === _cpName ? 2 : (_kidSet[String(c.id)] || _kidSet[c.name] || c._royalChild) ? 1 : 0; }
   var candidates = (GM.chars || []).filter(function(c) {
     return c.alive !== false && !c.isPlayer && c.faction === pc.faction;
   }).sort(function(a, b) {
     var _d = _abdRank(b) - _abdRank(a);
     if (_d) return _d;
-    return finiteNumberOr(b.rankLevel, 9) - finiteNumberOr(a.rankLevel, 9);
+    if (typeof getRankSeniorityScore === 'function') return getRankSeniorityScore(b) - getRankSeniorityScore(a);
+    return finiteNumberOr(a.rankLevel, 99) - finiteNumberOr(b.rankLevel, 99);
   });
   var html = '<div style="padding:1.5rem;max-width:480px;">';
   html += '<div style="text-align:center;margin-bottom:1rem;"><div style="font-size:1.2rem;color:var(--gold);font-weight:700;">\u7985\u8BA9\u9000\u4F4D</div>';
@@ -89,9 +96,9 @@ function openAbdication() {
     html += '<div style="max-height:250px;overflow-y:auto;">';
     candidates.slice(0, 10).forEach(function(c, i) {
       var intel = finiteNumberOr(c.intelligence, 50), admin = finiteNumberOr(c.administration, 50);
-      var _safeName = escHtml(c.name).replace(/'/g, '&#39;').replace(/\\/g, '\\\\');
-      html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:0.5rem;margin-bottom:0.3rem;background:var(--bg-2);border-radius:6px;cursor:pointer;" onclick="_confirmAbdication(\'' + _safeName + '\')">';
-      var _kinTag = c.name === _cpName ? '<span style="color:var(--gold);font-size:0.7rem;margin-left:4px;">\u3010\u50A8\u541B\u3011</span>' : (_kidSet[c.name] || c._royalChild) ? '<span style="color:var(--gold);font-size:0.7rem;margin-left:4px;">\u3010\u7687\u55E3\u3011</span>' : '';
+      var _safeId = escHtml(String(c.id || '')).replace(/'/g, '&#39;').replace(/\\/g, '\\\\');
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:0.5rem;margin-bottom:0.3rem;background:var(--bg-2);border-radius:6px;cursor:pointer;" onclick="_confirmAbdication(\'' + _safeId + '\')">';
+      var _kinTag = c.name === _cpName ? '<span style="color:var(--gold);font-size:0.7rem;margin-left:4px;">\u3010\u50A8\u541B\u3011</span>' : (_kidSet[String(c.id)] || c._royalChild) ? '<span style="color:var(--gold);font-size:0.7rem;margin-left:4px;">\u3010\u7687\u55E3\u3011</span>' : '';
       html += '<div><div style="font-size:0.85rem;font-weight:700;">' + escHtml(c.name) + _kinTag + '</div><div style="font-size:0.7rem;color:var(--txt-d);">' + escHtml(c.title || '') + ' \u667A' + intel + ' \u653F' + admin + '</div></div>';
       html += '<span style="font-size:0.75rem;color:var(--gold);">\u9009\u62E9</span></div>';
     });
@@ -104,21 +111,26 @@ function openAbdication() {
   ov.innerHTML = '<div class="modal" style="max-width:500px;">' + html + '</div>';
   document.body.appendChild(ov);
 }
-function _confirmAbdication(heirName) {
-  if (!confirm('\u786E\u5B9A\u5C06\u5E1D\u4F4D\u7985\u8BA9\u7ED9' + heirName + '\uFF1F\u6B64\u4E3E\u4E0D\u53EF\u64A4\u56DE\u3002')) return;
-  var pc = GM.chars.find(function(c){ return c.isPlayer; });
-  var heir = findCharByName(heirName);
-  if (!pc || !heir) return;
-  // 禅让
-  pc.isPlayer = false;
-  pc.title = (pc.title || '') + '（太上皇）';
-  heir.isPlayer = true;
-  // 更新P.playerInfo——用继承人数据替换旧玩家信息
-  P.playerInfo.characterName = heir.name;
-  P.playerInfo.characterTitle = heir.title || heir.officialTitle || '';
-  P.playerInfo.characterBio = heir.bio || '';
-  P.playerInfo.characterPersonality = heir.personality || '';
-  if (heir.faction) P.playerInfo.factionName = heir.faction;
+function _confirmAbdication(heirId) {
+  var pc = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getCharacter === 'function')
+    ? TM.Player.getCharacter(GM)
+    : (GM.chars || []).find(function(c){ return c && c.isPlayer === true; });
+  var heirs = (GM.chars || []).filter(function(c) {
+    return c && c.id != null && String(c.id) === String(heirId || '');
+  });
+  var heir = heirs.length === 1 ? heirs[0] : null;
+  if (!pc || !heir) {
+    if (typeof toast === 'function') toast('禅让失败：继承人稳定身份无效');
+    return false;
+  }
+  if (!confirm('\u786E\u5B9A\u5C06\u5E1D\u4F4D\u7985\u8BA9\u7ED9' + heir.name + '\uFF1F\u6B64\u4E3E\u4E0D\u53EF\u64A4\u56DE\u3002')) return false;
+  var succession = (typeof TM !== 'undefined' && TM.Succession && typeof TM.Succession.transferPlayerControl === 'function')
+    ? TM.Succession.transferPlayerControl({ from: pc, to: heir, reason: 'abdication' })
+    : { ok: false, reason: 'succession-provider-missing' };
+  if (!succession.ok) {
+    if (typeof toast === 'function') toast('禅让失败：' + (succession.reason || '未知错误'));
+    return false;
+  }
   // 更新年号提示
   if (typeof addEB === 'function') addEB('\u7985\u8BA9', pc.name + '\u7985\u8BA9\u5E1D\u4F4D\u4E8E' + heir.name);
   if (typeof NpcMemorySystem !== 'undefined' && NpcMemorySystem.addMemory) {
@@ -128,6 +140,7 @@ function _confirmAbdication(heirName) {
   document.querySelectorAll('.modal-bg').forEach(function(m){ m.remove(); });
   toast('\u7985\u8BA9\u5B8C\u6210\uFF0C' + heir.name + '\u5DF2\u7EE7\u4F4D');
   if (typeof renderGameState === 'function') renderGameState();
+  return true;
 }
 
 // 史记浮动按钮
@@ -692,7 +705,7 @@ function _renderDifangPanel(force) {
 
   // 启动时按需派生管辖类型（首次或势力变更后）
   if (typeof applyAutonomyToAllDivisions === 'function') applyAutonomyToAllDivisions();
-  var _playerFac = (P.playerInfo && P.playerInfo.factionName) || '';
+  var _playerFac = (typeof getRuntimePlayerInfo === 'function' && getRuntimePlayerInfo().factionName) || '';
 
   // 收集所有顶级区划（扁平化）+ 附带管辖信息（dedupe 同名区划：只取第一个出现的）
   var _allDivs = [];
@@ -1767,8 +1780,9 @@ function renderLeftPanel(){
   // 不显示荒淫值数值——玩家通过叙事和NPC反应感受
 
   // 主角压力显示
-  if (P.playerInfo && P.playerInfo.characterName) {
-    var _pChar = typeof findCharByName === 'function' ? findCharByName(P.playerInfo.characterName) : null;
+  var _runtimePlayer = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getCharacter === 'function') ? TM.Player.getCharacter(GM) : null;
+  if (_runtimePlayer) {
+    var _pChar = _runtimePlayer;
     if (_pChar && (_pChar.stress || 0) > 0) {
       var pStressDiv = document.createElement("div");
       pStressDiv.style.cssText = "margin-bottom:0.4rem;";
@@ -2016,7 +2030,7 @@ function _rwpOpenWendui(name) {
   if (!name) return;
   // 自检·不得对自己发起问对
   try {
-    var _selfNm = (P.playerInfo && P.playerInfo.characterName) || '';
+    var _selfNm = (typeof getRuntimePlayerInfo === 'function' && getRuntimePlayerInfo().characterName) || '';
     if (_selfNm && _selfNm === name) {
       if (typeof toast === 'function') toast('不能召见自己');
       return;
@@ -2037,7 +2051,7 @@ function _rwpOpenLetter(name) {
   if (!name) return;
   // 自检·不得给自己写信
   try {
-    var _selfNm = (P.playerInfo && P.playerInfo.characterName) || '';
+    var _selfNm = (typeof getRuntimePlayerInfo === 'function' && getRuntimePlayerInfo().characterName) || '';
     if (_selfNm && _selfNm === name) {
       if (typeof toast === 'function') toast('不能自寄信函');
       return;
@@ -2273,7 +2287,7 @@ function openCharDetail(charName) {
   var gender = ch.gender || (ch.isFemale ? 'female' : 'male');
   // 兼容中/英 gender 值：'女'|'female' 视为女·'男'|'male' 视为男
   var isFemale = (gender === 'female' || gender === '女' || ch.isFemale === true);
-  var age = ch.age || '';
+  var age = (ch.age !== undefined && ch.age !== null) ? ch.age : '';
   var fameS = _rwpFameSeal(fame);
   var xianTier = _rwpXianTier(virtue);
   var radar = _rwpRenderRadar(ch);
@@ -2615,7 +2629,7 @@ function openCharRenwuPage(charName) {
   var stress = Math.round(res.stress !== undefined ? res.stress : (ch.stress || 0));
   var gender = ch.gender || (ch.isFemale ? 'female' : 'male');
   var isFemale = (gender === 'female' || gender === '女' || ch.isFemale === true);
-  var age = ch.age || '';
+  var age = (ch.age !== undefined && ch.age !== null) ? ch.age : '';
   var fameS = _rwpFameSeal(fame);
   var xianTier = _rwpXianTier(virtue);
   var xianPct = _rwpXianPct(virtue);
@@ -2848,7 +2862,7 @@ function openCharRenwuPage(charName) {
   h += '<div class="rwp-identity-grid">';
   var idCells = [
     {l:'性 别', v: isFemale?'女':'男'},
-    {l:'年 龄', v: age || '未详'},
+    {l:'年 龄', v: age === '' ? '未详' : age},
     {l:'身 份', v: ch.role || '—'},
     {l:'职 业', v: ch.occupation || ch.officialTitle || '—'},
     {l:'籍 贯', v: ch.birthplace || '—'},

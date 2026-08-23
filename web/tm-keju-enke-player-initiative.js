@@ -127,9 +127,9 @@
         body:  '朕初膺天命·登基改元·士林翘首·特开恩科一次·以广圣德·凡天下举子·均得与试。礼部尚书主之·限本年内开科。钦此。'
       },
       'birthday': {
-        label: '圣寿' + _kjG2NumToCn(detail.age || 60) + '恩科',
+        label: '圣寿' + _kjG2NumToCn(typeof getValidAge === 'function' ? getValidAge({ age: detail.age }, 60) : (Number.isFinite(detail.age) && detail.age >= 0 ? detail.age : 60)) + '恩科',
         path:  '寿诞恩科',
-        body:  '朕躬康健·恭逢圣寿' + _kjG2NumToCn(detail.age || 60) + '·士林同庆·特开恩科一次·以光天恩·凡天下举子·均得与试。礼部尚书主之·限本年内开科。钦此。'
+        body:  '朕躬康健·恭逢圣寿' + _kjG2NumToCn(typeof getValidAge === 'function' ? getValidAge({ age: detail.age }, 60) : (Number.isFinite(detail.age) && detail.age >= 0 ? detail.age : 60)) + '·士林同庆·特开恩科一次·以光天恩·凡天下举子·均得与试。礼部尚书主之·限本年内开科。钦此。'
       },
       'wedding': {
         label: '大婚恩科',

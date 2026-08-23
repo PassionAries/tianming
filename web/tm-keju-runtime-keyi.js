@@ -1217,7 +1217,7 @@ function showAnswerModal(candidate) {
     + '<div style="flex:1;overflow-y:auto;padding:1.5rem;">'
     // 考生信息
     +   '<div style="background:var(--bg-2);padding:1rem;border-radius:8px;margin-bottom:1rem;">'
-    +     '<p><strong>\u8003\u751F\uFF1A</strong>' + escHtml(candidate.name) + '\uFF08' + (candidate.age||'?') + '\u5C81\uFF0C' + escHtml(candidate.origin||'') + '\uFF09</p>'
+    +     '<p><strong>\u8003\u751F\uFF1A</strong>' + escHtml(candidate.name) + '\uFF08' + (candidate.age !== undefined && candidate.age !== null ? candidate.age : '?') + '\u5C81\uFF0C' + escHtml(candidate.origin||'') + '\uFF09</p>'
     +     '<p><strong>\u6392\u540D\uFF1A</strong>\u7B2C' + candidate.rank + '\u540D'
     +       (candidate.style ? '<span style="color:var(--txt-d);margin-left:10px;">\u98CE\u683C\uFF1A' + escHtml(candidate.style) + '</span>' : '')
     +       (candidate.personalityHint ? '<span style="color:var(--txt-d);margin-left:10px;">\u6027\u60C5\uFF1A' + escHtml(candidate.personalityHint) + '</span>' : '')
@@ -1279,6 +1279,11 @@ function recruitCandidate(index) {
   var exam = P.keju.currentExam;
   var candidate = exam.dianshiResults[index];
   if (!candidate) return;
+  var candidateAge = typeof getValidAge === 'function' ? getValidAge(candidate, 25) : (Number.isFinite(Number(candidate.age)) && Number(candidate.age) >= 0 ? Math.floor(Number(candidate.age)) : 25);
+  if (candidateAge < 20 || candidateAge > 70) {
+    if (typeof toast === 'function') toast('\u8003\u751F\u5E74\u9F84\u4E0D\u7B26\u5408\u53D9\u7528\u5951\u7EA6', 'error');
+    return false;
+  }
 
   // 添加到人物志（完整角色数据）
   var rankTitles = {1:'\u72B6\u5143',2:'\u699C\u773C',3:'\u63A2\u82B1'};
@@ -1286,9 +1291,8 @@ function recruitCandidate(index) {
   // 根据名次推算属性——状元智力更高，但不全是书呆子
   var baseInt = Math.min(98, (candidate.score || 80) + (candidate.rank <= 3 ? 5 : 0));
   var newChar = {
-    id: typeof uid === 'function' ? uid() : 'keju_' + Date.now() + '_' + candidate.rank,
     name: candidate.name,
-    age: candidate.age || 25,
+    age: candidateAge,
     gender: candidate.gender || '\u7537',
     origin: candidate.origin || '',
     ethnicity: candidate.ethnicity || '',
@@ -1326,7 +1330,7 @@ function recruitCandidate(index) {
     children: []
   };
 
-  (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(newChar);
+  createRuntimeCharacter(newChar);
   GM.allCharacters.push({
     name: newChar.name, title: newChar.title, age: newChar.age, gender: newChar.gender,
     personality: newChar.personality, desc: newChar.description, loyalty: newChar.loyalty,
@@ -1354,8 +1358,9 @@ function recruitCandidate(index) {
 
   // 2. 天子门生——殿试前三名对玩家(天子)有特殊感恩
   var isTop3 = candidate.rank <= 3;
-  if (isTop3 && P.playerInfo && P.playerInfo.characterName && typeof AffinityMap !== 'undefined') {
-    var _playerName = P.playerInfo.characterName;
+  var _runtimePlayerInfo = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getInfo === 'function') ? TM.Player.getInfo() : (GM.playerInfo || {});
+  if (isTop3 && _runtimePlayerInfo.characterName && typeof AffinityMap !== 'undefined') {
+    var _playerName = _runtimePlayerInfo.characterName;
     AffinityMap.add(candidate.name, _playerName, 12, '\u5929\u5B50\u95E8\u751F\u4E4B\u6069');
     if (typeof NpcMemorySystem !== 'undefined') {
       var _rankTitle = candidate.rank === 1 ? '\u72B6\u5143' : candidate.rank === 2 ? '\u699C\u773C' : '\u63A2\u82B1';
@@ -1708,13 +1713,14 @@ function _kejuFinalize(exam) {
 function _kejuBasicRecruit(candidate, rankTitle) {
   if (!GM.chars) GM.chars = [];
   if (GM.chars.find(function(c){ return c && c.name === candidate.name; })) return;
+  var candidateAge = typeof getValidAge === 'function' ? getValidAge(candidate, 25) : (Number.isFinite(Number(candidate.age)) && Number(candidate.age) >= 0 ? Math.floor(Number(candidate.age)) : 25);
+  if (candidateAge < 20 || candidateAge > 70) return false;
   var bonus = P.keju.attributeBonus || {};
   var key = rankTitle === '\u72B6\u5143' ? 'zhuangyuan' : rankTitle === '\u699C\u773C' ? 'bangyan' : 'tanhua';
   var b = bonus[key] || {};
-  (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })({
-    id: 'keju_' + Date.now() + '_' + candidate.rank,
+  createRuntimeCharacter({
     name: candidate.name,
-    age: candidate.age || 25,
+    age: candidateAge,
     origin: candidate.origin,
     ethnicity: candidate.ethnicity || '\u6C49',
     class: candidate.class || '\u5BD2\u95E8',
@@ -1746,6 +1752,8 @@ function _kejuBasicRecruit(candidate, rankTitle) {
 
 /** v7.1·D5·AI 全字段生成 (eager·含生平/外貌/家谱/史料出处段 + examiner 4 属性 hint + 4 维度) */
 async function _aiGenerateFullCharacter(candidate, rankKey) {
+  var candidateAge = typeof getValidAge === 'function' ? getValidAge(candidate, 25) : (Number.isFinite(Number(candidate && candidate.age)) && Number(candidate.age) >= 0 ? Math.floor(Number(candidate.age)) : 25);
+  if (candidateAge < 20 || candidateAge > 70) return false;
   if (!P.ai || !P.ai.key) { _kejuBasicRecruit(candidate, rankKey === 'zhuangyuan' ? '\u72B6\u5143' : rankKey === 'bangyan' ? '\u699C\u773C' : rankKey === 'tanhua' ? '\u63A2\u82B1' : '\u8FDB\u58EB'); return; }
 
   var exam = P.keju.currentExam;
@@ -1831,13 +1839,9 @@ async function _aiGenerateFullCharacter(candidate, rankKey) {
       var bonusKey = rankKey || 'erjia';
       var b = bonus[bonusKey] || { fame: 15, virtue: 8 };
 
-      // v7.1·D5·GM._runId 防撞 seed (重启游戏不重名)
-      if (!GM._runId) GM._runId = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
-
       var newChar = {
-        id: 'keju_' + GM._runId + '_' + (exam ? exam.id : 'noexam') + '_' + candidate.rank + '_' + (candidate.name || 'anon'),
         name: candidate.name,
-        age: candidate.age || 25,
+        age: candidateAge,
         gender: '\u7537',
         ethnicity: candidate.ethnicity || '\u6C49',
         origin: candidate.origin,
@@ -1907,7 +1911,7 @@ async function _aiGenerateFullCharacter(candidate, rankKey) {
       if (!GM.chars) GM.chars = [];
       // 去重·避免已存在
       if (!GM.chars.find(function(c){ return c && c.name === newChar.name; })) {
-        (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(newChar);
+        createRuntimeCharacter(newChar);
       }
       return newChar;
     } catch(e) {

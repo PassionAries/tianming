@@ -298,7 +298,10 @@
       if (c.status === '薨') return;
 
       // 年龄按回合数月推进（4 回合 ≈ 1 岁，与游戏节奏匹配）
-      if (curTurn % 4 === 0) c.age = (c.age || 20) + 1;
+      if (curTurn % 4 === 0) {
+        var _consortAge = typeof getValidAge === 'function' ? getValidAge(c, 20) : (Number.isFinite(c.age) && c.age >= 0 ? Math.floor(c.age) : 20);
+        c.age = _consortAge + 1;
+      }
 
       // 怀孕推进：怀胎约 9 回合
       if (c.pregnant && c.pregnantSince != null) {
@@ -314,28 +317,30 @@
             var _ord = ['长', '次', '三', '四', '五', '六', '七', '八', '九', '十'];
             var _seq = GM.harem.heirs.filter(function(h){ return h && h.isPrince === isPrince; }).length;
             var babyName = '皇' + (_ord[_seq] || String(_seq + 1)) + (isPrince ? '子' : '女');
-            // 简单的孩子记录
+            // 国本接通(2026-07-07)：皇嗣登记为真角色+回填玩家 childrenIds——此前皇嗣只是数据对象·
+            //   resolveHeir(只认 char)永远选不中·驾崩/禅让轮不到亲子·后宫产出被整体丢弃。
+            var _pcH = (window.TM && TM.Succession && typeof TM.Succession.getPlayerCharacter === 'function')
+              ? TM.Succession.getPlayerCharacter(GM)
+              : (GM.chars || []).find(function(x){ return x && x.isPlayer; });
+            if (!_pcH || !window.TM || !TM.Roster || typeof TM.Roster.createChar !== 'function') {
+              throw new Error('皇嗣创建缺少玩家角色或统一名册入口');
+            }
+            var _baby = TM.Roster.createChar({
+              name: babyName, age: 0, gender: isPrince ? 'male' : 'female',
+              faction: _pcH.faction, factionId: _pcH.factionId, alive: true, loyalty: 100,
+              title: isPrince ? '皇子' : '皇女', bio: '生母' + (c.rank || '') + c.name,
+              father: _pcH.name, mother: c.name, _royalChild: true,
+              bornTurn: curTurn, _createdTurn: curTurn, _origin: 'harem-child'
+            }, { world: GM, father: _pcH, defaultAge: 0 });
             c.children.push(babyName);
+            if (!Array.isArray(c.childrenIds)) c.childrenIds = [];
+            c.childrenIds.push(_baby.id);
             c.childCount = (c.childCount || 0) + 1;
             GM.harem.heirs.push({
+              id: _baby.id, characterId: _baby.id,
               name: babyName, mother: c.name, motherRank: c.rank,
               bornTurn: curTurn, isPrince: isPrince, alive: true
             });
-            // 国本接通(2026-07-07)：皇嗣登记为真角色+回填玩家 childrenIds——此前皇嗣只是数据对象·
-            //   resolveHeir(只认 char)永远选不中·驾崩/禅让轮不到亲子·后宫产出被整体丢弃。
-            try {
-              var _pcH = (GM.chars || []).find(function(x){ return x && x.isPlayer; });
-              if (_pcH && !(GM.chars || []).some(function(x){ return x && x.name === babyName; })) {
-                GM.chars.push({ // arch-ok 诞育入宗牒(国本刀2026-07-07·新生皇嗣登记为真角色·resolveHeir 才可及)
-                  name: babyName, age: 0, gender: isPrince ? 'male' : 'female',
-                  faction: _pcH.faction, alive: true, loyalty: 100,
-                  title: isPrince ? '皇子' : '皇女', bio: '生母' + (c.rank || '') + c.name,
-                  father: _pcH.name, mother: c.name, _royalChild: true
-                });
-                if (!Array.isArray(_pcH.childrenIds)) _pcH.childrenIds = [];
-                if (_pcH.childrenIds.indexOf(babyName) < 0) _pcH.childrenIds.push(babyName);
-              }
-            } catch (_ebr) {}
             c.favor = Math.min(100, (c.favor || 0) + (isPrince ? 18 : 10));
             // 诞下皇子可获位分提升
             if (isPrince && c.rank !== '皇后' && c.rank !== '皇贵妃') {
@@ -552,14 +557,19 @@
   function crownPrince(name) {
     var h = ((GM.harem && GM.harem.heirs) || []).find(function(x){ return x && x.name === name && x.alive !== false && x.isPrince; });
     if (!h) { toastSafe('查无此皇子'); return false; }
-    var pc = (GM.chars || []).find(function(x){ return x && x.isPlayer; });
+    var pc = (window.TM && TM.Player && typeof TM.Player.getCharacter === 'function')
+      ? TM.Player.getCharacter(GM)
+      : (GM.chars || []).find(function(x){ return x && x.isPlayer === true; });
     if (!pc) { toastSafe('未找到玩家角色'); return false; }
     var heirChar = (GM.chars || []).find(function(x){ return x && x.name === name && x.alive !== false; });
     if (!heirChar) { toastSafe('皇子未入宗牒（旧档所生），恕不可立'); return false; }
     if (GM.harem.crownPrince === name) { toastSafe(name + '已正位东宫'); return false; }
     if (typeof confirm === 'function' && !confirm('册立 ' + name + ' 为皇太子？国本一定，中外瞩目。')) return false;
-    GM.harem.crownPrince = name; // arch-ok 册立太子写口本体(harem 子树·本模块即后宫写主)
-    pc.designatedHeirId = name;
+    if (!heirChar.id || !String(heirChar.id).trim()) { toastSafe('皇子缺少稳定身份，无法册立'); return false; }
+    GM.harem.crownPrince = name; // arch-ok 后宫写主保留姓名显示兼容
+    GM.harem.crownPrinceId = heirChar.id; // arch-ok 册立太子稳定身份写口
+    pc.designatedHeirId = heirChar.id;
+    heirChar.isCrownPrince = true;
     heirChar.title = '皇太子';
     if (typeof addEB === 'function') { try { addEB('国本', '册立' + name + '为皇太子·告庙颁诏·国本以定', { credibility: 'high' }); } catch(_){} }
     // 立储乃朝局大事：要臣入记忆(cap12·全朝反应交叙事)

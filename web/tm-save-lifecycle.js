@@ -1283,6 +1283,14 @@ function _tmBackfillStableForeignKeys(targetGM) {
     var id = name && nameMap[name];
     if (id != null) owner[idField] = id; // arch-ok: 旧名称外键迁移到稳定实体 ID
   }
+  function repairNamedRefArray(owner, field, idSet, nameMap) {
+    if (!owner || !Array.isArray(owner[field])) return;
+    owner[field] = owner[field].map(function(value) {
+      var key = typeof value === 'string' ? value.trim() : '';
+      if (!key || idSet[key]) return value;
+      return nameMap[key] != null ? nameMap[key] : value; // arch-ok: 旧姓名数组外键仅在唯一可解析时迁移
+    });
+  }
   (targetGM.chars || []).forEach(function(ch) {
     if (!ch) return;
     repairNamedRef(ch, 'factionId', ch.faction, factionIds, factionByName);
@@ -1290,12 +1298,19 @@ function _tmBackfillStableForeignKeys(targetGM) {
     repairNamedRef(ch, 'motherId', ch.mother, charIds, charByName);
     repairNamedRef(ch, 'spouseId', ch.spouse, charIds, charByName);
     repairNamedRef(ch, 'mentorId', ch.mentor, charIds, charByName);
+    repairNamedRef(ch, 'designatedHeirId', ch.designatedHeir || ch.designatedHeirId, charIds, charByName);
+    ['childrenIds', 'studentIds', 'studentsIds', 'relativeIds'].forEach(function(field) {
+      repairNamedRefArray(ch, field, charIds, charByName);
+    });
     (Array.isArray(ch.familyMembers) ? ch.familyMembers : []).forEach(function(member) {
       if (!member || typeof member !== 'object') return;
       repairNamedRef(member, 'characterId', member.name, charIds, charByName);
       repairNamedRef(member, 'personId', member.name, charIds, charByName);
     });
   });
+  if (targetGM.harem && typeof targetGM.harem === 'object') {
+    repairNamedRef(targetGM.harem, 'crownPrinceId', targetGM.harem.crownPrince || targetGM.harem.crownPrinceId, charIds, charByName);
+  }
   (targetGM.facs || []).forEach(function(fac) {
     if (!fac) return;
     repairNamedRef(fac, 'leaderId', fac.leader, charIds, charByName);
@@ -1396,7 +1411,7 @@ function _tmValidateStableForeignKeys(targetGM) {
   (targetGM.chars || []).forEach(function(ch, index) {
     if (!ch) return;
     requireExisting('人物[' + index + '].factionId', ch.factionId, factionIds);
-    ['fatherId', 'motherId', 'spouseId', 'mentorId'].forEach(function(field) {
+    ['fatherId', 'motherId', 'spouseId', 'mentorId', 'designatedHeirId'].forEach(function(field) {
       requireExisting('人物[' + index + '].' + field, ch[field], charIds);
     });
     ['childrenIds', 'studentIds', 'studentsIds', 'relativeIds'].forEach(function(field) {
@@ -1410,6 +1425,9 @@ function _tmValidateStableForeignKeys(targetGM) {
       requireExisting('人物[' + index + '].familyMembers[' + memberIndex + '].personId', member.personId, charIds);
     });
   });
+  if (targetGM.harem && typeof targetGM.harem === 'object') {
+    requireExisting('后宫.crownPrinceId', targetGM.harem.crownPrinceId, charIds);
+  }
   (targetGM.facs || []).forEach(function(faction, index) {
     if (!faction) return;
     requireExisting('势力[' + index + '].leaderId', faction.leaderId, charIds);

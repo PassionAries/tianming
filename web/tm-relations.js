@@ -584,17 +584,331 @@ function syncFactionRelationsFromList(list) {
   return GM.factionRelationsMap;
 }
 
-function removeFactionRelationsForFaction(factionName) {
-  if (!factionName || typeof GM === 'undefined' || !GM) return;
-  normalizeFactionRelationsMap();
-  delete GM.factionRelationsMap[factionName];
-  Object.keys(GM.factionRelationsMap).forEach(function(from) {
-    if (GM.factionRelationsMap[from]) delete GM.factionRelationsMap[from][factionName];
+function removeFactionRelationsForFaction(factionName, world) {
+  var G = world || ((typeof GM !== 'undefined' && GM) ? GM : null);
+  if (!factionName || !G) return { ok: false, reason: 'invalid-faction' };
+  var name = String(factionName);
+  if (!G.factionRelationsMap || typeof G.factionRelationsMap !== 'object' || Array.isArray(G.factionRelationsMap)) {
+    G.factionRelationsMap = {};
+  }
+  delete G.factionRelationsMap[name];
+  Object.keys(G.factionRelationsMap).forEach(function(from) {
+    if (G.factionRelationsMap[from] && typeof G.factionRelationsMap[from] === 'object') {
+      delete G.factionRelationsMap[from][name];
+    }
+    if (from.indexOf(name + '->') === 0 || from.slice(-(name.length + 2)) === '->' + name) {
+      delete G.factionRelationsMap[from];
+    }
   });
-  if (Array.isArray(GM.factionRelations)) {
-    GM.factionRelations = GM.factionRelations.filter(function(r) {
-      return r && r.from !== factionName && r.to !== factionName;
+  if (Array.isArray(G.factionRelations)) {
+    G.factionRelations = G.factionRelations.filter(function(r) {
+      return r && r.from !== name && r.to !== name;
     });
+  }
+  return { ok: true };
+}
+
+function _tmFactionStableId(faction) {
+  if (!faction || typeof faction !== 'object') return '';
+  var raw = faction.id != null ? faction.id : faction.factionId;
+  return raw == null ? '' : String(raw).trim();
+}
+
+function _tmFactionName(faction) {
+  if (!faction || typeof faction !== 'object') return '';
+  return String(faction.name || faction.factionName || '').trim();
+}
+
+function _tmFactionResolve(world, ref) {
+  var list = world && Array.isArray(world.facs) ? world.facs : [];
+  if (ref && typeof ref === 'object') {
+    if (list.indexOf(ref) >= 0) return ref;
+    var objectId = _tmFactionStableId(ref);
+    if (objectId) return list.find(function(f) { return _tmFactionStableId(f) === objectId; }) || null;
+    ref = _tmFactionName(ref);
+  }
+  var value = ref == null ? '' : String(ref).trim();
+  if (!value) return null;
+  var byId = list.filter(function(f) {
+    var factionId = _tmFactionStableId(f);
+    return factionId && (factionId === value || ('id:' + factionId) === value);
+  });
+  if (byId.length === 1) return byId[0];
+  var byName = list.filter(function(f) { return _tmFactionName(f) === value; });
+  return byName.length === 1 ? byName[0] : null;
+}
+
+function _tmFactionReferenceMatcher(world, faction) {
+  var id = _tmFactionStableId(faction);
+  var name = _tmFactionName(faction);
+  var sameName = (world.facs || []).filter(function(f) { return _tmFactionName(f) === name; }).length;
+  var allowLegacyName = !!name && sameName === 1;
+  function scalar(value) {
+    if (value == null) return false;
+    if (typeof value === 'object') {
+      var objectId = _tmFactionStableId(value);
+      if (objectId) return !!id && objectId === id;
+      return allowLegacyName && _tmFactionName(value) === name;
+    }
+    var text = String(value).trim();
+    if (!text) return false;
+    if (id && (text === id || text === 'id:' + id)) return true;
+    return allowLegacyName && text === name;
+  }
+  function record(entry) {
+    if (!entry || typeof entry !== 'object') return false;
+    var fields = [
+      'factionId', 'sourceFactionId', 'targetFactionId', 'attackerId', 'defenderId',
+      'attackerFactionId', 'defenderFactionId', 'fromId', 'toId', 'ownerFactionId',
+      'faction', 'sourceFaction', 'targetFaction', 'attacker', 'defender', 'enemy',
+      'attackerFaction', 'defenderFaction', 'from', 'to', 'sideA', 'sideB',
+      'owner', 'ownerFaction', 'controller', 'occupiedBy', 'occupier', 'initiator', 'responder'
+    ];
+    for (var i = 0; i < fields.length; i++) {
+      if (scalar(entry[fields[i]])) return true;
+    }
+    var arrays = ['parties', 'participants', 'participantIds', 'factions', 'factionIds', 'belligerents'];
+    for (var j = 0; j < arrays.length; j++) {
+      var values = entry[arrays[j]];
+      if (Array.isArray(values) && values.some(scalar)) return true;
+    }
+    return false;
+  }
+  return { id: id, name: name, allowLegacyName: allowLegacyName, scalar: scalar, record: record };
+}
+
+function _tmFactionClone(value) {
+  if (value == null) return value;
+  if (typeof deepClone === 'function') return deepClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+
+function _tmFactionClearMapRefs(root, matcher, replacement) {
+  if (!root || typeof root !== 'object') return root;
+  var copy = _tmFactionClone(root);
+  var nameFields = {
+    faction:1, sourceFaction:1, targetFaction:1, attackerFaction:1, defenderFaction:1,
+    owner:1, ownerFaction:1, controller:1, occupiedBy:1, occupier:1
+  };
+  var idFields = {
+    factionId:1, sourceFactionId:1, targetFactionId:1, attackerFactionId:1,
+    defenderFactionId:1, ownerFactionId:1, controllerFactionId:1, occupierId:1
+  };
+  function visit(value) {
+    if (!value || typeof value !== 'object') return;
+    Object.keys(value).forEach(function(key) {
+      var child = value[key];
+      if ((nameFields[key] || idFields[key]) && matcher.scalar(child)) {
+        if (replacement) value[key] = idFields[key] ? replacement.id : replacement.name;
+        else delete value[key];
+        if (key === 'occupiedBy') delete value._occupiedTurn;
+        return;
+      }
+      if (child && typeof child === 'object') visit(child);
+    });
+  }
+  visit(copy);
+  return copy;
+}
+
+// tm-relations 也被独立编辑器加载；成员写口由正式游戏入口在装载时注入，
+// 避免关系模块对编辑器未加载的运行时 provider 形成悬空依赖。
+var _tmFactionMembershipProvider = null;
+function configureFactionMembershipProvider(provider) {
+  if (!provider || typeof provider.assignChar !== 'function' || typeof provider.assignArmy !== 'function') {
+    return { ok: false, reason: 'invalid-membership-provider' };
+  }
+  _tmFactionMembershipProvider = provider;
+  return { ok: true };
+}
+
+function removeFaction(factionRef, options) {
+  options = options || {};
+  var G = options.world || ((typeof GM !== 'undefined' && GM) ? GM : null);
+  if (!G || !Array.isArray(G.facs)) return { ok: false, reason: 'world-unavailable' };
+  var faction = _tmFactionResolve(G, factionRef);
+  if (!faction) {
+    var unresolved = factionRef && typeof factionRef === 'object' ? _tmFactionName(factionRef) : String(factionRef || '').trim();
+    var ambiguous = unresolved && G.facs.filter(function(f) { return _tmFactionName(f) === unresolved; }).length > 1;
+    if (ambiguous) return { ok: false, reason: 'ambiguous-legacy-faction-name' };
+    return { ok: true, alreadyRemoved: true, removed: false };
+  }
+  var matcher = _tmFactionReferenceMatcher(G, faction);
+  if (!matcher.id) return { ok: false, reason: 'missing-stable-id' };
+  var replacement = options.transferTo ? _tmFactionResolve(G, options.transferTo) : null;
+  if (options.transferTo && !replacement) return { ok: false, reason: 'transfer-faction-not-found' };
+  var replacementRef = replacement ? { id: _tmFactionStableId(replacement), name: _tmFactionName(replacement) } : null;
+  var before = {
+    facs: G.facs.slice(), activeWars: G.activeWars, activeSieges: G.activeSieges,
+    armies: G.armies, treaties: G.treaties, factionRelations: G.factionRelations,
+    factionRelationsMap: _tmFactionClone(G.factionRelationsMap), warTruces: G._warTruces,
+    pendingAudiences: G._pendingAudiences, negotiations: G._negotiations,
+    pendingDiplomaticProposals: G.pendingDiplomaticProposals,
+    privatePendingDiplomaticProposals: G._pendingDiplomaticProposals,
+    mapData: G.mapData, map: G.map, regions: G.regions, cities: G.cities,
+    adminHierarchy: G.adminHierarchy, provinceStats: G.provinceStats,
+    provinceToFaction: G._provinceToFaction,
+    factionStates: G.facs.map(function(f) { return { faction: f, state: _tmFactionClone(f) }; }),
+    charStates: (G.chars || []).map(function(ch) { return { char: ch, state: _tmFactionClone(ch) }; }),
+    armyStates: (G.armies || []).map(function(army) { return { army: army, state: _tmFactionClone(army) }; })
+  };
+  try {
+    var membership = _tmFactionMembershipProvider;
+    if (!membership || typeof membership.assignChar !== 'function' || typeof membership.assignArmy !== 'function') {
+      throw new Error('势力注销缺少统一成员归属入口');
+    }
+    var removedArmies = (G.armies || []).filter(function(a) { return matcher.record(a); });
+    var removedArmyRefs = [];
+    removedArmies.forEach(function(a) {
+      [a && a.id, a && a.name].forEach(function(v) { if (v != null && String(v)) removedArmyRefs.push(String(v)); });
+    });
+    G.activeWars = (G.activeWars || []).filter(function(w) { return !matcher.record(w); });
+    G.activeSieges = (G.activeSieges || []).filter(function(s) {
+      if (matcher.record(s)) return false;
+      var siegeArmyRefs = [
+        s && s.attackerArmy, s && s.attackerArmyId, s && s.defenderArmy, s && s.defenderArmyId,
+        s && s.besiegerArmy, s && s.besiegerArmyId, s && s.garrisonArmy, s && s.garrisonArmyId
+      ].filter(function(value) { return value !== undefined && value !== null; }).map(String);
+      return !siegeArmyRefs.some(function(value) { return removedArmyRefs.indexOf(value) >= 0; });
+    });
+    G.armies = options.removeArmies === false
+      ? (G.armies || []).map(function(a) {
+          if (!matcher.record(a)) return a;
+          membership.assignArmy(a, replacementRef ? replacementRef.name : '', {
+            reason: options.reason || '势力注销', silent: true, byTurn: G.turn, deferRefresh: true,
+            targetFactionId: replacementRef ? replacementRef.id : ''
+          });
+          return a;
+        })
+      : (G.armies || []).filter(function(a) { return !matcher.record(a); });
+    G.treaties = (G.treaties || []).filter(function(t) { return !matcher.record(t); });
+    ['pendingDiplomaticProposals', '_pendingDiplomaticProposals'].forEach(function(field) {
+      if (Array.isArray(G[field])) G[field] = G[field].filter(function(p) { return !matcher.record(p); });
+    });
+    if (Array.isArray(G._pendingAudiences)) {
+      G._pendingAudiences = G._pendingAudiences.filter(function(a) { return !matcher.record(a); });
+    }
+    if (Array.isArray(G._negotiations)) {
+      G._negotiations = G._negotiations.filter(function(n) {
+        return !matcher.record(n) && !matcher.record(n && n.parties) && !matcher.record(n && n.sourceRef);
+      });
+    }
+    G.facs.forEach(function(other) {
+      if (!other || other === faction) return;
+      if (Array.isArray(other._incomingProposals)) {
+        other._incomingProposals = other._incomingProposals.filter(function(p) { return !matcher.record(p); });
+      }
+      var strategy = other.aiStrategy;
+      if (!strategy || typeof strategy !== 'object') return;
+      ['allianceIds', 'grudgeIds', 'enemyIds', 'rivalIds'].forEach(function(field) {
+        if (Array.isArray(strategy[field])) strategy[field] = strategy[field].filter(function(v) { return !matcher.scalar(v); });
+      });
+      if (matcher.allowLegacyName) {
+        ['alliances', 'grudges', 'enemies', 'rivals', 'treaties'].forEach(function(field) {
+          if (Array.isArray(strategy[field])) strategy[field] = strategy[field].filter(function(v) { return !matcher.scalar(v); });
+        });
+      }
+    });
+    (G.chars || []).forEach(function(ch) {
+      if (!ch || (!matcher.scalar(ch.factionId) && !matcher.scalar(ch.faction))) return;
+      membership.assignChar(ch, replacementRef ? replacementRef.name : '', {
+        reason: options.reason || '势力注销', silent: true, byTurn: G.turn, deferRefresh: true,
+        targetFactionId: replacementRef ? replacementRef.id : ''
+      });
+    });
+    G.facs.forEach(function(other) {
+      if (!other || other === faction) return;
+      ['liegeId','overlordId','suzerainId'].forEach(function(field) {
+        if (matcher.scalar(other[field])) other[field] = replacementRef ? replacementRef.id : '';
+      });
+      ['liege','overlord','suzerain'].forEach(function(field) {
+        if (matcher.scalar(other[field])) other[field] = replacementRef ? replacementRef.name : '';
+      });
+      ['vassalIds','allyIds','enemyIds','rivalIds','treatyPartnerIds'].forEach(function(field) {
+        if (Array.isArray(other[field])) other[field] = other[field].filter(function(value) { return !matcher.scalar(value); });
+      });
+      if (matcher.allowLegacyName) {
+        ['vassals','allies','enemies','rivals','treatyPartners'].forEach(function(field) {
+          if (Array.isArray(other[field])) other[field] = other[field].filter(function(value) { return !matcher.scalar(value); });
+        });
+      }
+    });
+    // 稳定 ID 记录始终可精确清理；旧姓名键只有在该姓名唯一时才安全删除。
+    // 同名不同 ID 时保留无法消歧的旧姓名关系，避免注销甲时误删乙的关系。
+    if (Array.isArray(G.factionRelations)) {
+      G.factionRelations = G.factionRelations.filter(function(relation) { return !matcher.record(relation); });
+    }
+    removeFactionRelationsForFaction(matcher.id, G);
+    removeFactionRelationsForFaction('id:' + matcher.id, G);
+    if (matcher.allowLegacyName) removeFactionRelationsForFaction(matcher.name, G);
+    if (G._warTruces && G._warTruces.truces && typeof G._warTruces.truces === 'object') {
+      var truceCopy = _tmFactionClone(G._warTruces);
+      Object.keys(truceCopy.truces).forEach(function(key) {
+        var parts = String(key).split('|');
+        if (parts.some(function(part) { return matcher.scalar(part); })) delete truceCopy.truces[key];
+      });
+      G._warTruces = truceCopy;
+    }
+    ['mapData', 'map', 'regions', 'cities', 'adminHierarchy', 'provinceStats'].forEach(function(field) {
+      if (G[field] && typeof G[field] === 'object') G[field] = _tmFactionClearMapRefs(G[field], matcher, replacementRef);
+    });
+    if (G._provinceToFaction && typeof G._provinceToFaction === 'object') {
+      var provinceOwners = _tmFactionClone(G._provinceToFaction);
+      Object.keys(provinceOwners).forEach(function(key) {
+        if (!matcher.scalar(provinceOwners[key])) return;
+        if (replacementRef) provinceOwners[key] = replacementRef.name;
+        else delete provinceOwners[key];
+      });
+      G._provinceToFaction = provinceOwners;
+    }
+    G.facs = G.facs.filter(function(f) { return f !== faction; });
+    if (typeof removeFromIndex === 'function' && (!options.world || (typeof GM !== 'undefined' && G === GM))) removeFromIndex('fac', matcher.name);
+    if (typeof buildIndices === 'function' && (!options.world || (typeof GM !== 'undefined' && G === GM))) buildIndices();
+    delete G._facIndex;
+    return {
+      ok: true, removed: true, factionId: matcher.id, factionName: matcher.name,
+      warsRemoved: before.activeWars && before.activeWars.length ? before.activeWars.length - G.activeWars.length : 0,
+      armiesRemoved: removedArmies.length
+    };
+  } catch (error) {
+    G.facs = before.facs;
+    G.activeWars = before.activeWars; G.activeSieges = before.activeSieges;
+    G.armies = before.armies; G.treaties = before.treaties;
+    G.factionRelations = before.factionRelations; G.factionRelationsMap = before.factionRelationsMap;
+    G._warTruces = before.warTruces; G._pendingAudiences = before.pendingAudiences;
+    G._negotiations = before.negotiations;
+    G.pendingDiplomaticProposals = before.pendingDiplomaticProposals;
+    G._pendingDiplomaticProposals = before.privatePendingDiplomaticProposals;
+    G.mapData = before.mapData; G.map = before.map; G.regions = before.regions; G.cities = before.cities;
+    G.adminHierarchy = before.adminHierarchy; G.provinceStats = before.provinceStats;
+    G._provinceToFaction = before.provinceToFaction;
+    before.factionStates.forEach(function(entry) {
+      if (!entry.faction) return;
+      Object.keys(entry.faction).forEach(function(key) { delete entry.faction[key]; });
+      Object.keys(entry.state || {}).forEach(function(key) { entry.faction[key] = _tmFactionClone(entry.state[key]); });
+    });
+    before.charStates.forEach(function(entry) {
+      if (!entry.char) return;
+      Object.keys(entry.char).forEach(function(key) { delete entry.char[key]; });
+      Object.keys(entry.state || {}).forEach(function(key) { entry.char[key] = _tmFactionClone(entry.state[key]); });
+    });
+    before.armyStates.forEach(function(entry) {
+      if (!entry.army) return;
+      Object.keys(entry.army).forEach(function(key) { delete entry.army[key]; });
+      Object.keys(entry.state || {}).forEach(function(key) { entry.army[key] = _tmFactionClone(entry.state[key]); });
+    });
+    try {
+      if (typeof invalidateGameIndices === 'function') invalidateGameIndices(G, null);
+      delete G._facIndex;
+    } catch (_indexRollbackError) {
+      if (typeof TM !== 'undefined' && TM.errors && typeof TM.errors.captureSilent === 'function') {
+        TM.errors.captureSilent(_indexRollbackError, '势力注销回滚索引失效');
+      }
+    }
+    if (typeof TM !== 'undefined' && TM.errors && typeof TM.errors.capture === 'function') {
+      TM.errors.capture(error, '势力注销事务失败');
+    }
+    return { ok: false, reason: 'remove-failed', error: error };
   }
 }
 
@@ -758,4 +1072,6 @@ if (typeof window !== 'undefined') {
   window.TM.Factions.setRelation = setFactionRelation;
   window.TM.Factions.syncRelationsFromList = syncFactionRelationsFromList;
   window.TM.Factions.removeRelationsForFaction = removeFactionRelationsForFaction;
+  window.TM.Factions.configureMembershipProvider = configureFactionMembershipProvider;
+  window.TM.Factions.removeFaction = removeFaction;
 }

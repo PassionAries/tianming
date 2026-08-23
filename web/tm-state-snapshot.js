@@ -529,8 +529,20 @@
     var sourceLoadGen = _loadGen();
     var keepShiji = opts.keepShijiHistory ? _deepClone(sourceGM.shijiHistory || []) : null;
     var keepEvt = opts.keepEvtLog ? _deepClone(sourceGM.evtLog || []) : null;
+    if (global._tmActiveTimeTravelTransaction) {
+      return Promise.resolve({ ok: false, reason: 'time-travel-active' });
+    }
+    var travelTransaction = {
+      id: 'time-travel-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10),
+      campaignId: campaignId,
+      timelineId: timelineId,
+      fromTurn: currentTurn,
+      toTurn: target,
+      startedAt: Date.now()
+    };
+    global._tmActiveTimeTravelTransaction = travelTransaction;
 
-    return loadSnapshot(target, campaignId, timelineId).then(function(targetRecord) {
+    var travelPromise = loadSnapshot(target, campaignId, timelineId).then(function(targetRecord) {
       if (!targetRecord) return { ok: false, reason: 'no snapshot for turn ' + target };
       if (!targetRecord.state || targetRecord.campaignId !== campaignId || targetRecord.turn !== target
           || (!targetRecord.inherited && targetRecord.timelineId !== timelineId)) {
@@ -596,6 +608,32 @@
         });
       });
     }).catch(function(e) { return { ok: false, error: e }; });
+    var clearTravelTransaction = function() {
+      if (global._tmActiveTimeTravelTransaction === travelTransaction) {
+        global._tmActiveTimeTravelTransaction = null;
+      }
+      try {
+        if (typeof global._tmRequestDeferredDesktopAutoSaveFlush === 'function') {
+          global._tmRequestDeferredDesktopAutoSaveFlush('time-travel-complete');
+        } else if (typeof global._tmFlushDeferredDesktopAutoSave === 'function') {
+          var pendingFlush = global._tmFlushDeferredDesktopAutoSave('time-travel-complete');
+          if (pendingFlush && typeof pendingFlush.catch === 'function') {
+            pendingFlush.catch(function(error) {
+              if (global.console && console.warn) console.warn('[state-snapshot] deferred autosave flush failed:', error);
+            });
+          }
+        }
+      } catch (flushError) {
+        if (global.console && console.warn) console.warn('[state-snapshot] deferred autosave flush failed:', flushError);
+      }
+    };
+    return travelPromise.then(function(result) {
+      clearTravelTransaction();
+      return result;
+    }, function(error) {
+      clearTravelTransaction();
+      throw error;
+    });
   }
 
   function registerAutoSnapshot() {

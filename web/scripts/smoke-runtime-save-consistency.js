@@ -61,7 +61,7 @@ ok(!!snapshotSrc && !!builderSrc, '_autoSaveSnapshotGM + _buildSaveState 可抽�
 }
 ok(/saveData2=_buildSaveState\(\{format:'project'\}\)/.test(lifecycle), '浏览器导出走统一纯 builder');
 ok(/saveData=_buildSaveState\(\{format:'project'\}\)/.test(lifecycle), '桌面手动存档走统一纯 builder');
-ok(/_preState = _buildSaveState\(\{ format: 'idb', gm: _preSaveGM, p: _preSaveP \}\)/.test(core), 'pre_endturn 走统一纯 builder');
+ok(/_preState = _buildSaveState\(\{ format: 'idb', detach: true, gm: _preSaveGM, p: _preSaveP \}\)/.test(core), 'pre_endturn 走统一 detached builder');
 ok(/global\._buildSaveState\(\{ format: 'idb', detach: true, gm: GM, p: P \|\| \{\} \}\)/.test(resume), '残局发布以 detached 模式复用统一 builder');
 ok(!/gameState\s*=\s*deepClone\(GM\)|GM\s*:\s*deepClone\(GM\)/.test(lifecycle + '\n' + core + '\n' + manager), '生产存档写口无裸 deepClone(GM)');
 ok(!/SaveManager\.autoSave\(\)/.test(render), '端回合不再重复调用 SaveManager.autoSave 覆盖 slot_0');
@@ -75,11 +75,11 @@ ok(/_writeOk !== true[\s\S]*?throw new Error\('canonical 回合存档未原子�
   const markerAt = render.indexOf("localStorage.setItem('tm_autosave_mark'", batchAt);
   ok(markerAt > writesDoneAt && writesDoneAt > batchAt && /turn:\s*_autoMeta\.turn/.test(render.slice(markerAt, markerAt + 300)), 'tm_autosave_mark 仅在原子双槽提交后写入并锚定快照 turn');
 }
-ok(/_autoSaveResult\s*=\s*await window\.tianming\.autoSave\(saveData\);[\s\S]*?if\s*\(!_tmDesktopAutoSaveResultOk\(_autoSaveResult\)\)\s*throw[\s\S]*?_autoSaveLastDoneMs=Date\.now\(\)/.test(lifecycle), '60s Electron autoSave 仅在业务成功后推进成功时钟');
-ok(/_autoSaveLastSavedTurn=\(saveData\._saveMeta[\s\S]*?saveData\._saveMeta\.turn/.test(lifecycle), 'Electron 闲置跳存基线锚定已写快照 turn');
+ok(/var result = await window\.tianming\.autoSave\(saveData\);[\s\S]*?if \(!_tmDesktopAutoSaveResultOk\(result\)\) throw[\s\S]*?_autoSaveLastDoneMs = Date\.now\(\)/.test(lifecycle), '60s Electron autoSave 仅在业务成功后推进成功时钟');
+ok(/_autoSaveLastSavedTurn = Number\(saveData\._saveMeta\.turn\)/.test(lifecycle), 'Electron 闲置跳存基线锚定已写 committed snapshot turn');
 ok(!/window\.tianming\.autoSave\(/.test(render), '端回合删除重复 Electron autoSave·崩溃恢复档只留 60s 写口');
 ok(/var _endturnSaveGM = GM;[\s\S]*?var _endturnSaveP = P;[\s\S]*?_endturnSaveLoadGen[\s\S]*?_endturnSavePreId/.test(render), '端回合 detached save 捕获 GM/P/loadGen/pre snapshotId');
-ok(/await _awaitPostTurnJobsForSave[\s\S]*?if \(!_endturnSaveStillCurrent\(\)\) return false;[\s\S]*?_buildSaveState\(\{format:'idb',gm:_endturnSaveGM,p:_endturnSaveP\}\)/.test(render), '后台等待后先验租约·builder 在 detached snapshot 上准备');
+ok(/await _awaitPostTurnJobsForSave[\s\S]*?if \(!_endturnSaveStillCurrent\(\)\) return false;[\s\S]*?_buildSaveState\(\{format:'idb',detach:true,gm:_endturnSaveGM,p:_endturnSaveP\}\)/.test(render), '后台等待后先验租约·builder 在 detached snapshot 上准备');
 ok(/TM_SaveDB\.saveManyAtomic\([\s\S]*?_autoWriteOptions\)/.test(render)
   && /function saveManyAtomic\(entries, options\)/.test(storage), 'autosave/slot_0 共用代际租约与单一批量事务');
 {
@@ -97,7 +97,7 @@ ok(/TM_SaveDB\.saveManyAtomic\([\s\S]*?_autoWriteOptions\)/.test(render)
   ok(/var saved = await ctx\.meta\.endTurnSavePromise;[\s\S]*?saved !== true[\s\S]*?_tmCommitEndTurnTransaction/.test(core), 'normal 提交屏障严格等待最终存档后才 commit');
 }
 ok(/function save\(id, gameState, meta, options\)[\s\S]*?_writeStillAllowed\(\)[\s\S]*?SaveCompression\.compress[\s\S]*?if \(!_writeStillAllowed\(\)\) return false;[\s\S]*?return _put/.test(storage), 'SaveDB 在压缩前及真正 put 前复验 writeGuard');
-ok(/_autoSaveSourceLoadGen[\s\S]*?_autoSaveResult=await window\.tianming\.autoSave\(saveData\);[\s\S]*?写盘完成时已跨档[\s\S]*?return;[\s\S]*?_autoSaveLastDoneMs=Date\.now\(\)/.test(lifecycle), '60s Electron IPC 跨档回包不推进闲置跳存基线');
+ok(/var sourceSnapshot = lastCommittedSnapshot;[\s\S]*?await window\.tianming\.autoSave\(saveData\);[\s\S]*?lastCommittedSnapshot !== sourceSnapshot[\s\S]*?不推进当前局闲置基线[\s\S]*?_autoSaveLastDoneMs = Date\.now\(\)/.test(lifecycle), '60s Electron IPC 跨档或快照推进后不推进当前局闲置跳存基线');
 ok(/let autoSaveWriteQueue = Promise\.resolve\(\);[\s\S]*?const task = autoSaveWriteQueue\.then[\s\S]*?autoSaveWriteQueue = task\.then/.test(mainImpl), '主进程串行化固定 .tmp 的所有 auto-save IPC');
 ok(/auto-save-session-rotate/.test(mainImpl) && /autoSaveSessionMatches\(requestToken\)/.test(mainImpl)
   && /writeFile[\s\S]*?autoSaveSessionMatches\(requestToken\)[\s\S]*?rename/.test(mainImpl), 'Electron canonical auto-save 在 write/rename 间按 session token 复验');
@@ -191,9 +191,9 @@ ok(/function sSaveSecondaryAPI\(\)[\s\S]*?localStorage\.setItem\("tm_api"[\s\S]*
 const savePSrc = sliceFn(utils, 'function saveP(');
 const saveAndBackSrc = sliceFn(launch, 'function saveAndBack(');
 ok(!/tianming\.autoSave\(/.test(savePSrc + '\n' + saveAndBackSrc), 'saveP / 编辑器返回不再以纯 P 覆盖 Electron canonical 恢复档');
-ok(/setInterval\(async function\(\)\{[\s\S]*?if\(!GM \|\| !GM\.running\) return;/.test(lifecycle)
+ok(/setInterval\(function\(\)\{[\s\S]*?_tmRunDesktopAutoSaveTick\(\)/.test(lifecycle)
   && ((lifecycle + '\n' + utils + '\n' + launch + '\n' + patches + '\n' + playerSettings).match(/tianming\.autoSave\(/g) || []).length === 1,
-  'Electron autoSave 生产写口只剩运行局 60s 完整 P+GM 快照');
+  'Electron autoSave 生产写口只剩消费 committed snapshot 的 60s runner');
 {
   const applySrc = sliceFn(patches, 'function _sApplyPrimaryApiFields(');
   const allSrc = sliceFn(patches, 'function sSaveAll(');

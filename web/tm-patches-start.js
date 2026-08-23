@@ -1989,6 +1989,19 @@ function doActualStart(sid, requestToken){
   // 初始化科举制度（由AI判断是否启用）
   initKejuSystem(sc);
 
+  // 新局初始化全部完成后建立第一份稳定桌面自动档基线；timer 自身不再抓取 live GM/P。
+  try {
+    if (typeof _tmCaptureCommittedWorldSnapshotFromLive === 'function') {
+      _tmCaptureCommittedWorldSnapshotFromLive('new-game-initialized');
+    }
+  } catch (_desktopBaselineE) {
+    if (typeof _tmReportDesktopAutoSaveBoundaryError === 'function') {
+      _tmReportDesktopAutoSaveBoundaryError(_desktopBaselineE, 'startGame · desktop autosave baseline');
+    } else if (typeof console !== 'undefined' && console.warn) {
+      console.warn('[startGame] desktop autosave baseline:', _desktopBaselineE);
+    }
+  }
+
   if(!GM.officeTree||GM.officeTree.length===0){
     _showOfficeStartModal();
     return;

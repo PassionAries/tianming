@@ -145,7 +145,7 @@ function _endTurn_saveSnapshot(ctx) {
       if (!_endturnSaveStillCurrent()) return false;
       try { if (typeof _wtRunFulfillAudit === 'function') _wtRunFulfillAudit(); } catch (_wtFaHkE) {}
       var _autoT0 = Date.now();
-      var _autoState = _buildSaveState({format:'idb',gm:_endturnSaveGM,p:_endturnSaveP});
+      var _autoState = _buildSaveState({format:'idb',detach:true,gm:_endturnSaveGM,p:_endturnSaveP});
       _endTurn_stripCommittedDraftsFromSnapshot(_autoState);
       await _endTurn_stageTurnData(ctx, _autoState);
       var _autoSnapMs = Date.now() - _autoT0;
@@ -167,6 +167,14 @@ function _endTurn_saveSnapshot(ctx) {
       if (_writeOk !== true) throw new Error('canonical 回合存档未原子落库');
       _canonicalCommitted = true;
       if (!_endturnSaveStillCurrent()) throw new Error('canonical 回合存档完成时世界身份已变化');
+      // 只把已经与 autosave + slot_0 一起原子提交的独立快照交给桌面自动档；
+      // core 在世界事务 commit 成功后才正式提升，避免保存成功但内存事务身份失效时误发布。
+      ctx.meta.canonicalWorldSnapshot = _autoState;
+      ctx.meta.canonicalWorldSnapshotMeta = {
+        turn: _endturnSaveTurn,
+        transactionId: String(ctx.meta.transactionId || ''),
+        takeOwnership: true
+      };
       // 两个 canonical 槽位都提交后，才清恢复点并发布“已安全保存”标志。
       try { _clearPreEndturnMarkerAfterSave(_endturnSavePreId); } catch (_) {}
       try { if (typeof _updateSaveIndex === 'function') _updateSaveIndex(0, _autoMeta); } catch (_) {}

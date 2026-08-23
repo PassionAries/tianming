@@ -45,10 +45,19 @@ ok(!('fn' in out), '⑤ 函数排除');
 ok(out.turn === 5, '⑤ primitive 透传');
 ok(ctx.cloneCount === 1, '★ 只深拷 1 次(普通 mutable)·_saved* 镜像零二次克隆(原会多拷 2 个)');
 
+ctx.cloneCount = 0;
+vm.runInContext('this.DETACHED = _autoSaveSnapshotGM(GM, { detach: true });', ctx);
+ok(ctx.DETACHED.qijuHistory !== ctx.GM.qijuHistory && ctx.DETACHED._savedAffinityMap !== ctx.GM._savedAffinityMap,
+  '★ committed detach 模式会脱离 append-only 与 _saved 镜像');
+ctx.GM.qijuHistory.push(3);
+ctx.GM._savedAffinityMap.a = 9;
+ok(ctx.DETACHED.qijuHistory.length === 2 && ctx.DETACHED._savedAffinityMap.a === 1,
+  '★ committed detach 快照不随 live GM 后续修改');
+
 // ⑥ desktopDoSave 复用统一纯 builder(源契约·准备只作用于 detached snapshot)
 ok(/function _buildSaveState\(/.test(save), '⑥ 统一 _buildSaveState 构造器存在');
 ok(/var saveData=_buildSaveState\(\{format:'project'\}\)/.test(save), '⑥ desktopDoSave 复用 _buildSaveState(project)');
-ok(/var gmSnapshot = _autoSaveSnapshotGM\(sourceGM\);[\s\S]*?var pWorking = deepClone\(sourceP \|\| \{\}\);[\s\S]*?_prepareGMForSave\(gmSnapshot, pWorking\)/.test(save),
+ok(/var gmSnapshot = _autoSaveSnapshotGM\(sourceGM, \{ detach: options\.detach === true \}\);[\s\S]*?var pWorking = deepClone\(sourceP \|\| \{\}\);[\s\S]*?_prepareGMForSave\(gmSnapshot, pWorking\)/.test(save),
   '⑥ builder 先脱离 live GM/P，再执行存档准备');
 ok(save.indexOf('saveData.gameState=deepClone(GM);') < 0, '⑥ 手动档裸 deepClone(GM) 已清(saveData 路径)');
 

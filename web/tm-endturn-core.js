@@ -445,26 +445,67 @@ function _tmCommitEndTurnTransaction(txn) {
   return true;
 }
 
+function _tmReportEndTurnBoundaryError(error, label) {
+  if (typeof _tmReportDesktopAutoSaveBoundaryError === 'function') {
+    return _tmReportDesktopAutoSaveBoundaryError(error, 'endTurn · ' + String(label || 'boundary'));
+  }
+  var normalized = (error && (typeof error === 'object' || typeof error === 'function')) ? error : new Error(String(error));
+  if (typeof console !== 'undefined' && console.warn) console.warn('[endTurn] ' + String(label || 'boundary') + ':', normalized);
+  return normalized;
+}
+
+function _tmRequestEndTurnDesktopAutoSaveFlush(reason) {
+  if (typeof _tmRequestDeferredDesktopAutoSaveFlush === 'function') {
+    return _tmRequestDeferredDesktopAutoSaveFlush(reason);
+  }
+  if (typeof _tmFlushDeferredDesktopAutoSave !== 'function') return null;
+  var pending;
+  try {
+    pending = _tmFlushDeferredDesktopAutoSave(reason);
+  } catch (error) {
+    _tmReportEndTurnBoundaryError(error, 'deferred autosave flush · ' + String(reason || 'unknown'));
+    return null;
+  }
+  if (pending && typeof pending.catch === 'function') {
+    pending.catch(function(error) {
+      _tmReportEndTurnBoundaryError(error, 'deferred autosave flush · ' + String(reason || 'unknown'));
+    });
+  }
+  return pending;
+}
+
 function _tmRollbackEndTurnTransaction(txn, reason) {
   if (!_tmEndTurnTransactionCurrent(txn)) return false;
-  try { if (typeof closeTurnResult === 'function') closeTurnResult(); } catch (_) {}
-  _tmRestoreEndTurnObject(txn.pRef, txn.p);
-  _tmRestoreEndTurnObject(txn.gmRef, txn.gm);
+  var rollbackLease = { kind: 'end-turn', transactionId: txn.transactionId || '', startedAt: Date.now() };
+  if (typeof window !== 'undefined') window._tmWorldRollbackActive = rollbackLease;
   try {
-    if (typeof buildIndices === 'function') buildIndices();
-    else if (typeof TM !== 'undefined' && TM.Indices && typeof TM.Indices.invalidate === 'function') TM.Indices.invalidate(txn.gmRef, txn.pRef);
-  } catch (_) {
-    try { if (typeof TM !== 'undefined' && TM.Indices && typeof TM.Indices.invalidate === 'function') TM.Indices.invalidate(txn.gmRef, txn.pRef); } catch (_) {}
-  }
-  txn.rolledBack = true;
-  try { if (typeof window !== 'undefined') window._tmLoadGen = (window._tmLoadGen || 0) + 1; } catch (_) {}
-  try {
+    try { if (typeof closeTurnResult === 'function') closeTurnResult(); }
+    catch (closeError) { _tmReportEndTurnBoundaryError(closeError, 'close rollback presentation'); }
+    _tmRestoreEndTurnObject(txn.pRef, txn.p);
+    _tmRestoreEndTurnObject(txn.gmRef, txn.gm);
+    try {
+      if (typeof buildIndices === 'function') buildIndices();
+      else if (typeof TM !== 'undefined' && TM.Indices && typeof TM.Indices.invalidate === 'function') TM.Indices.invalidate(txn.gmRef, txn.pRef);
+    } catch (indexError) {
+      _tmReportEndTurnBoundaryError(indexError, 'rebuild rollback indices');
+      try {
+        if (typeof TM !== 'undefined' && TM.Indices && typeof TM.Indices.invalidate === 'function') TM.Indices.invalidate(txn.gmRef, txn.pRef);
+      } catch (invalidateError) {
+        _tmReportEndTurnBoundaryError(invalidateError, 'invalidate rollback indices');
+      }
+    }
+    txn.rolledBack = true;
+    if (typeof window !== 'undefined') window._tmLoadGen = (window._tmLoadGen || 0) + 1;
     GM.busy = false; // arch-ok end-turn transaction owns rollback cleanup
     GM._endTurnBusy = false; // arch-ok end-turn transaction owns rollback cleanup
     GM._lastEndTurnRollback = { at: Date.now(), turn: txn.turn, reason: String(reason && (reason.message || reason) || 'unknown') }; // arch-ok end-turn transaction owns rollback diagnostics
-  } catch (_) {}
-  try { if (typeof renderGameState === 'function') renderGameState(); } catch (_) {}
-  return true;
+    try { if (typeof renderGameState === 'function') renderGameState(); }
+    catch (renderError) { _tmReportEndTurnBoundaryError(renderError, 'render restored world'); }
+    return true;
+  } finally {
+    if (typeof window !== 'undefined' && window._tmWorldRollbackActive === rollbackLease) window._tmWorldRollbackActive = null;
+    _tmRequestEndTurnDesktopAutoSaveFlush('end-turn-rollback');
+  }
 }
 
 async function _tmFinalizeEndTurnTransaction(ctx, txn) {
@@ -490,6 +531,17 @@ async function _tmFinalizeEndTurnTransaction(ctx, txn) {
   var saved = await ctx.meta.endTurnSavePromise;
   if (saved !== true) throw new Error('回合最终存档失败，已回滚本回合');
   if (!_tmCommitEndTurnTransaction(txn)) throw new Error('回合提交时世界身份已变化');
+  if (ctx.meta.canonicalWorldSnapshot && typeof _tmAdoptCommittedWorldSnapshot === 'function') {
+    var adopted = _tmAdoptCommittedWorldSnapshot(
+      ctx.meta.canonicalWorldSnapshot,
+      ctx.meta.canonicalWorldSnapshotMeta || { turn: GM.turn, transactionId: ctx.meta.transactionId, takeOwnership: true }
+    );
+    if (adopted !== true) {
+      _tmReportEndTurnBoundaryError(new Error('canonical committed snapshot adoption failed'), 'desktop autosave baseline');
+    }
+    ctx.meta.canonicalWorldSnapshot = null;
+    ctx.meta.canonicalWorldSnapshotMeta = null;
+  }
   try {
     if (typeof _endTurn_publishStagedTurnData === 'function') await _endTurn_publishStagedTurnData(ctx);
   } catch (publishError) {
@@ -572,7 +624,7 @@ async function _endTurnCore(options){
           && GM.turn === _preTurn && GM.sid === _preSid
           && _liveSnapshotId === _preSnapshotId;
       };
-      var _preState = _buildSaveState({ format: 'idb', gm: _preSaveGM, p: _preSaveP });
+      var _preState = _buildSaveState({ format: 'idb', detach: true, gm: _preSaveGM, p: _preSaveP });
       _preState._preEndturn = { snapshotId: _preSnapshotId, turn: _preTurn, commitState: 'committed' };
       var _scPre = (typeof findScenarioById === 'function' && GM.sid) ? findScenarioById(GM.sid) : null;
       var _preMeta = {
@@ -609,6 +661,13 @@ async function _endTurnCore(options){
       _livePreMark.commitState = 'committed';
       _livePreMark.committedAt = Date.now();
       localStorage.setItem('tm_pre_endturn_mark', JSON.stringify(_livePreMark));
+      if (typeof _tmAdoptCommittedWorldSnapshot === 'function') {
+        if (_tmAdoptCommittedWorldSnapshot(_preState, {
+          turn: _preTurn,
+          transactionId: _preSnapshotId,
+          takeOwnership: true
+        }) !== true) throw new Error('pre_endturn desktop baseline adoption failed');
+      }
     } else {
       throw new Error('pre_endturn storage unavailable');
     }
@@ -817,6 +876,9 @@ async function _endTurnCore(options){
       showTurnResult(_pdHtml);
     }
     await _tmFinalizeEndTurnTransaction(_obsCtx, _turnTxn);
+    GM.busy=false; // arch-ok end-turn transaction owns post-commit cleanup
+    GM._endTurnBusy=false; // arch-ok end-turn transaction owns post-commit cleanup
+    _tmRequestEndTurnDesktopAutoSaveFlush('end-turn-commit');
     return;
   }
 
@@ -835,6 +897,7 @@ async function _endTurnCore(options){
   await _tmFinalizeEndTurnTransaction(_obsCtx, _turnTxn);
   GM.busy=false;
   GM._endTurnBusy=false;
+  _tmRequestEndTurnDesktopAutoSaveFlush('end-turn-commit');
   } catch (error) {
     console.error('endTurn error:', error);
     if (_turnTxn) _tmRollbackEndTurnTransaction(_turnTxn, error);
@@ -843,6 +906,7 @@ async function _endTurnCore(options){
     toast(_ehuman ? ('回合中断 · ' + _ehuman) : ('回合处理出错: ' + error.message));
     GM.busy = false;
     GM._endTurnBusy=false;
+    _tmRequestEndTurnDesktopAutoSaveFlush('end-turn-error');
     var btn = _$("btn-end")||_$("btn-end-turn");
     if (btn) {
       btn.textContent = "\u9759\u5F85\u65F6\u53D8";

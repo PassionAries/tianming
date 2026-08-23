@@ -142,6 +142,8 @@ function fakeIndexedDB(options) {
   };
   ctx.window = ctx;
   ctx._tmLoadGen = 0;
+  ctx._desktopAutoSaveFlushes = 0;
+  ctx._tmFlushDeferredDesktopAutoSave = function() { ctx._desktopAutoSaveFlushes++; };
   ctx._buildSaveState = function(options) {
     return { GM: clone(options.gm), P: clone(options.p || {}) };
   };
@@ -288,12 +290,17 @@ function fakeIndexedDB(options) {
   ctx.GM = { _campaignId: 'campA', _timelineId: 'tml_campA_12345678', turn: 2, marker: 'source-before-stale', shijiHistory: [], evtLog: [] };
   ctx.P = { conf: { campaign: 'A' } };
   ctx._tmLoadGen++;
+  const flushesBeforeStaleTravel = ctx._desktopAutoSaveFlushes;
   const pending = ctx.StateSnapshot.timeTravel(1);
+  ok(ctx._tmActiveTimeTravelTransaction && ctx._tmActiveTimeTravelTransaction.fromTurn === 2,
+    'timeTravel 异步读取开始前发布统一世界事务标志');
   ctx.GM = { _campaignId: 'campB', _timelineId: 'tml_campB_12345678', turn: 1, marker: 'new-live', shijiHistory: [], evtLog: [] };
   ctx.P = { conf: { campaign: 'B' } };
   ctx._tmLoadGen++;
   r = await pending;
   ok(r.ok === false && /stale game/.test(r.reason) && ctx.GM.marker === 'new-live', '跨异步边界换局后拒绝旧 timeTravel');
+  ok(!ctx._tmActiveTimeTravelTransaction && ctx._desktopAutoSaveFlushes === flushesBeforeStaleTravel + 1,
+    'timeTravel 所有结束路径都清事务标志并通知 deferred 自动档');
 
   // hook 返回真实 Promise；EndTurnHooks.execute 可 await 落库完成。
   ctx.GM = { _campaignId: 'campHook', _timelineId: 'tml_campHook_12345678', turn: 3, marker: 'hook', shijiHistory: [], evtLog: [] };

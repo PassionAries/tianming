@@ -1018,13 +1018,18 @@ var PREF_CONF_KEYS = [
 
 function _tmCaptureLoadStepError(error, label, silent) {
   if (!error || (typeof error !== 'object' && typeof error !== 'function')) error = new Error(String(error));
-  try { error._tmLoadStep = String(label || 'unknown'); } catch (_) {}
+  try { error._tmLoadStep = String(label || 'unknown'); }
+  catch (tagError) {
+    if (typeof console !== 'undefined' && console.warn) console.warn('[fullLoadGame] failed to tag load-step error:', tagError);
+  }
   try {
     if (window.TM && TM.errors) {
       if (silent && typeof TM.errors.captureSilent === 'function') TM.errors.captureSilent(error, 'fullLoadGame·' + label);
       else if (typeof TM.errors.capture === 'function') TM.errors.capture(error, 'fullLoadGame·' + label);
     }
-  } catch (_) {}
+  } catch (captureError) {
+    if (typeof console !== 'undefined' && console.warn) console.warn('[fullLoadGame] error reporter failed:', captureError, error);
+  }
   return error;
 }
 
@@ -1677,9 +1682,22 @@ async function _fullLoadGameImpl(data, loadOptions){
     if (typeof window !== 'undefined' && window._tmActiveLoadTransaction === _loadTxn) {
       window._tmActiveLoadTransaction = null;
     }
+    try {
+      if (typeof window !== 'undefined' && window._tmWorldRollbackActive && window._tmWorldRollbackActive.failed) {
+        window._tmWorldRollbackActive = null;
+      }
+      if (typeof _tmCaptureCommittedWorldSnapshotFromLive === 'function') {
+        _tmCaptureCommittedWorldSnapshotFromLive('load-complete');
+      }
+      if (typeof _tmFlushDeferredDesktopAutoSave === 'function') _tmFlushDeferredDesktopAutoSave('load-complete');
+    } catch (snapshotError) {
+      _tmCaptureLoadStepError(snapshotError, 'desktop autosave committed baseline after load', true);
+    }
   } catch (error) {
     if (!error || (typeof error !== 'object' && typeof error !== 'function')) error = new Error(String(error));
     if (typeof window !== 'undefined' && window._tmActiveLoadTransaction === _loadTxn) {
+      var _loadRollbackLease = { kind: 'load', transactionId: _loadTxn.id, startedAt: Date.now() };
+      window._tmWorldRollbackActive = _loadRollbackLease;
       try {
         _tmRestoreLoadTransaction(_loadTxn);
         error._tmLoadRollbackComplete = true;
@@ -1687,6 +1705,19 @@ async function _fullLoadGameImpl(data, loadOptions){
         error._tmLoadRollbackError = rollbackError;
       }
       window._tmActiveLoadTransaction = null;
+      if (error._tmLoadRollbackComplete === true) {
+        if (window._tmWorldRollbackActive === _loadRollbackLease) window._tmWorldRollbackActive = null;
+        if (typeof _tmRequestDeferredDesktopAutoSaveFlush === 'function') {
+          _tmRequestDeferredDesktopAutoSaveFlush('load-rollback');
+        }
+      } else {
+        window._tmWorldRollbackActive = {
+          kind: 'load',
+          transactionId: _loadTxn.id,
+          failed: true,
+          startedAt: _loadRollbackLease.startedAt
+        };
+      }
     }
     throw error;
   }
@@ -2131,12 +2162,53 @@ var _autoSaveDeferStreak=0;    // C·连续 defer 次数·用于日志
 // 故:真闲置 (自上次成功存档以来无输入 且 turn 未变) 时跳过·盘上副本已是最新。
 var _autoSaveLastSavedTurn=-1; // D·上次成功存档时的 GM.turn
 var _autoSaveIdleSkipStreak=0; // D·连续闲置跳过次数·用于日志
+var _autoSaveDeferred=false;
+var _autoSaveFlushTimer=null;
+// 桌面 60s 自动档只能消费这一份已脱离 live GM/P 的稳定快照。
+// 它由新局/读档完成、pre_endturn 提交或 canonical 双槽提交这些明确边界更新；
+// timer 本身绝不从正在变化的世界临时抓取一份“看起来完整”的状态。
+var lastCommittedSnapshot=null;
+var lastCommittedTurn=-1;
+var lastCommittedTransactionId='';
+var _lastCommittedSnapshotIdentity=null;
+
+function _tmReportDesktopAutoSaveBoundaryError(error, label){
+  var normalized = (error && (typeof error === 'object' || typeof error === 'function')) ? error : new Error(String(error));
+  var reported = false;
+  try {
+    if (typeof window !== 'undefined' && window.TM && TM.errors) {
+      if (typeof TM.errors.captureSilent === 'function') {
+        TM.errors.captureSilent(normalized, String(label || 'desktop autosave boundary'));
+        reported = true;
+      } else if (typeof TM.errors.capture === 'function') {
+        TM.errors.capture(normalized, String(label || 'desktop autosave boundary'));
+        reported = true;
+      }
+    }
+  } catch (captureError) {
+    if (typeof console !== 'undefined' && console.warn) console.warn('[autoSave] diagnostic reporter failed:', captureError);
+  }
+  if (!reported && typeof console !== 'undefined' && console.warn) {
+    console.warn('[autoSave] ' + String(label || 'desktop autosave boundary') + ':', normalized);
+  }
+  return normalized;
+}
 
 function _tmDesktopAutoSaveResultOk(result){
   return result === true || !!(result && result.success === true);
 }
 function _tmDesktopAutoSaveFailure(result){
   return new Error('桌面自动存档未落盘' + (result && result.error ? '：' + result.error : ''));
+}
+
+function isWorldTransactionActive(){
+  var liveGM = (typeof GM !== 'undefined') ? GM : null;
+  var root = (typeof window !== 'undefined') ? window : null;
+  return !!(
+    (liveGM && (liveGM.busy || liveGM._endTurnBusy || liveGM._endTurnCommitPending || liveGM._loadHydrationPending)) ||
+    (root && (root._tmActiveLoadTransaction || root._tmWorldRollbackActive || root._tmActiveTimeTravelTransaction)) ||
+    (typeof endTurn !== 'undefined' && endTurn && endTurn._preSubmitInFlight)
+  );
 }
 
 function _tmNewDesktopAutoSaveSessionToken(){
@@ -2214,6 +2286,8 @@ function _autoSaveSnapshotGM(sourceGM, options){
   var SKIP = {
     _aiTelemetry:1, _debugSnapshots:1, _aiBranchDiag:1, _aiDiag:1,
     _sysCacheMode:1, _sysCacheLen:1, _saveMeta:1,
+    // Promise/lease jobs may retain gmRef and form cycles; they are runtime coordination, never world state.
+    _postTurnJobs:1, _postTurnDetachedJobs:1,
     _facIndex:1, _savedMapData:1, _savedAdminHierarchy:1,
     // ── 案二·GM 活字段的冗余 _saved* 镜像(按 T54 体积降序·活字段孪生已入档) ──
     _savedConvArchive:1, _savedMemoryArchiveFull:1, _savedLetters:1,
@@ -2233,9 +2307,16 @@ function _autoSaveSnapshotGM(sourceGM, options){
     if (SKIP[k]) continue;
     // _prepareGMForSave 刚以 _safeClone 建的 _saved* 镜像·写后只读不再变动·此处引用即可
     // (原落入下方 deepClone 分支被二次深拷·每60s 自动存档对~130 个大块多拷一遍·此优化砍掉冗余那遍·序列化输出逐字节不变)
-    if (k.slice(0, 6) === '_saved') { out[k] = _snapshotGM[k]; continue; }
+    if (k.slice(0, 6) === '_saved') {
+      var savedValue = _snapshotGM[k];
+      if (options.detach && !options.reuseMutable && savedValue !== null && typeof savedValue === 'object') out[k] = deepClone(savedValue);
+      else out[k] = savedValue;
+      continue;
+    }
     if (APPEND_ONLY[k]) {
-      out[k] = _snapshotGM[k];  // 引用·不拷
+      // 普通手动快照仍可复用 append-only；提交给后台 timer 的稳定快照必须一次性脱离 live。
+      var appendValue = _snapshotGM[k];
+      out[k] = (options.detach && !options.reuseMutable && appendValue !== null && typeof appendValue === 'object') ? deepClone(appendValue) : appendValue;
       continue;
     }
     var v = _snapshotGM[k];
@@ -2246,7 +2327,11 @@ function _autoSaveSnapshotGM(sourceGM, options){
     // mutable·首次快照深拷；对已经脱离 live GM 的工作副本可安全复用，
     // 让准备后的第二遍过滤不再重复深拷整个世界。
     try { out[k] = options.reuseMutable ? v : deepClone(v); }
-    catch (_cE) { out[k] = v; }  // fallback 引用
+    catch (_cE) {
+      // detach 快照一旦回退到引用，就重新暴露半回合写盘风险；必须明确失败。
+      if (options.detach) throw _cE;
+      out[k] = v;
+    }
   }
   return out;
 }
@@ -2263,15 +2348,17 @@ function _buildSaveState(options){
   var sourceGM = options.gm || liveGM;
   var sourceP = options.p || (typeof P !== 'undefined' ? P : {});
   if (!sourceGM) return null;
-  var gmSnapshot = _autoSaveSnapshotGM(sourceGM);
+  var gmSnapshot = _autoSaveSnapshotGM(sourceGM, { detach: options.detach === true });
   var pWorking = deepClone(sourceP || {});
   if (options.prepare !== false && typeof _prepareGMForSave === 'function') {
     var prepared = _prepareGMForSave(gmSnapshot, pWorking);
     if (!prepared) return null;
-    gmSnapshot = _autoSaveSnapshotGM(prepared.GM, { reuseMutable: true });
+    gmSnapshot = _autoSaveSnapshotGM(prepared.GM, {
+      reuseMutable: true,
+      detach: options.detach === true
+    });
     pWorking = prepared.P;
   }
-  if (options.detach) gmSnapshot = deepClone(gmSnapshot);
   var pSnapshot = _tmStripAiKeyInPlace(pWorking);
   // P.gameState 只允许出现在 project 外壳的最外层；清掉旧读档遗留的嵌套僵尸再装当前快照。
   try { if (pSnapshot && pSnapshot.gameState) delete pSnapshot.gameState; } catch (_) {}
@@ -2282,82 +2369,203 @@ function _buildSaveState(options){
   return { GM: gmSnapshot, P: pSnapshot };
 }
 if (typeof window !== 'undefined') window._buildSaveState = _buildSaveState;
+
+function _tmCommittedSnapshotIdentityFor(state, meta){
+  var snapshotGM = state && state.GM;
+  if (!snapshotGM || !state.P) return null;
+  meta = meta || {};
+  var turn = Number(meta.turn !== undefined ? meta.turn : snapshotGM.turn);
+  if (!Number.isFinite(turn)) return null;
+  var loadGenerationRaw = (typeof window !== 'undefined') ? window._tmLoadGen : 0;
+  if (loadGenerationRaw === undefined || loadGenerationRaw === null) loadGenerationRaw = 0;
+  if (typeof loadGenerationRaw === 'string' && !loadGenerationRaw.trim()) return null;
+  var loadGeneration = Number(loadGenerationRaw);
+  if (!Number.isFinite(loadGeneration) || loadGeneration < 0) return null;
+  return {
+    campaignId: String(snapshotGM._campaignId || ''),
+    timelineId: String(snapshotGM._timelineId || ''),
+    sessionToken: String(meta.sessionToken || _tmGetDesktopAutoSaveSessionToken() || ''),
+    loadGeneration: loadGeneration,
+    turn: turn,
+    transactionId: String(meta.transactionId || '')
+  };
+}
+
+function _tmAdoptCommittedWorldSnapshot(state, meta){
+  meta = meta || {};
+  var identity = _tmCommittedSnapshotIdentityFor(state, meta);
+  if (!identity) return false;
+  // 默认防御性克隆，保证调用方随后修改入参也不会改变已提交基线。
+  // canonical/pre_endturn 已用 detach:true 构造时可显式移交所有权，避免第二份完整世界峰值。
+  var ownedState = meta.takeOwnership === true ? state : deepClone(state);
+  if (!ownedState || !ownedState.GM || !ownedState.P) return false;
+  lastCommittedSnapshot = ownedState;
+  lastCommittedTurn = identity.turn;
+  lastCommittedTransactionId = identity.transactionId;
+  _lastCommittedSnapshotIdentity = identity;
+  return true;
+}
+
+function _tmCaptureCommittedWorldSnapshotFromLive(reason){
+  if (!GM || !P || !GM.running || isWorldTransactionActive()) return false;
+  var state = _buildSaveState({ format: 'idb', detach: true, gm: GM, p: P });
+  if (!state) return false;
+  return _tmAdoptCommittedWorldSnapshot(state, {
+    turn: GM.turn,
+    transactionId: String(reason || 'stable-world-boundary'),
+    takeOwnership: true
+  });
+}
+
+function _tmCommittedSnapshotMatchesLive(){
+  if (!lastCommittedSnapshot || !_lastCommittedSnapshotIdentity || !GM || !P) return false;
+  return String(GM._campaignId || '') === _lastCommittedSnapshotIdentity.campaignId
+    && String(GM._timelineId || '') === _lastCommittedSnapshotIdentity.timelineId
+    && String(_tmGetDesktopAutoSaveSessionToken() || '') === _lastCommittedSnapshotIdentity.sessionToken;
+}
+
+function _tmCommittedSnapshotProjectEnvelope(){
+  if (!lastCommittedSnapshot || !lastCommittedSnapshot.GM || !lastCommittedSnapshot.P) return null;
+  // 只新建轻量根对象；嵌套对象属于不可变 committed snapshot，IPC structured clone 会复制到主进程。
+  var payload = Object.assign({}, lastCommittedSnapshot.P);
+  if (Object.prototype.hasOwnProperty.call(payload, 'gameState')) delete payload.gameState;
+  payload.gameState = lastCommittedSnapshot.GM;
+  var snapshotGM = lastCommittedSnapshot.GM;
+  var scenario = typeof findScenarioById === 'function' ? findScenarioById(snapshotGM.sid) : null;
+  payload._saveMeta = {
+    turn: lastCommittedTurn,
+    scenario: (scenario && scenario.name) || '',
+    saveName: snapshotGM.saveName,
+    date: new Date().toISOString(),
+    transactionId: lastCommittedTransactionId
+  };
+  return payload;
+}
+
+async function _tmRunDesktopAutoSaveTick(options){
+  options = options || {};
+  if (!GM || !GM.running) return { ok: false, skipped: true, reason: 'not-running' };
+  if (isWorldTransactionActive()) {
+    _autoSaveDeferred = true;
+    return { ok: false, deferred: true, reason: 'world-transaction-active' };
+  }
+  if (_autoSaveInFlight) {
+    _autoSaveSkipCount++;
+    if (_autoSaveSkipCount === 5) console.warn('[autoSave] 连续 5 次被跳·上一次 IPC 尚未完成');
+    return { ok: false, skipped: true, reason: 'in-flight' };
+  }
+  if (!_tmCommittedSnapshotMatchesLive()) {
+    return { ok: false, skipped: true, reason: 'no-committed-snapshot' };
+  }
+
+  var now = Date.now();
+  var sinceInput = now - _autoSaveLastInputMs;
+  var sinceSave = now - _autoSaveLastDoneMs;
+  if (options.force !== true && sinceInput < 5000 && sinceSave < 180000) {
+    _autoSaveDeferStreak++;
+    return { ok: false, skipped: true, reason: 'recent-input' };
+  }
+  if (_autoSaveDeferStreak > 0) _autoSaveDeferStreak = 0;
+  if (options.force !== true && _autoSaveLastDoneMs > 0
+      && _autoSaveLastInputMs <= _autoSaveLastDoneMs
+      && lastCommittedTurn === _autoSaveLastSavedTurn) {
+    _autoSaveIdleSkipStreak++;
+    return { ok: false, skipped: true, reason: 'idle-unchanged' };
+  }
+  _autoSaveIdleSkipStreak = 0;
+
+  var sourceSnapshot = lastCommittedSnapshot;
+  var sourceIdentity = _lastCommittedSnapshotIdentity;
+  var saveData = _tmCommittedSnapshotProjectEnvelope();
+  if (!saveData) return { ok: false, skipped: true, reason: 'snapshot-unavailable' };
+  _autoSaveInFlight = true;
+  try {
+    _autoSaveSkipCount = 0;
+    var result = await window.tianming.autoSave(saveData);
+    if (!_tmDesktopAutoSaveResultOk(result)) throw _tmDesktopAutoSaveFailure(result);
+    if (lastCommittedSnapshot !== sourceSnapshot || _lastCommittedSnapshotIdentity !== sourceIdentity
+        || !_tmCommittedSnapshotMatchesLive()) {
+      console.warn('[autoSave] 已提交快照在 IPC 期间推进或跨档·本次落盘有效但不推进当前局闲置基线');
+      return { ok: true, stale: true, turn: Number(saveData._saveMeta.turn) };
+    }
+    _autoSaveLastDoneMs = Date.now();
+    _autoSaveLastSavedTurn = Number(saveData._saveMeta.turn);
+    _autoSaveLiteTick++;
+    if (_autoSaveLiteTick >= 5) {
+      _autoSaveLiteTick = 0;
+      try {
+        var committedP = lastCommittedSnapshot.P || {};
+        localStorage.removeItem('tm_P');
+        localStorage.setItem('tm_P_lite', JSON.stringify(_tmStripAiKeyView({
+          scenarios: (committedP.scenarios || []).map(function(s){ return {id:s.id,name:s.name,era:s.era,role:s.role}; }),
+          ai: committedP.ai,
+          conf: _tmLiteSafeConf(committedP.conf),
+          _hasFullData: true
+        })));
+      } catch (liteError) {
+        _tmReportDesktopAutoSaveBoundaryError(liteError, 'desktop autosave lite');
+      }
+    }
+    return { ok: true, turn: _autoSaveLastSavedTurn, transactionId: lastCommittedTransactionId };
+  } catch (error) {
+    console.warn('[autoSave] 桌面自动存档失败:', error && (error.message || error));
+    return { ok: false, error: error };
+  } finally {
+    _autoSaveInFlight = false;
+  }
+}
+
+function _tmFlushDeferredDesktopAutoSave(reason, options){
+  options = options || {};
+  if (!_autoSaveDeferred) return Promise.resolve({ ok: false, skipped: true, reason: 'not-deferred' });
+  if (isWorldTransactionActive()) return Promise.resolve({ ok: false, deferred: true, reason: 'world-transaction-active' });
+  if (options.immediate === true) {
+    _autoSaveDeferred = false;
+    return _tmRunDesktopAutoSaveTick({ force: true, reason: reason || 'deferred' });
+  }
+  if (_autoSaveFlushTimer) return Promise.resolve({ ok: false, scheduled: true, reason: 'already-scheduled' });
+  _autoSaveFlushTimer = setTimeout(function(){
+    _autoSaveFlushTimer = null;
+    if (!_autoSaveDeferred) return;
+    if (isWorldTransactionActive()) return;
+    _autoSaveDeferred = false;
+    _tmRunDesktopAutoSaveTick({ force: true, reason: reason || 'deferred' }).catch(function(error){
+      console.warn('[autoSave] deferred flush failed:', error && (error.message || error));
+    });
+  }, 0);
+  return Promise.resolve({ ok: false, scheduled: true, reason: reason || 'deferred' });
+}
+
+function _tmRequestDeferredDesktopAutoSaveFlush(reason, options){
+  if (typeof _tmFlushDeferredDesktopAutoSave !== 'function') {
+    return Promise.resolve({ ok: false, skipped: true, reason: 'flush-unavailable' });
+  }
+  var pending;
+  try {
+    pending = _tmFlushDeferredDesktopAutoSave(reason, options);
+  } catch (error) {
+    var syncError = _tmReportDesktopAutoSaveBoundaryError(error, 'deferred desktop autosave flush · ' + String(reason || 'unknown'));
+    return Promise.resolve({ ok: false, error: syncError });
+  }
+  return Promise.resolve(pending).catch(function(error){
+    var asyncError = _tmReportDesktopAutoSaveBoundaryError(error, 'deferred desktop autosave flush · ' + String(reason || 'unknown'));
+    return { ok: false, error: asyncError };
+  });
+}
+
+if (typeof window !== 'undefined') {
+  window.isWorldTransactionActive = isWorldTransactionActive;
+  window._tmAdoptCommittedWorldSnapshot = _tmAdoptCommittedWorldSnapshot;
+  window._tmCaptureCommittedWorldSnapshotFromLive = _tmCaptureCommittedWorldSnapshotFromLive;
+  window._tmRunDesktopAutoSaveTick = _tmRunDesktopAutoSaveTick;
+  window._tmFlushDeferredDesktopAutoSave = _tmFlushDeferredDesktopAutoSave;
+}
 if(_tmHasNativeFs()){
   // 每60秒自动存档（仅完整运行局；纯 P 由 project IDB + lite 保存） (timer-leak-ok·文件顶层一次性·桌面端生命周期)
-  setInterval(async function(){
-    if(!GM || !GM.running) return;
-    if(_autoSaveInFlight){
-      _autoSaveSkipCount++;
-      if(_autoSaveSkipCount===5)console.warn("[autoSave] 连续 5 次被跳·上一次未完成·deepClone/IPC 可能卡住");
-      return;
-    }
-    // C·defer-during-input·5s 内有用户输入·跳·下次再举·但 3 分钟以上必存
-    var _now=Date.now();
-    var _sinceInput=_now-_autoSaveLastInputMs;
-    var _sinceSave=_now-_autoSaveLastDoneMs;
-    if(_sinceInput<5000 && _sinceSave<180000){
-      _autoSaveDeferStreak++;
-      if(_autoSaveDeferStreak===1 || _autoSaveDeferStreak%5===0){
-        console.log('[autoSave] defer·'+Math.round(_sinceInput/1000)+'s 内有输入·上次保存 '+Math.round(_sinceSave/1000)+'s 前·streak='+_autoSaveDeferStreak);
-      }
-      return;
-    }
-    if(_autoSaveDeferStreak>0){
-      console.log('[autoSave] defer 结束·streak='+_autoSaveDeferStreak+(_sinceInput>=5000?' (闲置)':' (3 分钟强制)'));
-      _autoSaveDeferStreak=0;
-    }
-    // D·闲置跳存·自上次成功存档以来既无用户输入又无回合推进·盘上副本已是最新·
-    // 跳过避免无谓的全量 clone+IPC 内存峰值 (闲置反复存同一份数据是 renderer OOM 黑屏的根因)
-    if(GM.running && _autoSaveLastDoneMs>0
-        && _autoSaveLastInputMs<=_autoSaveLastDoneMs
-        && GM.turn===_autoSaveLastSavedTurn){
-      _autoSaveIdleSkipStreak++;
-      if(_autoSaveIdleSkipStreak===1 || _autoSaveIdleSkipStreak%10===0){
-        console.log('[autoSave] skip·闲置无变更·turn='+GM.turn+'·已跳过 '+_autoSaveIdleSkipStreak+' 次 (盘上副本最新)');
-      }
-      return;
-    }
-    if(_autoSaveIdleSkipStreak>0){
-      console.log('[autoSave] 闲置结束·恢复存档·skip streak='+_autoSaveIdleSkipStreak);
-      _autoSaveIdleSkipStreak=0;
-    }
-    _autoSaveInFlight=true;
-    try{
-      _autoSaveSkipCount=0;
-      if(GM.running && typeof _awaitPostTurnJobsForSave === 'function') await _awaitPostTurnJobsForSave();
-      // await 后才绑定本次实际快照；IPC 回包若跨了读档代际，不得推进“盘上最新”基线。
-      var _autoSaveSourceGM=GM;
-      var _autoSaveSourceP=P;
-      var _autoSaveSourceLoadGen=(typeof window!=='undefined'&&window._tmLoadGen)||0;
-      var _autoSaveSourceSession=_tmGetDesktopAutoSaveSessionToken();
-      var _autoSaveSourceRunning=!!(_autoSaveSourceGM&&_autoSaveSourceGM.running);
-      var _t0=Date.now();
-      var saveData=_buildSaveState({format:'project',gm:_autoSaveSourceGM,p:_autoSaveSourceP});
-      if(_autoSaveSourceRunning){
-        var _gmMs=Date.now()-_t0;
-        if(_gmMs>800)console.warn('[autoSave] GM snapshot slow:'+_gmMs+'ms');
-        // 2026-06-10·性能:scenario 只存名字串(原 findScenarioById 整对象=把 5.3MB 剧本含内嵌地图又塞进存档一份)·
-        // 与手动存档(:557/:572 sc.name)口径一致·读档方只用 turn/字符串显示·无人读 scenario 对象字段
-        var _asScen=findScenarioById(_autoSaveSourceGM.sid);
-        saveData._saveMeta={turn:_autoSaveSourceGM.turn,scenario:(_asScen&&_asScen.name)||'',saveName:_autoSaveSourceGM.saveName,date:new Date().toISOString()};
-      }
-      if(_autoSaveSourceSession!==_tmGetDesktopAutoSaveSessionToken()) return;
-      var _autoSaveResult=await window.tianming.autoSave(saveData);
-      if(!_tmDesktopAutoSaveResultOk(_autoSaveResult)) throw _tmDesktopAutoSaveFailure(_autoSaveResult);
-      if(GM!==_autoSaveSourceGM || P!==_autoSaveSourceP || (((typeof window!=='undefined'&&window._tmLoadGen)||0)!==_autoSaveSourceLoadGen)) {
-        console.warn('[autoSave] 写盘完成时已跨档·不推进闲置跳存基线·下个 tick 将重存当前局');
-        return;
-      }
-      _autoSaveLastDoneMs=Date.now();
-      _autoSaveLastSavedTurn=(saveData._saveMeta&&Number.isFinite(Number(saveData._saveMeta.turn)))?Number(saveData._saveMeta.turn):_autoSaveLastSavedTurn; // D·锚定实际写入快照的 turn，不读 await 后 live GM
-      // C3·tm_P_lite 5 分钟刷一次·完整 P 已在 autoSave 里·lite 只是 boot 快速恢复用
-      _autoSaveLiteTick++;
-      if(_autoSaveLiteTick>=5){
-        _autoSaveLiteTick=0;
-        try{localStorage.removeItem("tm_P");localStorage.setItem("tm_P_lite",JSON.stringify(_tmStripAiKeyView({scenarios:(P.scenarios||[]).map(function(s){return{id:s.id,name:s.name,era:s.era,role:s.role};}),ai:P.ai,conf:_tmLiteSafeConf(P.conf),_hasFullData:true})));}catch(e2){}
-      }
-    }catch(e){ console.warn("[catch] 静默异常:", e.message || e); }
-    finally{ _autoSaveInFlight=false; }
+  setInterval(function(){
+    _tmRunDesktopAutoSaveTick().catch(function(error){
+      console.warn('[autoSave] timer failed:', error && (error.message || error));
+    });
   },60000);
 
   // 启动时检测自动存档

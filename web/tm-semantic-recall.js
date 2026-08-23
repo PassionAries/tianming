@@ -26,6 +26,9 @@
     pipeline: null,        // transformers.js feature-extraction pipeline
     index: [],             // [{ id, source, turn, text, vec }]
     lastIndexedTurn: 0,    // 上次索引到的 turn
+    cursors: Object.create(null),
+    worldKey: '',
+    modelVersion: 'bge-small-zh-v1.5:index-v2',
     modelName: 'Xenova/bge-small-zh-v1.5',
     threshold: 0.45, // S1(2026-06-03): 0.55->0.45 放松(bge-small-zh 0.55 偏严·ST 建议 0.3-0.5)·call-site 可经 P.conf.semanticRecallThreshold 覆盖
 
@@ -307,6 +310,7 @@
     }
   }
   function status() {
+    if (typeof GM !== 'undefined' && GM) _ensureWorldState();
     return {
       enabled: STATE.enabled,
       modelReady: STATE.modelReady,
@@ -321,20 +325,85 @@
     };
   }
 
-  // ────── 嵌入计算 ──────
-  async function _embed(text) {
-    if (!STATE.modelReady) return null;
-    if (!text || typeof text !== 'string') return null;
-    text = text.slice(0, 512); // bge-small 最大 512 tokens
-    // perf round5: worker 路径·推理在独立线程·主线程只等消息
-    if (STATE.workerReady) {
-      var r = await _workerRpc({ cmd: 'embedBatch', texts: [text] }, 120000);
-      return (r && r.ok && r.vecs && r.vecs[0]) ? r.vecs[0] : null;
+  function _perfCount(name, delta) {
+    if (global.TM && global.TM.perf && typeof global.TM.perf.count === 'function') global.TM.perf.count(name, delta);
+  }
+
+  function _perfWithSpan(name, fn, metadata) {
+    if (global.TM && global.TM.perf && typeof global.TM.perf.withSpan === 'function') {
+      return global.TM.perf.withSpan(name, fn, metadata);
     }
-    if (!STATE.pipeline) return null;
-    var out = await STATE.pipeline(text, { pooling: 'mean', normalize: true });
-    // 转成 Float32Array 存储
-    return Array.from(out.data);
+    return fn();
+  }
+
+  function _worldIdentity() {
+    var gm = typeof GM !== 'undefined' && GM ? GM : null;
+    var campaignId = String(gm && (gm._campaignId || gm._runId) || '');
+    var timelineId = String(gm && gm._timelineId || '');
+    return {
+      campaignId: campaignId,
+      timelineId: timelineId,
+      modelVersion: STATE.modelVersion,
+      key: campaignId + '|' + timelineId + '|' + STATE.modelVersion
+    };
+  }
+
+  function _ensureWorldState() {
+    var identity = _worldIdentity();
+    if (STATE.worldKey !== identity.key) {
+      STATE.worldKey = identity.key;
+      STATE.index = [];
+      STATE.cursors = Object.create(null);
+      STATE.lastIndexedTurn = 0;
+      STATE._idxLoadTried = false;
+    }
+    return identity;
+  }
+
+  function _cursor(source) {
+    if (!STATE.cursors[source]) {
+      STATE.cursors[source] = {
+        source: source,
+        lastStableId: '',
+        lastSeq: 0,
+        lastArrayOffset: 0,
+        lastTurn: 0,
+        revision: 0
+      };
+    }
+    return STATE.cursors[source];
+  }
+
+  // ────── 嵌入计算 ──────
+  async function _embedBatch(texts) {
+    if (!STATE.modelReady || !Array.isArray(texts) || !texts.length) return [];
+    texts = texts.map(function(text) { return String(text || '').slice(0, 512); });
+    _perfCount('semantic.embedRpcCount', 1);
+    _perfCount('semantic.embedTextCount', texts.length);
+    return _perfWithSpan('semantic.embed', async function() {
+      if (STATE.workerReady) {
+        var response = await _workerRpc({ cmd: 'embedBatch', texts: texts }, 120000);
+        return (response && response.ok && Array.isArray(response.vecs)) ? response.vecs : [];
+      }
+      if (!STATE.pipeline) return [];
+      var input = texts.length === 1 ? texts[0] : texts;
+      var out = await STATE.pipeline(input, { pooling: 'mean', normalize: true });
+      if (!out || !out.data) return [];
+      if (texts.length === 1) return [Array.from(out.data)];
+      var width = Math.floor(out.data.length / texts.length);
+      if (!width || width * texts.length !== out.data.length) throw new Error('semantic batch embedding shape mismatch');
+      var vectors = [];
+      for (var i = 0; i < texts.length; i++) {
+        vectors.push(Array.from(out.data.slice(i * width, (i + 1) * width)));
+      }
+      return vectors;
+    }, { texts: texts.length });
+  }
+
+  async function _embed(text) {
+    if (!text || typeof text !== 'string') return null;
+    var vectors = await _embedBatch([text]);
+    return vectors[0] || null;
   }
 
   function _cosineSim(a, b) {
@@ -349,113 +418,138 @@
   // 收集本回合新增 + 历史未索引内容
   async function buildIndex(opts) {
     opts = opts || {};
+    // The v2 index is append-only. Expose a verified zero rather than omitting
+    // the metric when no destructive clear was attempted.
+    _perfCount('semantic.idbClearCount', 0);
     if (!STATE.enabled) return { ok: false, reason: 'disabled' };
     if (!await ensureModel()) return { ok: false, reason: 'model not ready: ' + STATE.error };
     if (typeof GM === 'undefined' || !GM) return { ok: false, reason: 'no GM' };
+    var identity = _ensureWorldState();
+    if (!identity.campaignId || !identity.timelineId) return { ok: false, reason: 'world identity unavailable' };
     // perf round5: 本会话首次索引前·先尝试吃上一会话的持久化索引（同 campaign 才吃）
-    // 不吃则 lastIndexedTurn=0·老存档会全量重嵌一遍（worker 内·不卡主线程但白烧几分钟）
     if (!STATE._idxLoadTried) {
       STATE._idxLoadTried = true;
-      try { await loadIndex(); } catch (_li) {}
+      try { await loadIndex(); }
+      catch (loadError) {
+        STATE.error = 'semantic index load failed: ' + (loadError.message || String(loadError));
+        if (global.TM && global.TM.errors && typeof global.TM.errors.capture === 'function') {
+          global.TM.errors.capture(loadError, 'SemanticRecall.loadIndex');
+        } else if (global.console && console.warn) console.warn('[SemanticRecall] index load failed:', loadError);
+      }
     }
     var turn = (GM.turn || 0);
-    var since = STATE.lastIndexedTurn;
-    var added = 0;
+    var pending = [];
+    var existing = Object.create(null);
+    STATE.index.forEach(function(item) { existing[item.source + '|' + (item.sourceId || item.id)] = true; });
 
-    // shijiHistory 增量
-    if (Array.isArray(GM.shijiHistory)) {
-      var newSj = GM.shijiHistory.filter(function(sh) { return sh && (sh.turn || 0) > since; });
-      for (var i = 0; i < newSj.length; i++) {
-        var sh = newSj[i];
-        var combined = (sh.shilu || sh.shizhengji || sh.zhengwen || '');
-        var sentences = combined.split(/[。！？\n]/).filter(function(s) { return s && s.length > 8; });
-        for (var j = 0; j < sentences.length && j < 30; j++) {
-          var vec = await _embed(sentences[j]);
-          if (vec) {
-            STATE.index.push({
-              id: 'sj_T' + sh.turn + '_' + j,
-              source: 'shiji',
-              turn: sh.turn,
-              text: sentences[j].slice(0, 200),
-              vec: vec
-            });
-            added++;
-          }
-        }
-      }
-    }
-
-    // ChronicleTracker 增量
-    if (typeof ChronicleTracker !== 'undefined' && ChronicleTracker.getAll) {
-      try {
-        var allChron = ChronicleTracker.getAll({}) || [];
-        for (var k = 0; k < allChron.length; k++) {
-          var c = allChron[k];
-          if (!c || (c.startTurn || 0) <= since) continue;
-          var txt = (c.title || '') + '·' + (c.description || c.summary || '');
-          var vec2 = await _embed(txt);
-          if (vec2) {
-            STATE.index.push({
-              id: 'ch_' + (c.id || k),
-              source: 'chronicle',
-              turn: c.startTurn || 0,
-              text: txt.slice(0, 200),
-              vec: vec2
-            });
-            added++;
-          }
-        }
-      } catch(_ce){}
-    }
-
-    // _foreshadows 增量
-    if (Array.isArray(GM._foreshadows)) {
-      for (var f = 0; f < GM._foreshadows.length; f++) {
-        var fs = GM._foreshadows[f];
-        if (!fs || (fs.turn || 0) <= since) continue;
-        var ft = (fs.content || fs.text || '');
-        if (!ft) continue;
-        var vec3 = await _embed(ft);
-        if (vec3) {
-          STATE.index.push({
-            id: 'fs_' + (fs.turn || 0) + '_' + f,
-            source: 'foreshadow',
-            turn: fs.turn || 0,
-            text: ft.slice(0, 200),
-            vec: vec3
+    function visitRows(source, rows, project) {
+      rows = Array.isArray(rows) ? rows : [];
+      var cursor = _cursor(source);
+      var start = Number(cursor.lastArrayOffset) || 0;
+      if (start < 0 || start > rows.length) start = 0;
+      var newestTurn = cursor.lastTurn || 0;
+      var newestStableId = cursor.lastStableId || '';
+      for (var offset = start; offset < rows.length; offset++) {
+        _perfCount('semantic.sourceRowsVisited', 1);
+        var projected = project(rows[offset], offset) || [];
+        if (!Array.isArray(projected)) projected = [projected];
+        projected.forEach(function(item) {
+          if (!item || !item.sourceId || !item.text) return;
+          var dedupeKey = source + '|' + item.sourceId;
+          if (existing[dedupeKey]) return;
+          existing[dedupeKey] = true;
+          pending.push({
+            source: source,
+            sourceId: String(item.sourceId),
+            turn: Number(item.turn) || 0,
+            text: String(item.text).slice(0, 200)
           });
-          added++;
-        }
+          newestTurn = Math.max(newestTurn, Number(item.turn) || 0);
+          newestStableId = source + ':' + String(item.sourceId);
+        });
       }
+      cursor.lastArrayOffset = rows.length;
+      cursor.lastSeq = rows.length;
+      cursor.lastStableId = newestStableId;
+      cursor.lastTurn = newestTurn;
+      cursor.revision = (cursor.revision || 0) + Math.max(0, rows.length - start);
     }
 
-    // 12 表 eventHistory 增量
-    if (GM._memTables && GM._memTables.eventHistory && Array.isArray(GM._memTables.eventHistory.rows)) {
-      for (var e = 0; e < GM._memTables.eventHistory.rows.length; e++) {
-        var row = GM._memTables.eventHistory.rows[e];
-        if (!row) continue;
-        var rTurn = parseInt(row[1], 10) || 0;
-        if (rTurn <= since) continue;
-        var et = (row[2] || '') + ' ' + (row[5] || '');
-        if (!et.trim()) continue;
-        var vec4 = await _embed(et);
-        if (vec4) {
-          STATE.index.push({
-            id: 'eh_' + (row[0] || (rTurn + '_' + e)),
-            source: 'eventHistory',
-            turn: rTurn,
-            text: et.slice(0, 200),
-            vec: vec4
-          });
-          added++;
-        }
+    await _perfWithSpan('semantic.scan', function() {
+      visitRows('shiji', GM.shijiHistory, function(sh, offset) {
+        if (!sh) return [];
+        var combined = sh.shilu || sh.shizhengji || sh.zhengwen || '';
+        var sentences = String(combined).split(/[。！？\n]/).filter(function(sentence) { return sentence && sentence.length > 8; });
+        var stable = sh.id || ('T' + (Number(sh.turn) || 0) + ':row' + offset);
+        return sentences.slice(0, 30).map(function(sentence, sentenceIndex) {
+          return { sourceId: stable + ':s' + sentenceIndex, turn: sh.turn, text: sentence };
+        });
+      });
+
+      if (typeof ChronicleTracker !== 'undefined' && ChronicleTracker.getAll) {
+        var allChron = Array.isArray(GM._chronicleTracks) ? GM._chronicleTracks : (ChronicleTracker.getAll({}) || []);
+        visitRows('chronicle', allChron, function(entry, offset) {
+          if (!entry) return null;
+          return {
+            sourceId: entry.id || ('row' + offset),
+            turn: entry.startTurn,
+            text: (entry.title || '') + '·' + (entry.description || entry.summary || '')
+          };
+        });
+      }
+
+      visitRows('foreshadow', GM._foreshadows, function(entry, offset) {
+        if (!entry) return null;
+        return {
+          sourceId: entry.id || ('T' + (Number(entry.turn) || 0) + ':row' + offset),
+          turn: entry.turn,
+          text: entry.content || entry.text || ''
+        };
+      });
+
+      var eventRows = GM._memTables && GM._memTables.eventHistory && GM._memTables.eventHistory.rows;
+      visitRows('eventHistory', eventRows, function(row, offset) {
+        if (!row) return null;
+        var rowTurn = Number.parseInt(row[1], 10);
+        if (!Number.isFinite(rowTurn)) rowTurn = 0;
+        return {
+          sourceId: row[0] || ('T' + rowTurn + ':row' + offset),
+          turn: rowTurn,
+          text: String(row[2] || '') + ' ' + String(row[5] || '')
+        };
+      });
+    }, { world: identity.key });
+
+    _perfCount('semantic.newRows', pending.length);
+    var addedItems = [];
+    var batchSize = Number(opts.batchSize);
+    if (!Number.isSafeInteger(batchSize) || batchSize < 16 || batchSize > 64) batchSize = 32;
+    for (var batchAt = 0; batchAt < pending.length; batchAt += batchSize) {
+      var batch = pending.slice(batchAt, batchAt + batchSize);
+      var vectors = await _embedBatch(batch.map(function(item) { return item.text; }));
+      for (var vectorIndex = 0; vectorIndex < batch.length; vectorIndex++) {
+        var vector = vectors[vectorIndex];
+        if (!vector) continue;
+        var pendingItem = batch[vectorIndex];
+        var storageId = identity.campaignId + ':' + identity.timelineId + ':' + pendingItem.source + ':' + pendingItem.sourceId;
+        var indexItem = {
+          id: storageId,
+          sourceId: pendingItem.sourceId,
+          campaignId: identity.campaignId,
+          timelineId: identity.timelineId,
+          modelVersion: identity.modelVersion,
+          source: pendingItem.source,
+          turn: pendingItem.turn,
+          text: pendingItem.text,
+          vec: vector
+        };
+        STATE.index.push(indexItem);
+        addedItems.push(indexItem);
       }
     }
-
     STATE.lastIndexedTurn = turn;
-    // perf round5: 有新增才落盘·失败静默（IDB 不可用等）
-    if (added > 0) { try { persistIndex().catch(function () {}); } catch (_pi) {} }
-    return { ok: true, added: added, total: STATE.index.length };
+    if (addedItems.length > 0 || pending.length === 0) await persistIndex(addedItems);
+    return { ok: true, added: addedItems.length, total: STATE.index.length, visited: pending.length };
   }
 
   // ────── 检索 ──────
@@ -463,22 +557,56 @@
     opts = opts || {};
     if (!STATE.enabled || !STATE.modelReady) return [];
     if (!query) return [];
+    _ensureWorldState();
     var qVec = await _embed(query);
     if (!qVec) return [];
-    var topK = opts.topK || 6;
-    var threshold = opts.threshold != null ? opts.threshold : STATE.threshold;
-    var scored = [];
-    for (var i = 0; i < STATE.index.length; i++) {
-      var item = STATE.index[i];
-      var sim = _cosineSim(qVec, item.vec);
-      if (sim >= threshold) scored.push({ item: item, sim: sim });
+    var topK = Number(opts.topK);
+    if (!Number.isSafeInteger(topK) || topK <= 0 || topK > 100) topK = 6;
+    var threshold = opts.threshold != null ? Number(opts.threshold) : STATE.threshold;
+    if (!Number.isFinite(threshold)) threshold = STATE.threshold;
+    function worse(left, right) {
+      return left.sim < right.sim || (left.sim === right.sim && left.order > right.order);
     }
-    scored.sort(function(a, b) { return b.sim - a.sim; });
-    return scored.slice(0, topK).map(function(s) {
+    function heapPush(heap, entry) {
+      heap.push(entry);
+      var at = heap.length - 1;
+      while (at > 0) {
+        var parent = Math.floor((at - 1) / 2);
+        if (!worse(heap[at], heap[parent])) break;
+        var swap = heap[parent]; heap[parent] = heap[at]; heap[at] = swap; at = parent;
+      }
+    }
+    function heapReplaceWorst(heap, entry) {
+      heap[0] = entry;
+      var at = 0;
+      while (true) {
+        var left = at * 2 + 1;
+        var right = left + 1;
+        var worst = at;
+        if (left < heap.length && worse(heap[left], heap[worst])) worst = left;
+        if (right < heap.length && worse(heap[right], heap[worst])) worst = right;
+        if (worst === at) break;
+        var swap = heap[worst]; heap[worst] = heap[at]; heap[at] = swap; at = worst;
+      }
+    }
+    var scored = await _perfWithSpan('semantic.search', function() {
+      var heap = [];
+      for (var i = 0; i < STATE.index.length; i++) {
+        var item = STATE.index[i];
+        var sim = _cosineSim(qVec, item.vec);
+        _perfCount('semantic.vectorComparisons', 1);
+        if (sim < threshold) continue;
+        var entry = { item: item, sim: sim, order: i };
+        if (heap.length < topK) heapPush(heap, entry);
+        else if (worse(heap[0], entry)) heapReplaceWorst(heap, entry);
+      }
+      return heap.sort(function(a, b) { return (b.sim - a.sim) || (a.order - b.order); });
+    }, { candidates: STATE.index.length, topK: topK });
+    return scored.map(function(s) {
       return {
         source: 'vector',
         sub: s.item.source,
-        id: s.item.id,                 // S6(2026-06-03): 保留 origin 稳定 id，供向量 hit 进 dedup/lineage 治理
+        id: s.item.sourceId || s.item.id,
         turn: s.item.turn,
         text: s.item.text,
         sim: Math.round(s.sim * 100) / 100
@@ -498,7 +626,12 @@
     EndTurnHooks.register('after', function() {
       if (!STATE.enabled || !STATE.modelReady) return;
       // 异步索引·不阻塞
-      buildIndex().catch(function(e){ /* 静默 */ });
+      buildIndex().catch(function(error){
+        STATE.error = String(error && (error.message || error) || 'semantic index failure');
+        if (global.TM && global.TM.errors && typeof global.TM.errors.capture === 'function') {
+          global.TM.errors.capture(error, 'SemanticRecall.autoIndex');
+        } else if (global.console && console.warn) console.warn('[SemanticRecall] auto index failed:', error);
+      });
     }, 'SemanticRecall.autoIndex');
     return true;
   }
@@ -529,60 +662,99 @@
     if (_idxDbPromise) return _idxDbPromise;
     _idxDbPromise = new Promise(function(resolve, reject) {
       if (typeof indexedDB === 'undefined') return reject(new Error('IndexedDB 不可用'));
-      var req = indexedDB.open('tianming_semantic_idx', 1);
+      var req = indexedDB.open('tianming_semantic_idx', 2);
       req.onupgradeneeded = function(e) {
         var db = e.target.result;
-        if (!db.objectStoreNames.contains('idx')) db.createObjectStore('idx', { keyPath: 'id' });
+        var store;
+        if (!db.objectStoreNames.contains('idx')) store = db.createObjectStore('idx', { keyPath: 'id' });
+        else store = e.target.transaction.objectStore('idx');
+        try {
+          if (!store.indexNames || !store.indexNames.contains('worldModel')) {
+            store.createIndex('worldModel', ['campaignId', 'timelineId', 'modelVersion'], { unique: false });
+          }
+        } catch (indexError) {
+          STATE.error = 'semantic index schema upgrade failed: ' + (indexError.message || String(indexError));
+          throw indexError;
+        }
       };
       req.onsuccess = function(e) { resolve(e.target.result); };
       req.onerror = function(e) { reject(e.target.error); };
     });
     return _idxDbPromise;
   }
-  // perf round5 (2026-06-10): 持久化按 campaign(GM._runId) 隔离·防跨存档索引污染
-  // GM._runId 与 keju v7.1·D5 同一字段同一惯用法·懒生成后随存档持久
-  function _campaignId() {
-    try {
-      if (typeof GM !== 'undefined' && GM) {
-        if (!GM._runId) GM._runId = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-        return GM._runId;
-      }
-    } catch (_) {}
-    return '';
+  function _semanticMetaId(identity) {
+    return '__meta__:' + encodeURIComponent(identity.campaignId) + ':'
+      + encodeURIComponent(identity.timelineId) + ':' + encodeURIComponent(identity.modelVersion);
   }
-  function persistIndex() {
-    var campaign = _campaignId();
-    return _openIdxDB().then(function(db) {
-      return new Promise(function(resolve) {
+
+  function persistIndex(newItems) {
+    var identity = _ensureWorldState();
+    newItems = Array.isArray(newItems) ? newItems : [];
+    return _perfWithSpan('semantic.persist', function() { return _openIdxDB().then(function(db) {
+      return new Promise(function(resolve, reject) {
         var tx = db.transaction('idx', 'readwrite');
         var s = tx.objectStore('idx');
-        s.clear();
-        s.put({ id: '__meta__', campaign: campaign, savedAt: Date.now(), count: STATE.index.length });
-        STATE.index.forEach(function(it) { s.put(it); });
+        var meta = {
+          id: _semanticMetaId(identity),
+          campaignId: identity.campaignId,
+          timelineId: identity.timelineId,
+          modelVersion: identity.modelVersion,
+          savedAt: Date.now(),
+          count: STATE.index.length,
+          lastIndexedTurn: STATE.lastIndexedTurn,
+          cursors: JSON.parse(JSON.stringify(STATE.cursors))
+        };
+        s.put(meta);
+        _perfCount('semantic.idbPutCount', 1);
+        newItems.forEach(function(item) {
+          s.put(item);
+          _perfCount('semantic.idbPutCount', 1);
+        });
         tx.oncomplete = function(){ resolve({ ok: true, count: STATE.index.length }); };
+        tx.onerror = function(e) { reject((e.target && e.target.error) || tx.error || new Error('semantic index persist failed')); };
+        tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('semantic index persist aborted')); };
       });
-    });
+    }); }, { added: newItems.length, world: identity.key });
   }
   function loadIndex() {
-    var campaign = _campaignId();
+    var identity = _ensureWorldState();
     return _openIdxDB().then(function(db) {
-      return new Promise(function(resolve) {
+      return new Promise(function(resolve, reject) {
         var tx = db.transaction('idx', 'readonly');
-        tx.objectStore('idx').getAll().onsuccess = function(e) {
+        var store = tx.objectStore('idx');
+        var req;
+        try {
+          var index = typeof store.index === 'function' ? store.index('worldModel') : null;
+          req = index ? index.getAll([identity.campaignId, identity.timelineId, identity.modelVersion]) : store.getAll();
+        } catch (queryError) {
+          req = store.getAll();
+        }
+        req.onsuccess = function(e) {
           var rows = e.target.result || [];
-          var meta = null, items = [];
-          rows.forEach(function(r) { if (r && r.id === '__meta__') meta = r; else if (r) items.push(r); });
-          // 无 meta（旧库）或 campaign 不匹配（别的存档）→ 不吃
-          if (!meta || !campaign || meta.campaign !== campaign) {
-            resolve({ ok: false, reason: 'campaign mismatch', count: 0 });
+          var metaId = _semanticMetaId(identity);
+          var meta = null, items = [], legacyMeta = null;
+          rows.forEach(function(row) {
+            if (!row) return;
+            if (row.id === metaId) meta = row;
+            else if (row.id === '__meta__') legacyMeta = row;
+            else if (row.campaignId === identity.campaignId
+                && row.timelineId === identity.timelineId
+                && row.modelVersion === identity.modelVersion) items.push(row);
+          });
+          if (!meta) {
+            STATE.index = [];
+            STATE.cursors = Object.create(null);
+            STATE.lastIndexedTurn = 0;
+            resolve({ ok: false, reason: legacyMeta ? 'legacy-index-rebuild' : 'world index missing', count: 0 });
             return;
           }
           STATE.index = items;
-          if (STATE.index.length > 0) {
-            STATE.lastIndexedTurn = STATE.index.reduce(function(m, it) { return Math.max(m, it.turn || 0); }, 0);
-          }
+          STATE.cursors = meta.cursors && typeof meta.cursors === 'object' ? meta.cursors : Object.create(null);
+          STATE.lastIndexedTurn = Number(meta.lastIndexedTurn) || 0;
           resolve({ ok: true, count: STATE.index.length });
         };
+        req.onerror = function(e) { reject(e.target.error || new Error('semantic index load failed')); };
+        tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('semantic index load aborted')); };
       });
     });
   }

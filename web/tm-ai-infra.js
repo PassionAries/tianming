@@ -1174,6 +1174,16 @@ async function callAIMessages(messages,maxTok,signal,tier,opts){
  */
 async function _callAIMessagesStreamDirect(messages, maxTok, opts) {
   opts = opts || {};
+  var _finalizedBody = null;
+  if (opts.finalizedBody !== undefined) {
+    if (!opts.finalizedBody || typeof opts.finalizedBody !== 'object' || Array.isArray(opts.finalizedBody)) {
+      throw new Error('流式 finalizedBody 非法');
+    }
+    _finalizedBody = JSON.parse(JSON.stringify(opts.finalizedBody));
+    var _exactMax = Number(_finalizedBody.max_tokens);
+    if (!Number.isFinite(_exactMax) || _exactMax <= 0) throw new Error('流式 finalizedBody.max_tokens 非法');
+    maxTok = Math.floor(_exactMax);
+  }
   // M3.1·次 API 走 secondary 且网络不可达 → 自动回退主 API 重试一次（_noSecFallback 防递归）
   if (_aiEffectiveTierIsSecondary(opts.tier) && !opts._noSecFallback) {
     var _oS = Object.assign({}, opts, { _noSecFallback: true });
@@ -1194,14 +1204,16 @@ async function _callAIMessagesStreamDirect(messages, maxTok, opts) {
   var timer = setTimeout(function() { ctrl.abort(); }, (opts.timeoutMs != null ? opts.timeoutMs : 180000));
   if (opts.signal && opts.signal.aborted) { clearTimeout(timer); throw new Error('Aborted'); } // 同 _toolFetchQueued·已置位预检(2026-07-04 审查定罪)
   if (opts.signal) opts.signal.addEventListener('abort', function() { ctrl.abort(); });
-  var _scaledTok = Math.round((maxTok || 500) * ((typeof getCompressionParams === 'function') ? Math.max(1.0, getCompressionParams().scale) : 1.0));
+  var _scaledTok = _finalizedBody
+    ? maxTok
+    : Math.round((maxTok || 500) * ((typeof getCompressionParams === 'function') ? Math.max(1.0, getCompressionParams().scale) : 1.0));
   try {
     // M4·Anthropic cache_control：原生 Anthropic API + sys 足够长 → 加 cache_control 享 90% 折扣
     var _msgsStream = messages;
     try {
       var _providerS = (typeof _detectAIProvider === 'function') ? _detectAIProvider() : '';
       var _isNativeS = (P.ai && P.ai.url && /api\.anthropic\.com/i.test(P.ai.url));
-      if (_providerS === 'anthropic' && _isNativeS && messages && messages.length > 0) {
+      if (!_finalizedBody && _providerS === 'anthropic' && _isNativeS && messages && messages.length > 0) {
         var _firstS = messages[0];
         if (_firstS && _firstS.role === 'system' && typeof _firstS.content === 'string' && _firstS.content.length > 1500) {
           _msgsStream = messages.slice();
@@ -1209,12 +1221,13 @@ async function _callAIMessagesStreamDirect(messages, maxTok, opts) {
         }
       }
     } catch(_cE) {}
-    var _bodyCore = {
+    var _bodyCore = _finalizedBody || {
       model: (_aiCfg && _aiCfg.model) || (P.ai && P.ai.model) || 'gpt-4o', messages: _msgsStream,
       temperature: (opts.temperature !== undefined) ? opts.temperature : (P.ai.temp || 0.8),
-      max_tokens: _scaledTok, stream: true
+      max_tokens: _scaledTok
     };
-    if (opts.extraBody) Object.assign(_bodyCore, opts.extraBody);
+    if (!_finalizedBody && opts.extraBody) Object.assign(_bodyCore, opts.extraBody);
+    _bodyCore.stream = true;
     var resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
@@ -1276,6 +1289,28 @@ async function callAIMessagesStream(messages, maxTok, opts) {
   return _aiQueue.enqueue(function() {
     return _callAIMessagesStreamDirect(messages, maxTok, queuedOpts);
   }, opts.priority || 'normal');
+}
+
+// 已经通过最终物理预算审核的请求必须原样发送。除 stream:true 外，模型、消息、
+// completion 上限、strict schema/tools 等都不得在 transport 层重新解释或放大。
+async function callAIBodyStream(finalizedBody, opts) {
+  opts = opts || {};
+  if (!finalizedBody || typeof finalizedBody !== 'object' || Array.isArray(finalizedBody)) {
+    throw new Error('SC1 finalized stream body 非法');
+  }
+  var exactBody = JSON.parse(JSON.stringify(finalizedBody));
+  var streamOpts = Object.assign({}, opts, {
+    finalizedBody: exactBody,
+    exactMaxTokens: true,
+    skipQueue: true
+  });
+  var run = function() {
+    return _callAIMessagesStreamDirect(exactBody.messages, exactBody.max_tokens, streamOpts);
+  };
+  if (opts.skipQueue || typeof _aiQueue === 'undefined' || !_aiQueue || typeof _aiQueue.enqueue !== 'function') {
+    return run();
+  }
+  return _aiQueue.enqueue(run, opts.priority || 'normal');
 }
 
 // ============================================================

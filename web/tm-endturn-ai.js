@@ -3712,15 +3712,12 @@
       var _sc1Call = null;
       var _sc1CriticalError = null;
       if (_streamSC1) {
-        // 流式·边接收边更新进度条（不尝试 partial JSON parse·避免数据损坏）
-        _sc1Body.stream = true;
+        // 流式直接消费已通过最终预算审核的完整 body；transport 只允许添加 stream:true。
         try {
           var _sc1PolicyForStream = ns.getCallPolicy('sc1');
-          c1 = await callAIMessagesStream(_sc1Body.messages, _sc1Body.max_tokens !== undefined ? _sc1Body.max_tokens : _sc1BaseTok, {
+          c1 = await callAIBodyStream(_sc1Body, {
             priority: 'critical',
             timeoutMs: _sc1PolicyForStream.timeoutMs,
-            temperature: _sc1Temp,
-            extraBody: _modelFamily === 'openai' ? { response_format: { type: 'json_object' } } : undefined,
             onChunk: function(text) {
               // 按字数大致估算进度：5K字约 55%·10K约 60%·15K约 65%
               var _approx = 50 + Math.min(15, Math.floor(text.length / 1500));
@@ -3736,7 +3733,6 @@
         }
       }
       if (!_streamSC1) {
-        delete _sc1Body.stream;  // 确保 fallback 不发 stream:true
         try {
           _sc1Call = await _callEndturnAI(_sc1Body, ns.sc1ProductionCallOptions('结构化数据', _sc1OverflowReducer));
           data1 = _sc1Call.data;

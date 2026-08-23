@@ -33,6 +33,7 @@ function contextErrorResponse() {
 
 async function main() {
   const sent = [];
+  const perfCounters = Object.create(null);
   const runtime = {
     console: { log() {}, warn() {}, error() {} },
     Date,
@@ -56,7 +57,10 @@ async function main() {
     _buildAIUrlForTier() { return 'https://example.invalid/v1'; },
     _buildAIUrl() { return 'https://example.invalid/v1'; },
     _detectAIProvider() { return 'openai'; },
-    TM: { Endturn: { AI: {} } },
+    TM: {
+      Endturn: { AI: {} },
+      perf: { count(name, delta) { perfCounters[name] = (perfCounters[name] || 0) + (delta == null ? 1 : delta); } }
+    },
     window: null,
     fetch: async (_url, options) => {
       sent.push(JSON.parse(options.body));
@@ -94,10 +98,14 @@ async function main() {
     tool_choice: 'auto'
   };
   const finalized = api.finalizeSc1RequestBody(body, { contextTokens: 8192, completionTokens: 2048 });
+  assert.strictEqual(perfCounters['sc1.finalBodyCloneCount'], 1,
+    'final budgeter should own one detached finalized-body clone');
   assert(finalized.diagnostics.finalTotalTokens <= finalized.diagnostics.contextTokens,
     'finalized request must fit prompt + schema/tool overhead + completion');
 
   const text = await runtime.callAIBodyStream(finalized.body, { skipQueue: true, priority: 'critical' });
+  assert.strictEqual(perfCounters['sc1.transportBodyCloneCount'], 1,
+    'stream transport should create exactly one queued network body clone');
   assert.strictEqual(text, '{"turn_summary":"ok"}');
   assert.strictEqual(sent.length, 1);
   const physical = sent[0];

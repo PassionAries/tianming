@@ -170,6 +170,9 @@
   function finalizeRequestBody(body, options) {
     options = options || {};
     var working = cloneRequestBody(body);
+    if (global.TM && global.TM.perf && typeof global.TM.perf.count === 'function') {
+      global.TM.perf.count('sc1.finalBodyCloneCount', 1);
+    }
     var rawReport = measureRequest(working, options);
     var trimmed = { body:working, report:rawReport, omittedChars:0 };
     if (!rawReport.ok) trimmed = trimUserMessage(working, options, rawReport);

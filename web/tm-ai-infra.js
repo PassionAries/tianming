@@ -1179,7 +1179,9 @@ async function _callAIMessagesStreamDirect(messages, maxTok, opts) {
     if (!opts.finalizedBody || typeof opts.finalizedBody !== 'object' || Array.isArray(opts.finalizedBody)) {
       throw new Error('流式 finalizedBody 非法');
     }
-    _finalizedBody = JSON.parse(JSON.stringify(opts.finalizedBody));
+    _finalizedBody = opts.finalizedBodyDetached === true
+      ? opts.finalizedBody
+      : JSON.parse(JSON.stringify(opts.finalizedBody));
     var _exactMax = Number(_finalizedBody.max_tokens);
     if (!Number.isFinite(_exactMax) || _exactMax <= 0) throw new Error('流式 finalizedBody.max_tokens 非法');
     maxTok = Math.floor(_exactMax);
@@ -1298,9 +1300,13 @@ async function callAIBodyStream(finalizedBody, opts) {
   if (!finalizedBody || typeof finalizedBody !== 'object' || Array.isArray(finalizedBody)) {
     throw new Error('SC1 finalized stream body 非法');
   }
+  if (typeof TM !== 'undefined' && TM && TM.perf && typeof TM.perf.count === 'function') {
+    TM.perf.count('sc1.transportBodyCloneCount', 1);
+  }
   var exactBody = JSON.parse(JSON.stringify(finalizedBody));
   var streamOpts = Object.assign({}, opts, {
     finalizedBody: exactBody,
+    finalizedBodyDetached: true,
     exactMaxTokens: true,
     skipQueue: true
   });

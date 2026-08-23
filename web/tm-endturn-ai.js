@@ -396,7 +396,8 @@
             apiKey: key,
             priority: opts.priority || 'normal',
             timeoutMs: opts.timeoutMs,
-            maxRetries: opts.maxRetries
+            maxRetries: opts.maxRetries,
+            contextOverflowReducer: opts.contextOverflowReducer
           });
         } else {
           var resp = await fetch(callUrl, {
@@ -1853,8 +1854,10 @@
                 perHitMaxChars: 100,
                 suppressed: _traceSuppressed
               });
+              if (typeof global.TM.MemoryContextCompiler.requireCompiled === 'function') global.TM.MemoryContextCompiler.requireCompiled(_compiledRecall, 'SC_RECALL');
             }
           } catch(_compileRecallE) {
+            if (_compileRecallE && _compileRecallE.code === 'mandatory_context_overflow') throw _compileRecallE;
             _compiledRecall = null;
           }
           if (_compiledRecall && _compiledRecall.text) {
@@ -1978,6 +1981,7 @@
             ].concat(_recallZones).concat([
               { id:'recall-footer', lane:'L6_retrieved_evidence', text:_recallFooterText, mustKeep:true, order:999999, source:'SC_RECALL', reason:'recall footer' }
             ]), { maxTokens:_recallZoneBudget });
+            if (typeof global.TM.ContextZones.requirePacked === 'function') global.TM.ContextZones.requirePacked(_recallPackedZones, 'SC_RECALL fallback');
             _recentHistory = _recentHistory.slice(0, _recallTraceStart) + (_recallPackedZones.text || '');
           }
           try {
@@ -2293,6 +2297,7 @@
       var _sc1Prefix = _sc28Inject + _stateBoard + _consolidated + _timeRef + _futureC + _wsSnap + _memTblInj;
       try {
         if (window.TM && TM.ContextZones && typeof TM.ContextZones.packZones === 'function') {
+          var _sc1PrefixBudgetRaw = (P && P.conf && Object.prototype.hasOwnProperty.call(P.conf, 'sc1PrefixTokenBudget')) ? P.conf.sc1PrefixTokenBudget : 0;
           var _sc1ZonePacked = TM.ContextZones.packZones([
             { id:'sc28_snapshot', lane:'L3_long_term_affair', text:_sc28Inject, mustKeep:true, order:10, source:'sc28', reason:'last turn world snapshot' },
             { id:'state_board', lane:'L3_long_term_affair', text:_stateBoard, mustKeep:true, order:20, source:'state_board', reason:'last turn state board' },
@@ -2302,13 +2307,14 @@
             { id:'world_snapshot', lane:'L1_world_truth', text:_wsSnap, mustKeep:true, order:60, source:'world_snapshot', reason:'current world truth' },
             { id:'memory_tables', lane:'L2_active_law_commitment', text:_memTblInj, mustKeep:true, order:70, source:'mem_tables', reason:'structured memory tables' }
           ], {
-            maxTokens: (P && P.conf && P.conf.sc1PrefixTokenBudget) || 0,
+            maxTokens: _sc1PrefixBudgetRaw,
             defaultMaxTokens: 0
           });
-          _sc1Prefix = _sc1ZonePacked.text || _sc1Prefix;
+          if (typeof TM.ContextZones.requirePacked === 'function') TM.ContextZones.requirePacked(_sc1ZonePacked, 'SC1 prefix');
+          _sc1Prefix = _sc1ZonePacked.text;
           if (TM.ContextZones.recordZoneInjection) TM.ContextZones.recordZoneInjection(GM, _sc1ZonePacked, { stage:'sc1-prefix' });
         }
-      } catch(_czE) { _dbg('[ContextZones sc1-prefix] fail:', _czE); }
+      } catch(_czE) { _dbg('[ContextZones sc1-prefix] fail:', _czE); if (_czE && _czE.code === 'mandatory_context_overflow') throw _czE; }
       // DA-Q2·史记创作字段(总括/实录/时政记副标题正文总结/玩家状态)提示词改由共享 recordSpecs(ctx) 出·
       // 与 agent deepen_narrative 同源零 drift·输出须字节级不变(见 scripts/verify-recordspecs-byte-identical.js)
       var _rsSpec = TM.Endturn.AI.prompt.recordSpecs(ctx);
@@ -3605,7 +3611,7 @@
           var _sc1MemBudgetRaw = (P && P.conf && P.conf.memorySc1ContextTokenBudget != null)
             ? P.conf.memorySc1ContextTokenBudget
             : (P && P.conf && P.conf.memoryTurnContextTokenBudget);
-          var _sc1MemBudget = Number(_sc1MemBudgetRaw == null ? 1800 : _sc1MemBudgetRaw);
+          var _sc1MemBudget = (global.TM.ContextZones && typeof global.TM.ContextZones.finiteNonNegative === 'function') ? global.TM.ContextZones.finiteNonNegative(_sc1MemBudgetRaw == null ? 1800 : _sc1MemBudgetRaw, 1800) : Number(_sc1MemBudgetRaw == null ? 1800 : _sc1MemBudgetRaw);
           if (_sc1MemBudget > 0) {
             if (_sc1MemBudget < 300) _sc1MemBudget = 300;
             var _sc1MemCompileOpts = {
@@ -3617,6 +3623,7 @@
               sc1q: (ctx && ctx.results && ctx.results.sc1q) || null
             };
             var _sc1CompiledContext = global.TM.MemoryContextCompiler.compileFromGM(GM, _sc1MemCompileOpts);
+            if (typeof global.TM.MemoryContextCompiler.requireCompiled === 'function') global.TM.MemoryContextCompiler.requireCompiled(_sc1CompiledContext, 'SC1_PRE_CONTEXT');
             if (_sc1CompiledContext && _sc1CompiledContext.text) {
               var _sc1MemoryBlock = '<memory-context-disclaimer>以下 SC1_PRE_CONTEXT 来自结构化记忆档案、编年/时政/人物 rollup 与权威账本投影；用于推演依据，不得覆盖本回合硬状态、死亡、任免、资源与显式诏令。</memory-context-disclaimer>\n' + _sc1CompiledContext.text;
               tp1 += '\n\n=== SC1_PRE_CONTEXT·structured memory context ===\n' + _sc1MemoryBlock;
@@ -3652,7 +3659,9 @@
         }
       } catch(_sc1MemCtxE) {
         _dbg('[SC1_PRE_CONTEXT] compile fail:', _sc1MemCtxE);
-        try { if (typeof recordSubcallError === 'function') recordSubcallError('sc1', 'memory_context_compile', _sc1MemCtxE); } catch(_) {}
+        try { if (typeof recordSubcallError === 'function') recordSubcallError('sc1', 'memory_context_compile', _sc1MemCtxE); }
+        catch(_recordContextError) { _dbg('[SC1_PRE_CONTEXT] diagnostic record fail:', _recordContextError); }
+        if (_sc1MemCtxE && _sc1MemCtxE.code === 'mandatory_context_overflow') throw _sc1MemCtxE;
       }
 
       // Phase 2.5·sc1q.required_sc1_actions LSR·prompt 末尾压住·让 SC1 必须 cover sc1q 给的硬性条目

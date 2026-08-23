@@ -519,15 +519,15 @@ console.log('天命游戏脚本开始加载...');
 <!-- 2026-07-04 起居注单一写口(gm:qijuHistory 收口)·须在所有写手之前 -->
 <script src="tm-qiju-ledger.js?v=2026070401"></script>
 <script src="tm-prompt-composer.js?v=2026052201"></script>
-<script src="tm-ai-infra-json.js?v=20260819-auditfix2"></script>
-<script src="tm-ai-infra.js?v=20260819-auditfix2"></script>
+<script src="tm-ai-infra-json.js?v=20260823-auditfix18-context"></script>
+<script src="tm-ai-infra.js?v=20260823-auditfix18-context"></script>
 <!-- 勿动位置·第二十三拆：json → infra → model-detect 必须连续按序装载(顶层函数型保序切割) -->
-<script src="tm-ai-infra-model-detect.js?v=20260819-auditfix2"></script>
+<script src="tm-ai-infra-model-detect.js?v=20260823-auditfix18-context"></script>
 <script src="tm-memory-trace.js?v=20260531-traceonly"></script>
 <script src="tm-memory-evidence-registry.js?v=20260531-evidence"></script>
 <script src="tm-memory-source-bound.js?v=20260601-sourcebound"></script>
 <script src="tm-memory-issue-governance.js?v=20260601-issuegov"></script>
-<script src="tm-context-zones.js?v=20260601-zones"></script>
+<script src="tm-context-zones.js?v=20260823-auditfix18-context"></script>
 <script src="tm-memory-envelope.js?v=20260531-envelope"></script>
 <script src="tm-memory-governance.js?v=20260531-governance"></script>
 <script src="tm-memory-writegate.js?v=20260719-memsanitize"></script>
@@ -537,7 +537,7 @@ console.log('天命游戏脚本开始加载...');
 <script src="tm-memory-turn-backfill.js?v=20260601-turn-backfill"></script>
 <script src="tm-memory-controls.js?v=20260601-controls"></script>
 <script src="tm-memory-retrieval.js?v=20260531-rerank"></script>
-<script src="tm-memory-context-compiler.js?v=20260601-context-compiler"></script>
+<script src="tm-memory-context-compiler.js?v=20260823-auditfix18-context"></script>
 <script src="tm-memory-workshop.js?v=20260531-workshop"></script>
 <script src="tm-traits-data.js?v=20260709"></script>
 <script src="tm-chronicle-tracker.js?v=2026042714"></script>
@@ -692,7 +692,7 @@ console.log('天命游戏脚本开始加载...');
 <!-- DA-Q2 (2026-06-21)·史记 record 提示词共享 builder·sc1 与 agent deepen_narrative 同源零 drift·须先于 ai.js load -->
 <script src="tm-endturn-record-specs.js?v=20260622-shiluwenyan"></script>
 <script src="tm-endturn-prompt.js?v=20260719-memsanitize"></script>
-<script src="tm-endturn-ai.js?v=20260707-aiwarmup"></script>
+<script src="tm-endturn-ai.js?v=20260823-auditfix18-context"></script>
 <script src="tm-endturn-apply.js?v=20260706-applyS2"></script>
 <script src="tm-endturn-apply-stages.js?v=20260706-applyS2"></script><!-- apply解构S2·stages须紧随origin(运行时ns.stages解析·writeBack dispatcher调用期取)·勿动位置 -->
 <script src="tm-endturn-followup-helpers.js?v=20260706-splitsync"></script><!-- 第十九拆·helpers须在origin之前(填TM.__etFollowupParts bucket·origin顶alias回绑)·勿动位置 -->

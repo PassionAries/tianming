@@ -278,10 +278,30 @@
 
   function compileHits(hits, opts) {
     opts = opts || {};
-    var normalized = (Array.isArray(hits) ? hits : [])
+    var suppressed = arr(opts.suppressed).slice();
+    var normalizedInput = (Array.isArray(hits) ? hits : [])
       .map(function(hit, index) { return normalizeHit(hit, index, opts); })
       .filter(function(hit) { return !!hit.text; })
       .sort(sortHits);
+    var normalized = [];
+    var seenStableIds = {};
+    var seenFacts = {};
+    normalizedInput.forEach(function(hit) {
+      var status = clean(hit.factStatus || hit.status || '', 80).toLowerCase();
+      if (hit.active === false || hit.expired === true || status === 'expired' || status === 'superseded' || status === 'revoked') {
+        suppressed.push({ id: hit.id, source: hit.source, reason: 'inactive_or_expired_memory', textPreview: clean(hit.text, 80) });
+        return;
+      }
+      var stableId = hit.id && !/^hit-\d+$/.test(hit.id) ? String(hit.id) : '';
+      var factKey = String(hit.source || '') + '|' + String(hit.text || '').replace(/\s+/g, ' ').trim();
+      if ((stableId && seenStableIds[stableId]) || (factKey && seenFacts[factKey])) {
+        suppressed.push({ id: hit.id, source: hit.source, reason: 'duplicate_memory_fact', textPreview: clean(hit.text, 80) });
+        return;
+      }
+      if (stableId) seenStableIds[stableId] = true;
+      if (factKey) seenFacts[factKey] = true;
+      normalized.push(hit);
+    });
     var sections = emptySections();
     normalized.forEach(function(hit) {
       sections[sectionFor(hit)].push(hit);
@@ -291,12 +311,19 @@
       return renderSection(key, sections[key]);
     }).filter(Boolean).join('');
     var text = '<memory-context schema-version="memory-context/v0">\n' + body + '</memory-context>\n';
-    var suppressed = arr(opts.suppressed).slice();
     var packed = null;
     var CZ = root.TM && root.TM.ContextZones;
-    if (CZ && typeof CZ.packZones === 'function' && opts.maxTokens) {
+    var hasBudget = Object.prototype.hasOwnProperty.call(opts, 'maxTokens') && opts.maxTokens != null && opts.maxTokens !== '';
+    var maxTokens = 0;
+    if (hasBudget) {
+      maxTokens = CZ && typeof CZ.finiteNonNegative === 'function'
+        ? CZ.finiteNonNegative(opts.maxTokens, CZ.DEFAULT_INVALID_MAX_TOKENS || 8192)
+        : (Number.isFinite(Number(opts.maxTokens)) && Number(opts.maxTokens) >= 0 ? Number(opts.maxTokens) : 8192);
+      maxTokens = Math.floor(maxTokens);
+    }
+    if (CZ && typeof CZ.packZones === 'function' && maxTokens > 0) {
       var zones = [
-        { id: 'memory-context-header', lane: 'L6_retrieved_evidence', text: '<memory-context schema-version="memory-context/v0">\n', mustKeep: true, order: 0, source: 'MemoryContextCompiler' }
+        { id: 'memory-context-header', lane: 'L6_retrieved_evidence', text: '<memory-context schema-version="memory-context/v0">\n', mustKeep: true, structural: true, atomic: true, order: 0, source: 'MemoryContextCompiler' }
       ];
       var order = 10;
       // S4: 低权威/大体量 section 的 per-zone 上限(占预算比)，防其 balloon 挤占其余高价值区。
@@ -315,26 +342,64 @@
         };
         // S4: 载重权威 section 永不被预算裁掉(ST「mandatory memory never trimmed」)。coreFacts=hard_state/法令/承诺/裁断级世界硬事实。
         if (key === 'coreFacts') z.mustKeep = true;
-        if (ZONE_CAP_FRAC[key] && opts.maxTokens) z.maxTokens = Math.max(1, Math.floor(Number(opts.maxTokens) * ZONE_CAP_FRAC[key]));
+        z.compress = function(info) {
+          var limit = info && info.maxTokens || 0;
+          var rows = sections[key] || [];
+          var low = 0;
+          var high = rows.length;
+          var best = '';
+          while (low <= high) {
+            var mid = Math.floor((low + high) / 2);
+            var candidate = mid > 0 ? renderSection(key, rows.slice(0, mid)) : '';
+            var cost = CZ.estimateTokens(candidate);
+            if (candidate && cost <= limit) {
+              best = candidate;
+              low = mid + 1;
+            } else {
+              high = mid - 1;
+            }
+          }
+          return best;
+        };
+        if (ZONE_CAP_FRAC[key]) z.maxTokens = Math.max(1, Math.floor(maxTokens * ZONE_CAP_FRAC[key]));
         zones.push(z);
       });
-      zones.push({ id: 'memory-context-footer', lane: 'L6_retrieved_evidence', text: '</memory-context>\n', mustKeep: true, order: 999999, source: 'MemoryContextCompiler' });
-      packed = CZ.packZones(zones, { maxTokens: opts.maxTokens });
-      text = packed.text || text;
+      zones.push({ id: 'memory-context-footer', lane: 'L6_retrieved_evidence', text: '</memory-context>\n', mustKeep: true, structural: true, atomic: true, order: 999999, source: 'MemoryContextCompiler' });
+      packed = CZ.packZones(zones, { maxTokens: maxTokens });
+      text = packed.text;
       suppressed = suppressed.concat(arr(packed.suppressed));
     }
 
+    var tokenEstimate = packed
+      ? packed.tokenEstimate
+      : (CZ && typeof CZ.estimateTokens === 'function' ? CZ.estimateTokens(text) : 0);
+
     return {
+      ok: !packed || packed.ok !== false,
+      reason: packed && packed.reason || '',
       schemaVersion: 'memory-context/v0',
       sections: sections,
       hits: normalized,
       text: text,
       zones: packed ? packed.items : [],
       suppressed: suppressed,
+      mandatoryOverflow: packed ? packed.mandatoryOverflow : [],
       diagnostics: packed ? packed.diagnostics : { kept: normalized.map(function(hit) { return { id: hit.id, source: hit.source, stage: 'compiled' }; }), suppressed: [] },
-      tokenEstimate: packed ? packed.tokenEstimate : 0,
-      maxTokens: Number(opts.maxTokens || 0)
+      tokenEstimate: tokenEstimate,
+      maxTokens: maxTokens
     };
+  }
+
+  function requireCompiled(compiled, label) {
+    if (!compiled || compiled.ok === false || (compiled.maxTokens > 0 && compiled.tokenEstimate > compiled.maxTokens)) {
+      var error = new Error((label || 'memory context') + ': mandatory context exceeds the configured token ceiling');
+      error.code = 'mandatory_context_overflow';
+      error.reason = compiled && compiled.reason || 'mandatory_context_overflow';
+      error.diagnostics = compiled && compiled.diagnostics || null;
+      error.compiled = compiled || null;
+      throw error;
+    }
+    return compiled;
   }
 
   function compileRecall(recallResults, opts) {
@@ -399,6 +464,7 @@
   }
 
   ns.SECTION_ORDER = SECTION_ORDER;
+  ns.requireCompiled = requireCompiled;
   ns.compileHits = compileHits;
   ns.compileRecall = compileRecall;
   ns.compileFromGM = compileFromGM;

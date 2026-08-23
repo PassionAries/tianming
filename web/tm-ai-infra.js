@@ -398,6 +398,11 @@ function _stripCacheControlFromBody(body) {
   return stripped;
 }
 
+function _isContextLengthResponse(status, text) {
+  if (Number(status) !== 400) return false;
+  return /context(?:_|\s|-)*(?:length|window)|maximum context|too many (?:input )?tokens|prompt (?:is )?too long|token limit|上下文.{0,8}(?:过长|超限)|超出.{0,8}(?:上下文|token)/i.test(String(text || ''));
+}
+
 /**
  * 构建缓存友好的 messages：字节级前缀稳定·变动内容在尾部
  * @param {string} sysStable - 稳定的 system prompt（整局几乎不变·世界设定/官制等）
@@ -568,6 +573,7 @@ async function _aiFetchWithRetryInner(url, body, signal, opts) {
   var key = opts.apiKey || P.ai.key;
   var lastError = null;
   var _ccStripped = false;   // cache_control 撞 400 脱字段重试·每请求只脱一次
+  var _contextReduced = false; // context-length 400 只允许一次调用方提供的更严预算重编排
   // 粗估 token 预算（仅警告，不截断：截断是调用方的职责）
   try {
     if (body && body.messages && typeof checkPromptTokenBudget === 'function') {
@@ -606,9 +612,36 @@ async function _aiFetchWithRetryInner(url, body, signal, opts) {
         lastError = new Error('HTTP ' + resp.status + (errText ? ': ' + errText.substring(0, 300) : ''));
         lastError.status = resp.status;
         _aiLastRaw = { url: url, body: body, response: errText, error: lastError.message, ts: Date.now() };
+        var _isContextLength = _isContextLengthResponse(resp.status, errText);
+        if (_isContextLength) {
+          lastError.code = 'context_length_exceeded';
+          lastError.contextOverflow = true;
+          if (!_contextReduced && typeof opts.contextOverflowReducer === 'function') {
+            try {
+              var _beforeBody = JSON.stringify(body);
+              var _reducedBody = opts.contextOverflowReducer(body, {
+                status: resp.status,
+                responseText: errText,
+                attempt: attempt,
+                emergencyRetry: 1
+              });
+              var _afterBody = _reducedBody ? JSON.stringify(_reducedBody) : '';
+              if (_reducedBody && _afterBody.length < _beforeBody.length) {
+                body = _reducedBody;
+                _contextReduced = true;
+                console.warn('[AI] context-length 400·按更严预算压缩后仅重试一次');
+                continue;
+              }
+              lastError.contextReducerError = 'contextOverflowReducer did not produce a smaller request body';
+            } catch (reducerError) {
+              lastError.contextReducerError = String(reducerError && reducerError.message || reducerError);
+            }
+          }
+          lastError.emergencyRetryAttempted = _contextReduced;
+        }
         // 400 且本请求带了 cache_control → 大概率中转代理不认该字段：脱掉 cache_control 就地重试一次，
         //   并本会话停用缓存标记（防每回合都先撞一次 400）。仅脱一次，避免无限重试。
-        if (resp.status === 400 && !_ccStripped && _stripCacheControlFromBody(body)) {
+        if (resp.status === 400 && !_isContextLength && !_ccStripped && _stripCacheControlFromBody(body)) {
           _ccStripped = true;
           _aiCacheCtrlDisabled = true;
           console.warn('[AI] 400 且请求含 cache_control·疑代理不认·已脱字段重试并本会话停用 prompt 缓存标记');
@@ -631,6 +664,11 @@ async function _aiFetchWithRetryInner(url, body, signal, opts) {
       lastError = e;
       // 外部 signal 主动中断——不重试
       if (signal && signal.aborted) throw e;
+      // 明确的 4xx（429 已在响应分支处理）是请求错误；不得被通用网络重试再次原样发送。
+      if (e && e.status >= 400 && e.status < 500 && e.status !== 429) {
+        if (!e.lastRaw) e.lastRaw = _aiLastRaw;
+        throw e;
+      }
       // 第三刀·防重试风暴：本地超时（timer 触发）原样重发大概率再次超时，白等一整个超时周期 + 翻倍 token 费用。
       //   大请求（maxTok>8000，如 sc1）超时 → 立即放弃，不在 fetch 层重发；小请求最多再试一次。
       if (timedOut) {
@@ -665,6 +703,7 @@ function _tmAiErrHuman(err) {
     var msg = String((err && err.message) || err || '');
     var m = msg.match(/HTTP (\d{3})/);
     var status = (err && err.status) || (m ? +m[1] : 0);
+    if ((err && (err.code === 'mandatory_context_overflow' || err.code === 'context_length_exceeded')) || /context(?:_|\s|-)*(?:length|window)|上下文.{0,8}(?:过长|超限)/i.test(msg)) return '本回合必须保留的历史与规则超过模型上下文上限——系统已停止本次推演并回滚，没有提交半回合；请缩减持续法令/长期议题或提高模型上下文配置。';
     if (/API未配置|API地址未配置|未配置可用 API|未配置 API key/.test(msg)) return '尚未配置 AI 密钥或接口地址——请到「设置 → AI · 模型」填写 API 地址、模型名与密钥。';
     if (status === 401 || /invalid[ _]?api[ _]?key|incorrect api key|unauthorized|authentication/i.test(msg)) return 'AI 密钥无效或已过期（401）——请到「设置 → AI · 模型」核对密钥是否填对、是否仍有效。';
     if (status === 402 || /insufficient_quota|insufficient balance|exceeded your current quota|欠费|余额不足|quota/i.test(msg)) return 'AI 账户额度不足或欠费——请前往所用 API 平台查看余额充值，或更换密钥。';
@@ -736,6 +775,7 @@ async function callAI(prompt,maxTok,signal,tier,opts){
   var fetchOpts = { apiKey: key, priority: opts.priority || 'normal' };
   if (opts.timeoutMs != null) fetchOpts.timeoutMs = opts.timeoutMs;
   if (opts.maxRetries != null) fetchOpts.maxRetries = opts.maxRetries;
+  if (typeof opts.contextOverflowReducer === 'function') fetchOpts.contextOverflowReducer = opts.contextOverflowReducer;
   var data = await _aiFetchWithRetry(url, body, signal, fetchOpts);
   // Phase 7·补 id 参数·byId 拆分
   if(data.usage && typeof TokenUsageTracker !== 'undefined') TokenUsageTracker.record(data.usage, opts.id || 'callAI:generic');
@@ -1024,7 +1064,8 @@ async function callAISmart(prompt, maxTok, options) {
       var result = await callAI(currentPrompt, maxTok, signal, options.tier, {
         priority: options.priority || 'normal',
         timeoutMs: options.timeoutMs,
-        maxRetries: (options.fetchMaxRetries != null) ? options.fetchMaxRetries : 1
+        maxRetries: (options.fetchMaxRetries != null) ? options.fetchMaxRetries : 1,
+        contextOverflowReducer: options.contextOverflowReducer
       });
 
       // Append to existing content
@@ -1053,6 +1094,7 @@ async function callAISmart(prompt, maxTok, options) {
 
       return allContent;
     } catch(e) {
+      if (e && (e.code === 'mandatory_context_overflow' || e.code === 'context_length_exceeded')) throw e;
       if (attemptCount < maxRetries) {
         console.warn('[AI Smart] 调用失败，重试中... (' + attemptCount + '/' + maxRetries + ')');
         await new Promise(function(resolve) { setTimeout(resolve, 1000); }); // Wait 1s before retry
@@ -1115,6 +1157,7 @@ async function callAIMessages(messages,maxTok,signal,tier,opts){
   var fetchOpts2 = { apiKey: key, priority: opts.priority || 'normal' };
   if (opts.timeoutMs != null) fetchOpts2.timeoutMs = opts.timeoutMs;
   if (opts.maxRetries != null) fetchOpts2.maxRetries = opts.maxRetries;
+  if (typeof opts.contextOverflowReducer === 'function') fetchOpts2.contextOverflowReducer = opts.contextOverflowReducer;
   var data = await _aiFetchWithRetry(url, body, signal, fetchOpts2);
   if(data.usage && typeof TokenUsageTracker !== 'undefined') TokenUsageTracker.record(data.usage, opts.id || 'callAIMessages');
   if(data.choices&&data.choices[0]&&data.choices[0].message)return data.choices[0].message.content;

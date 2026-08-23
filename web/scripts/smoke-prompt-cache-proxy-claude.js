@@ -62,7 +62,7 @@ assert(strip({}) === false && strip(null) === false, '[A] 空 body → false 不
 // infra：停用闸 + strip 函数 + 400 自愈分支
 assert(/var _aiCacheCtrlDisabled = false;/.test(infraSrc), '[B] infra 定义 _aiCacheCtrlDisabled 停用闸');
 assert(infraSrc.indexOf('function _stripCacheControlFromBody') >= 0, '[B] infra 定义 _stripCacheControlFromBody');
-assert(infraSrc.indexOf("resp.status === 400 && !_ccStripped && _stripCacheControlFromBody(body)") >= 0,
+assert(infraSrc.indexOf("resp.status === 400 && !_isContextLength && !_ccStripped && _stripCacheControlFromBody(body)") >= 0,
   '[B] infra 400 分支：脱 cache_control 重试');
 assert(/_ccStripped = true;[\s\S]{0,80}_aiCacheCtrlDisabled = true;/.test(infraSrc),
   '[B] infra 400 分支：置 _ccStripped 与本会话停用闸');

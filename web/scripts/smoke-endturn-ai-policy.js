@@ -5,16 +5,18 @@ const path = require('path');
 const vm = require('vm');
 
 const root = path.resolve(__dirname, '..');
+const budgetProvider = fs.readFileSync(path.join(root, 'tm-endturn-ai-sc1-budget.js'), 'utf8');
 const code = fs.readFileSync(path.join(root, 'tm-endturn-ai.js'), 'utf8');
 
 const sandbox = {
   console,
-  TM: {},
+  TM: { Endturn: { AI: {} } },
   P: { ai: {}, conf: {} },
   GM: {},
 };
 sandbox.global = sandbox;
 
+vm.runInNewContext(budgetProvider, sandbox, { filename: 'tm-endturn-ai-sc1-budget.js' });
 vm.runInNewContext(code, sandbox, { filename: 'tm-endturn-ai.js' });
 
 const policy = sandbox.TM

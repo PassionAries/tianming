@@ -81,8 +81,11 @@ async function run(key) {
   assert(c.court === 1, 'C 有效key：进入 court prompt');
 
   const captureIdx = coreSrc.indexOf('_turnTxn = _tmCaptureEndTurnTransaction()', ei);
-  const calibrationIdx = coreSrc.indexOf('await _runPreSubmitPartyClassCalibration()', captureIdx);
-  assert(captureIdx >= 0 && calibrationIdx > captureIdx, 'pre-submit 校准只在事务快照创建后执行');
+  const prepareIdx = coreSrc.indexOf('await _tmPrepareEndTurnBoundary(_turnTxn, _preCommittedState)', captureIdx);
+  const recoveryCommitIdx = coreSrc.indexOf('await _tmCommitPreEndTurnRecoveryPoint(txn, clickState)');
+  const calibrationIdx = coreSrc.indexOf('await _runPreSubmitPartyClassCalibration()', recoveryCommitIdx);
+  assert(captureIdx >= 0 && prepareIdx > captureIdx && recoveryCommitIdx >= 0 && calibrationIdx > recoveryCommitIdx,
+    '点击时恢复点在事务内提交后才执行 pre-submit 校准');
 
   console.log('PASS smoke-nokey-endturn-guard · ' + passed + ' 断言');
 })().catch(e => { console.error('FAIL smoke-nokey-endturn-guard'); console.error(e); process.exit(1); });

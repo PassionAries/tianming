@@ -119,8 +119,11 @@ async function expectStepFailureRollback(step, setup, message, label, input) {
 
 async function main() {
   const snapshotIndex = coreSource.indexOf('_turnTxn = _tmCaptureEndTurnTransaction();');
-  const calibrationIndex = coreSource.indexOf('await _runPreSubmitPartyClassCalibration();');
-  ok(snapshotIndex >= 0 && calibrationIndex > snapshotIndex, 'pre-submit calibration is inside the transaction boundary');
+  const prepareIndex = coreSource.indexOf('await _tmPrepareEndTurnBoundary(_turnTxn, _preCommittedState);', snapshotIndex);
+  const commitIndex = coreSource.indexOf('await _tmCommitPreEndTurnRecoveryPoint(txn, clickState);');
+  const calibrationIndex = coreSource.indexOf('await _runPreSubmitPartyClassCalibration();', commitIndex);
+  ok(snapshotIndex >= 0 && prepareIndex > snapshotIndex && commitIndex >= 0 && calibrationIndex > commitIndex,
+    'click-time recovery point commits before pre-submit calibration inside the transaction boundary');
 
   resetWorld();
   ctx.TM.PartyClassActionScheduler = {

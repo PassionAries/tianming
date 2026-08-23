@@ -61,7 +61,8 @@ ok(!!snapshotSrc && !!builderSrc, '_autoSaveSnapshotGM + _buildSaveState 可抽�
 }
 ok(/saveData2=_buildSaveState\(\{format:'project'\}\)/.test(lifecycle), '浏览器导出走统一纯 builder');
 ok(/saveData=_buildSaveState\(\{format:'project'\}\)/.test(lifecycle), '桌面手动存档走统一纯 builder');
-ok(/_preState = _buildSaveState\(\{ format: 'idb', detach: true, gm: _preSaveGM, p: _preSaveP \}\)/.test(core), 'pre_endturn 走统一 detached builder');
+ok(/_buildSaveState\(\{ format: 'idb', detach: true, gm: txn\.gmRef, p: txn\.pRef \}\)/.test(core),
+  'pre_endturn 从点击时事务引用走统一 detached builder');
 ok(/global\._buildSaveState\(\{ format: 'idb', detach: true, gm: GM, p: P \|\| \{\} \}\)/.test(resume), '残局发布以 detached 模式复用统一 builder');
 ok(!/gameState\s*=\s*deepClone\(GM\)|GM\s*:\s*deepClone\(GM\)/.test(lifecycle + '\n' + core + '\n' + manager), '生产存档写口无裸 deepClone(GM)');
 ok(!/SaveManager\.autoSave\(\)/.test(render), '端回合不再重复调用 SaveManager.autoSave 覆盖 slot_0');
@@ -159,10 +160,10 @@ ok(/function _endTurn_publishStagedTurnData\([\s\S]*?deleteTurnPublishReceipt\(m
 }
 
 console.log('=== 2. pre_endturn two-phase + strict validator ===');
-ok(/commitState:\s*'pending'/.test(core) && /_livePreMark\.commitState = 'committed'/.test(core), 'marker pending -> committed 两阶段');
-ok(/snapshotId:\s*_preSnapshotId/.test(core) && /snapshotId: \(meta && meta\.snapshotId\)/.test(storage), 'snapshotId 同时进入 marker/state/IDB record');
-ok(/TM_SaveDB\.save\('pre_endturn',[\s\S]*?writeGuard:\s*_preWriteStillCurrent/.test(core)
-  && /GM === _preSaveGM && P === _preSaveP[\s\S]*?_preSaveLoadGen[\s\S]*?GM\.turn === _preTurn[\s\S]*?GM\.sid === _preSid[\s\S]*?_preSnapshotId/.test(core),
+ok(/commitState:\s*'pending'/.test(core) && /livePreMark\.commitState = 'committed'/.test(core), 'marker pending -> committed 两阶段');
+ok(/snapshotId:\s*preSnapshotId/.test(core) && /snapshotId: \(meta && meta\.snapshotId\)/.test(storage), 'snapshotId 同时进入 marker/state/IDB record');
+ok(/TM_SaveDB\.save\('pre_endturn',[\s\S]*?writeGuard:\s*preWriteStillCurrent/.test(core)
+  && /GM === preSaveGM && P === preSaveP[\s\S]*?preSaveLoadGen[\s\S]*?GM\.turn === preTurn[\s\S]*?GM\.sid === preSid[\s\S]*?preSnapshotId/.test(core),
   'pre_endturn 写事务绑定 GM/P/loadGen/turn/sid/snapshotId lease');
 ok(storage.indexOf('jsonStr = JSON.stringify(gameState)') < storage.indexOf('return _ensureOpen().then(function()'), 'SaveDB 在异步 open/gzip 前同步固化 snapshot JSON');
 ok(/_validatePreEndturnSnapshot\(record, preInfo, true\)/.test(office), '启动恢复要求 marker 严格校验');
@@ -610,9 +611,10 @@ async function runDynamicLeaseSmokes() {
     ok(result === false && allowed === false && writeAttempts === 1 && committed === 0 && deletes === 0, 'stale quota recovery neither deletes an older autosave nor retries put');
   }
   {
-    const a = core.indexOf('var _preSaveGM = GM;');
-    const b = core.indexOf('\n    } else {', a);
-    const src = '(async function(){\n' + core.slice(a, b) + '\n})();';
+    const currentFn = sliceFn(core, 'function _tmEndTurnTransactionCurrent(');
+    const commitFn = sliceFn(core, 'async function _tmCommitPreEndTurnRecoveryPoint(');
+    const src = currentFn + '\n' + commitFn
+      + '\nthis.__commitPreEndturn = function(txn, state){ return _tmCommitPreEndTurnRecoveryPoint(txn, state); };';
     const store = new Map(), ls = new Map();
     let releaseSave, rawSave;
     const ctx = {
@@ -620,8 +622,8 @@ async function runDynamicLeaseSmokes() {
       P: { id: 'old-p' },
       window: { _tmLoadGen: 3, TM: { errors: { capture() {}, captureSilent() {} } } },
       crypto: { randomUUID: () => 'pre-snapshot-old' }, Date, Math, JSON, Error, Promise, console,
-      _prepareGMForSave() {},
-      _buildSaveState() { return { GM: { turn: 8 }, P: { id: 'old-p' } }; },
+      _tmReportEndTurnBoundaryError() {},
+      _tmAdoptCommittedWorldSnapshot() { return true; },
       findScenarioById() { return { name: 'old' }; }, getTSText() { return 'T8'; },
       localStorage: { setItem(k, v) { ls.set(k, v); }, getItem(k) { return ls.get(k) || null; } },
       TM_SaveDB: {
@@ -638,7 +640,12 @@ async function runDynamicLeaseSmokes() {
       }
     };
     ctx.window.window = ctx.window;
-    vm.createContext(ctx); const preSaveRun = vm.runInContext(src, ctx);
+    vm.createContext(ctx); vm.runInContext(src, ctx);
+    const txn = {
+      gmRef: ctx.GM, pRef: ctx.P, loadGen: 3, campaignId: '', timelineId: '',
+      committed: false, rolledBack: false
+    };
+    const preSaveRun = ctx.__commitPreEndturn(txn, { GM: { turn: 8, sid: 'old-sid', eraName: 'old' }, P: { id: 'old-p' } });
     await Promise.resolve();
     ls.set('tm_pre_endturn_mark', JSON.stringify({ turn: 21, snapshotId: 'pre-snapshot-new', commitState: 'pending' }));
     ctx.window._tmActivePreEndturnSnapshotId = 'pre-snapshot-new';

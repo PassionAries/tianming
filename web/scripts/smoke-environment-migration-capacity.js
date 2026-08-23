@@ -75,7 +75,21 @@ function configureRegionCapacity(region, capacity, mouths) {
 function makeWorld(specs, order, options) {
   options = options || {};
   const leaves = {};
-  Object.keys(specs).forEach((id) => { leaves[id] = makeLeaf(id, specs[id].mouths); });
+  const leafGroups = {};
+  Object.keys(specs).forEach((id) => {
+    const configuredLeaves = Array.isArray(specs[id].leaves) && specs[id].leaves.length
+      ? specs[id].leaves
+      : [{ id, mouths: specs[id].mouths }];
+    leafGroups[id] = configuredLeaves.map((leafSpec) => {
+      const leaf = makeLeaf(leafSpec.id, leafSpec.mouths);
+      if (Object.prototype.hasOwnProperty.call(leafSpec, 'carryingMax')) {
+        leaf.environment = { carryingMax: leafSpec.carryingMax };
+      }
+      return leaf;
+    });
+    leaves[id] = leafGroups[id][0];
+  });
+  const allLeaves = Object.values(leafGroups).flat();
   const context = {
     console,
     Math, Date, JSON, RegExp, Error,
@@ -99,17 +113,17 @@ function makeWorld(specs, order, options) {
     adminHierarchy: {
       player: {
         factionId: 'player-faction',
-        divisions: order.map((id) => ({ id, name: id + '省', children: [leaves[id]] }))
+        divisions: order.map((id) => ({ id, name: id + '省', children: leafGroups[id] }))
       }
     },
     population: {
       national: {
         mouths: Object.values(specs).reduce((sum, row) => sum + row.mouths, 0),
-        households: Object.values(leaves).reduce((sum, leaf) => sum + leaf.populationDetail.households, 0),
-        ding: Object.values(leaves).reduce((sum, leaf) => sum + leaf.populationDetail.ding, 0)
+        households: allLeaves.reduce((sum, leaf) => sum + leaf.populationDetail.households, 0),
+        ding: allLeaves.reduce((sum, leaf) => sum + leaf.populationDetail.ding, 0)
       },
       byRegion: order.reduce((out, id) => {
-        out[leaves[id].id] = leaves[id].populationDetail;
+        leafGroups[id].forEach((leaf) => { out[leaf.id] = leaf.populationDetail; });
         return out;
       }, {}),
       dynamics: { yearlyLog: [] }
@@ -147,7 +161,7 @@ function makeWorld(specs, order, options) {
   Object.keys(specs).forEach((id) => {
     configureRegionCapacity(context.GM.environment.byRegion[id], specs[id].capacity, specs[id].mouths);
   });
-  return { context, leaves };
+  return { context, leaves, leafGroups };
 }
 
 function stableOutcome(world) {
@@ -235,5 +249,55 @@ assert.deepStrictEqual(reversed, forward, 'planning result is independent of env
     hierarchy: world.context.GM.adminHierarchy
   }), before, 'capacity failure leaves treasury, environment and population completely unchanged');
 }
+
+function runLeafCapacityOrder(receiverLeaves) {
+  const specs = {
+    source: { mouths: 600000, capacity: 400000 },
+    receiver: {
+      mouths: 195000,
+      capacity: 600000,
+      leaves: receiverLeaves
+    }
+  };
+  const world = makeWorld(specs, ['source', 'receiver']);
+  const allLeaves = Object.values(world.leafGroups).flat();
+  const before = demographicTotal(allLeaves);
+  const result = world.context.EnvCapacityEngine.enactPolicy('migration_relief', 'source');
+  assert(result && result.ok, 'leaf-aware receiver plan should execute atomically');
+  assert(sameDemographicTotals(demographicTotal(allLeaves), before),
+    'leaf-aware receiver distribution conserves the complete demographic bundle');
+  const full = world.leafGroups.receiver.find((leaf) => leaf.id === 'receiver-full-county');
+  const open = world.leafGroups.receiver.find((leaf) => leaf.id === 'receiver-open-county');
+  assert(full && open, 'fixture must expose both receiver leaves');
+  assert.strictEqual(full.populationDetail.mouths, 95000,
+    'a nearly full receiver county must not absorb the whole province migration');
+  assert.strictEqual(open.populationDetail.mouths, 160000,
+    'planned incoming population should use the receiver county with real spare capacity');
+  const receiverProjection = result.immediate.migrationProjection.rows
+    .find((row) => row.regionId === 'receiver');
+  const projectedByLeaf = {};
+  receiverProjection.leafRows.forEach((row) => { projectedByLeaf[row.id] = row; });
+  assert.strictEqual(projectedByLeaf['receiver-full-county'].plannedIncoming, 0);
+  assert.strictEqual(projectedByLeaf['receiver-open-county'].plannedIncoming, 60000);
+  Object.values(projectedByLeaf).forEach((row) => {
+    assert(row.projectedMouths <= row.safeMouthLimit,
+      row.id + ' must stay within its planned leaf safety limit');
+  });
+  return world.leafGroups.receiver.reduce((out, leaf) => {
+    out[leaf.id] = JSON.parse(JSON.stringify(leaf.populationDetail));
+    return out;
+  }, {});
+}
+
+const leafForward = runLeafCapacityOrder([
+  { id: 'receiver-full', mouths: 95000, carryingMax: 100000 },
+  { id: 'receiver-open', mouths: 100000, carryingMax: 500000 }
+]);
+const leafReversed = runLeafCapacityOrder([
+  { id: 'receiver-open', mouths: 100000, carryingMax: 500000 },
+  { id: 'receiver-full', mouths: 95000, carryingMax: 100000 }
+]);
+assert.deepStrictEqual(leafReversed, leafForward,
+  'leaf receiver allocation must not depend on hierarchy child order');
 
 console.log('smoke-environment-migration-capacity ok');

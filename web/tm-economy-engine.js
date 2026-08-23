@@ -676,13 +676,131 @@
     if (E.policyHistory.length > 120) E.policyHistory.splice(0, E.policyHistory.length - 120);
   }
 
-  function _pickEnvironmentMigrationTarget(scope) {
-    if (!scope || !scope.rows || !scope.rows.length) return null;
-    return scope.rows.slice().sort(function(a, b) {
-      var aLoad = _envFiniteNumber(a.leaf && a.leaf.environment && a.leaf.environment.currentLoad, 0.5);
-      var bLoad = _envFiniteNumber(b.leaf && b.leaf.environment && b.leaf.environment.currentLoad, 0.5);
-      return aLoad - bLoad || a.mouths - b.mouths || String(a.id).localeCompare(String(b.id));
-    })[0];
+  function _migrationLeafExplicitCapacity(row) {
+    var sources = [
+      row && row.leaf && row.leaf.environment,
+      row && row.leaf,
+      row && row.detail
+    ];
+    for (var i = 0; i < sources.length; i++) {
+      var source = sources[i];
+      if (!source || !Object.prototype.hasOwnProperty.call(source, 'carryingMax')) continue;
+      var capacity = Number(source.carryingMax);
+      if (!isFinite(capacity) || capacity < 0) throw new Error('迁民减压叶级承载力无效: ' + String(row && row.id || 'unknown'));
+      return capacity;
+    }
+    return null;
+  }
+
+  function _allocateExactMigrationLimits(total, rows) {
+    var limit = Math.max(0, Math.floor(total));
+    var weights = rows.map(function(row) {
+      var weight = Number(row.capacityWeight);
+      if (!isFinite(weight) || weight < 0) throw new Error('迁民减压叶级容量权重无效: ' + String(row.id));
+      return weight;
+    });
+    var weightTotal = weights.reduce(function(sum, weight) { return sum + weight; }, 0);
+    if (!limit || !weightTotal) return rows.map(function() { return 0; });
+    var assigned = 0;
+    var ranked = rows.map(function(row, index) {
+      var quota = limit * weights[index] / weightTotal;
+      var floor = Math.floor(quota);
+      assigned += floor;
+      return { index:index, value:floor, remainder:quota - floor, id:String(row.id) };
+    });
+    ranked.slice().sort(function(a, b) {
+      return b.remainder - a.remainder || a.id.localeCompare(b.id);
+    }).slice(0, limit - assigned).forEach(function(item) {
+      ranked[item.index].value += 1;
+    });
+    return ranked.map(function(item) { return item.value; });
+  }
+
+  function _prepareReceiverLeafCapacity(row, threshold) {
+    if (row.leafCapacityThreshold === threshold) return row;
+    var leaves = row.leafRows || [];
+    if (!leaves.length) throw new Error('迁民减压缺少接纳叶级地区: ' + String(row.regionId));
+    var provinceCapacity = Number(row.fixedCarryingMax);
+    if (!isFinite(provinceCapacity) || provinceCapacity <= 0) throw new Error('迁民减压省级承载力无效: ' + String(row.regionId));
+    var explicitRows = leaves.filter(function(leaf) { return leaf.explicitCarryingMax != null; });
+    var explicitTotal = explicitRows.reduce(function(sum, leaf) { return sum + leaf.explicitCarryingMax; }, 0);
+    var allExplicit = explicitRows.length === leaves.length;
+    var physicalTotal = provinceCapacity;
+
+    if (allExplicit) {
+      physicalTotal = Math.min(provinceCapacity, explicitTotal);
+      leaves.forEach(function(leaf) { leaf.capacityWeight = leaf.explicitCarryingMax; });
+    } else if (explicitTotal >= provinceCapacity) {
+      leaves.forEach(function(leaf) {
+        leaf.capacityWeight = leaf.explicitCarryingMax == null ? 0 : leaf.explicitCarryingMax;
+      });
+    } else {
+      var unspecified = leaves.filter(function(leaf) { return leaf.explicitCarryingMax == null; });
+      var remainingCapacity = provinceCapacity - explicitTotal;
+      var fallbackWeightTotal = unspecified.reduce(function(sum, leaf) {
+        return sum + Math.max(1, leaf.mouths);
+      }, 0);
+      leaves.forEach(function(leaf) {
+        leaf.capacityWeight = leaf.explicitCarryingMax == null
+          ? remainingCapacity * Math.max(1, leaf.mouths) / fallbackWeightTotal
+          : leaf.explicitCarryingMax;
+      });
+    }
+
+    var safeTotal = Math.floor(physicalTotal * threshold);
+    var safeLimits = _allocateExactMigrationLimits(safeTotal, leaves);
+    leaves.forEach(function(leaf, index) {
+      leaf.safeMouthLimit = safeLimits[index];
+      leaf.projectedMouths = leaf.mouths;
+      leaf.plannedIncoming = 0;
+      leaf.projectedLoad = leaf.capacityWeight > 0
+        ? leaf.projectedMouths / leaf.capacityWeight
+        : (leaf.projectedMouths > 0 ? Number.MAX_VALUE : 0);
+    });
+    row.leafCapacityThreshold = threshold;
+    return row;
+  }
+
+  function _receiverLeafCapacity(row) {
+    return (row.leafRows || []).reduce(function(total, leaf) {
+      return total + Math.max(0, leaf.safeMouthLimit - leaf.projectedMouths);
+    }, 0);
+  }
+
+  function _allocateReceiverLeafMouths(receiver, mouths) {
+    var remaining = Math.max(0, Math.round(mouths));
+    if (_receiverLeafCapacity(receiver) < remaining) throw new Error('迁民减压叶级接纳容量不足: ' + String(receiver.regionId));
+    var allocations = {};
+    while (remaining > 0) {
+      var available = receiver.leafRows.filter(function(leaf) {
+        return leaf.safeMouthLimit > leaf.projectedMouths;
+      }).sort(function(a, b) {
+        return a.projectedLoad - b.projectedLoad
+          || a.plannedIncoming - b.plannedIncoming
+          || String(a.id).localeCompare(String(b.id));
+      });
+      if (!available.length) throw new Error('迁民减压叶级接纳容量不足: ' + String(receiver.regionId));
+      var target = available[0];
+      var capacity = target.safeMouthLimit - target.projectedMouths;
+      var nextLoad = available[1] ? available[1].projectedLoad : receiver.leafCapacityThreshold;
+      var toNextLoad = target.capacityWeight > 0
+        ? Math.floor(nextLoad * target.capacityWeight - target.projectedMouths)
+        : 0;
+      var batch = toNextLoad > 0
+        ? Math.min(remaining, capacity, toNextLoad)
+        : Math.min(remaining, capacity, Math.ceil(remaining / available.length));
+      if (batch <= 0) throw new Error('迁民减压叶级规划无法推进: ' + String(receiver.regionId));
+      allocations[target.id] = (allocations[target.id] || 0) + batch;
+      target.projectedMouths += batch;
+      target.plannedIncoming += batch;
+      target.projectedLoad = target.capacityWeight > 0
+        ? target.projectedMouths / target.capacityWeight
+        : Number.MAX_VALUE;
+      remaining -= batch;
+    }
+    return Object.keys(allocations).sort().map(function(targetId) {
+      return { targetLeafRegionId:targetId, mouths:allocations[targetId] };
+    });
   }
 
   function _snapshotEnvironmentMigrationRows() {
@@ -694,8 +812,6 @@
       if (!scope.ok || !scope.leafIds.length) {
         throw new Error('环境政策地区无法解析人口层级: ' + rid);
       }
-      var target = _pickEnvironmentMigrationTarget(scope);
-      if (!target) throw new Error('迁民减压缺少可用叶级地区: ' + rid);
       var carrying = reg && reg.carrying || {};
       var fixedSupports = ['farmlandSupport', 'waterSupport', 'fuelSupport', 'sanitationSupport'].map(function(key) {
         return _envFiniteNumber(carrying[key], NaN);
@@ -724,7 +840,20 @@
         plannedIncoming:0,
         plannedOutgoing:0,
         leafIds:scope.leafIds.slice(),
-        targetLeafRegionId:String(target.id)
+        leafRows:scope.rows.slice().sort(function(a, b) {
+          return String(a.id).localeCompare(String(b.id));
+        }).map(function(row) {
+          return {
+            id:String(row.id),
+            mouths:row.mouths,
+            projectedMouths:row.mouths,
+            plannedIncoming:0,
+            projectedLoad:0,
+            explicitCarryingMax:_migrationLeafExplicitCapacity(row),
+            capacityWeight:0,
+            safeMouthLimit:0
+          };
+        })
       };
     });
   }
@@ -780,8 +909,9 @@
     var requested = sources.reduce(function(total, source) {
       return total + Math.max(0, Math.min(source.mouths, Math.round(source.mouths * ratio)));
     }, 0);
+    receivers.forEach(function(receiver) { _prepareReceiverLeafCapacity(receiver, threshold); });
     var capacity = receivers.reduce(function(total, receiver) {
-      return total + _receiverCapacity(receiver, threshold);
+      return total + Math.min(_receiverCapacity(receiver, threshold), _receiverLeafCapacity(receiver));
     }, 0);
     if (capacity < requested) throw new Error('迁民减压接纳容量不足');
 
@@ -793,11 +923,29 @@
           sourceRegionId:source.regionId,
           sourceLeafIds:source.leafIds.slice(),
           targetRegionId:receiver.regionId,
-          targetLeafRegionId:receiver.targetLeafRegionId,
+          targetLeafRegionId:'',
+          targetTransfers:[],
           mouths:0,
           safeLoadThreshold:threshold
         };
       }
+      var targetTransfers = _allocateReceiverLeafMouths(receiver, mouths);
+      targetTransfers.forEach(function(transfer) {
+        var existing = planByRoute[key].targetTransfers.find(function(row) {
+          return row.targetLeafRegionId === transfer.targetLeafRegionId;
+        });
+        if (existing) existing.mouths += transfer.mouths;
+        else planByRoute[key].targetTransfers.push({
+          targetLeafRegionId:transfer.targetLeafRegionId,
+          mouths:transfer.mouths
+        });
+      });
+      planByRoute[key].targetTransfers.sort(function(a, b) {
+        return String(a.targetLeafRegionId).localeCompare(String(b.targetLeafRegionId));
+      });
+      planByRoute[key].targetLeafRegionId = planByRoute[key].targetTransfers.length
+        ? planByRoute[key].targetTransfers[0].targetLeafRegionId
+        : '';
       planByRoute[key].mouths += mouths;
       source.projectedMouths -= mouths;
       source.plannedOutgoing += mouths;
@@ -811,7 +959,7 @@
       var remaining = Math.max(0, Math.min(source.mouths, Math.round(source.mouths * ratio)));
       while (remaining > 0) {
         var available = receivers.filter(function(receiver) {
-          return _receiverCapacity(receiver, threshold) > 0;
+          return _receiverCapacity(receiver, threshold) > 0 && _receiverLeafCapacity(receiver) > 0;
         }).sort(function(a, b) {
           return a.projectedLoad - b.projectedLoad
             || a.plannedIncoming - b.plannedIncoming
@@ -819,7 +967,7 @@
         });
         if (!available.length) throw new Error('迁民减压接纳容量不足');
         var receiver = available[0];
-        var receiverCapacity = _receiverCapacity(receiver, threshold);
+        var receiverCapacity = Math.min(_receiverCapacity(receiver, threshold), _receiverLeafCapacity(receiver));
         var nextLoad = available[1] ? available[1].projectedLoad : threshold;
         var toNextLoad = Math.floor(nextLoad * receiver.fixedCarryingMax - receiver.projectedMouths);
         var batch = toNextLoad > 0
@@ -850,7 +998,17 @@
         carryingMax:row.projectedCarryingMax,
         projectedLoad:row.projectedLoad,
         plannedIncoming:row.plannedIncoming,
-        plannedOutgoing:row.plannedOutgoing
+        plannedOutgoing:row.plannedOutgoing,
+        leafRows:(row.leafRows || []).map(function(leaf) {
+          return {
+            id:leaf.id,
+            projectedMouths:leaf.projectedMouths,
+            plannedIncoming:leaf.plannedIncoming,
+            carryingMax:leaf.capacityWeight,
+            safeMouthLimit:leaf.safeMouthLimit,
+            projectedLoad:leaf.projectedLoad
+          };
+        })
       };
     });
     return plan;
@@ -863,32 +1021,40 @@
     var bySource = {};
     var affected = {};
     (plan || []).forEach(function(item) {
-      var result = global.HujiEngine.transferPopulation({
-        sourceRegionIds:item.sourceLeafIds,
-        targetRegionId:item.targetLeafRegionId,
-        mouths:item.mouths,
-        cause:'environment-policy:migration-relief'
-      });
-      if (!result || result.ok === false) {
-        throw new Error('迁民减压人口落账失败: ' + String(result && result.reason || 'unknown'));
-      }
-      var movedMouths = Number(result.mouths);
-      var movedHouseholds = Number(result.households);
-      var movedDing = Number(result.ding);
-      if (!isFinite(movedMouths) || !isFinite(movedHouseholds) || !isFinite(movedDing)
-          || movedMouths < 0 || movedHouseholds < 0 || movedDing < 0) {
-        throw new Error('迁民减压人口账本返回非法数值');
-      }
-      if (movedMouths !== item.mouths) throw new Error('迁民减压人口落账不完整');
+      var transfers = Array.isArray(item.targetTransfers) && item.targetTransfers.length
+        ? item.targetTransfers
+        : [{ targetLeafRegionId:item.targetLeafRegionId, mouths:item.mouths }];
       if (!bySource[item.sourceRegionId]) {
         bySource[item.sourceRegionId] = { ok:true, mouths:0, households:0, ding:0, toRegionIds:[], targetRegionIds:[] };
       }
       var sourceResult = bySource[item.sourceRegionId];
-      sourceResult.mouths += movedMouths;
-      sourceResult.households += movedHouseholds;
-      sourceResult.ding += movedDing;
+      var routeMoved = 0;
+      transfers.forEach(function(transfer) {
+        var result = global.HujiEngine.transferPopulation({
+          sourceRegionIds:item.sourceLeafIds,
+          targetRegionId:transfer.targetLeafRegionId,
+          mouths:transfer.mouths,
+          cause:'environment-policy:migration-relief'
+        });
+        if (!result || result.ok === false) {
+          throw new Error('迁民减压人口落账失败: ' + String(result && result.reason || 'unknown'));
+        }
+        var movedMouths = Number(result.mouths);
+        var movedHouseholds = Number(result.households);
+        var movedDing = Number(result.ding);
+        if (!isFinite(movedMouths) || !isFinite(movedHouseholds) || !isFinite(movedDing)
+            || movedMouths < 0 || movedHouseholds < 0 || movedDing < 0) {
+          throw new Error('迁民减压人口账本返回非法数值');
+        }
+        if (movedMouths !== transfer.mouths) throw new Error('迁民减压人口落账不完整');
+        routeMoved += movedMouths;
+        sourceResult.mouths += movedMouths;
+        sourceResult.households += movedHouseholds;
+        sourceResult.ding += movedDing;
+        if (sourceResult.targetRegionIds.indexOf(result.targetRegionId) < 0) sourceResult.targetRegionIds.push(result.targetRegionId);
+      });
+      if (routeMoved !== item.mouths) throw new Error('迁民减压路线落账不完整');
       if (sourceResult.toRegionIds.indexOf(item.targetRegionId) < 0) sourceResult.toRegionIds.push(item.targetRegionId);
-      if (sourceResult.targetRegionIds.indexOf(result.targetRegionId) < 0) sourceResult.targetRegionIds.push(result.targetRegionId);
       sourceResult.toRegionId = sourceResult.toRegionIds.join(',');
       sourceResult.targetRegionId = sourceResult.targetRegionIds.join(',');
       affected[item.sourceRegionId] = true;

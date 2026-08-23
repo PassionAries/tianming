@@ -403,7 +403,21 @@
     return legacy || { ok:false, reason:'population-loss-unavailable', mouths:0 };
   }
 
-  function _recomputeRegionCarrying(rid, reg) {
+  function _activeEnvironmentLoadRelief(rid) {
+    var E = global.GM && global.GM.environment;
+    var policies = E && Array.isArray(E.activePolicies) ? E.activePolicies : [];
+    return policies.reduce(function(total, active) {
+      if (!active || (active.regionId !== 'all' && String(active.regionId || '') !== String(rid))) return total;
+      var policy = ENV_POLICIES.find(function(candidate) { return candidate.id === active.id; });
+      var raw = policy && policy.effect && policy.effect.loadRelief;
+      if (raw == null) return total;
+      var amount = Number(raw);
+      if (!isFinite(amount) || amount < 0) throw new Error('环境政策负载缓解值无效: ' + String(active.id || 'unknown'));
+      return total + amount;
+    }, 0);
+  }
+
+  function _recomputeRegionCarrying(rid, reg, options) {
     // 1) 土地支撑
     var G = global.GM;
     var popCount = _environmentPopulationScope(rid).mouths;
@@ -438,8 +452,17 @@
       reg.carrying.sanitationSupport
     );
 
-    // 加载比
-    reg.currentLoad = popCount / Math.max(1, reg.carryingMax);
+    // currentLoad 是派生值。持续政策通过明确的缓解量作用于派生负载，
+    // 而不是先写 currentLoad、再被本函数立即覆盖。
+    var physicalLoad = popCount / Math.max(1, reg.carryingMax);
+    var additionalRelief = options && options.additionalLoadRelief != null
+      ? Number(options.additionalLoadRelief)
+      : 0;
+    if (!isFinite(additionalRelief) || additionalRelief < 0) throw new Error('环境政策即时负载缓解值无效');
+    var relief = _activeEnvironmentLoadRelief(rid) + additionalRelief;
+    reg.physicalLoad = physicalLoad;
+    reg.effectiveLoadRelief = relief;
+    reg.currentLoad = Math.max(0, physicalLoad - relief);
   }
 
   function _getTechEraMult(tech, era, key) {
@@ -521,9 +544,6 @@
           Object.keys(policy.scarReduce).forEach(function(sk) {
             reg.ecoScars[sk] = Math.max(0, reg.ecoScars[sk] - policy.scarReduce[sk] * mr / 12);
           });
-        }
-        if (policy && policy.effect && policy.effect.loadRelief) {
-          reg.currentLoad = Math.max(0.05, _envFiniteNumber(reg.currentLoad, 0.5) - policy.effect.loadRelief * mr / 24);
         }
       });
       _recomputeRegionCarrying(rid, reg);
@@ -957,9 +977,10 @@
         row.disasterRecovery = effect.disasterRecovery;
       }
 
-      if (effect.loadRelief) {
-        reg.currentLoad = Math.max(0.05, _envFiniteNumber(reg.currentLoad, 0.5) - effect.loadRelief);
-        row.loadRelief = effect.loadRelief;
+      if (effect.loadRelief != null) {
+        var loadRelief = Number(effect.loadRelief);
+        if (!isFinite(loadRelief) || loadRelief < 0) throw new Error('环境政策负载缓解值无效');
+        row.loadRelief = loadRelief;
       }
 
       summary.regions.push(row);
@@ -968,9 +989,15 @@
     regionIds.concat(migrationBatch.affectedRegionIds || []).forEach(function(rid) {
       recomputeIds[String(rid)] = true;
     });
+    var directReliefTargets = {};
+    regionIds.forEach(function(rid) { directReliefTargets[String(rid)] = true; });
     Object.keys(recomputeIds).sort().forEach(function(rid) {
       var reg = E.byRegion[rid];
-      if (reg) _recomputeRegionCarrying(rid, reg);
+      if (reg) _recomputeRegionCarrying(rid, reg, {
+        additionalLoadRelief:directReliefTargets[String(rid)] && effect.loadRelief != null
+          ? Number(effect.loadRelief)
+          : 0
+      });
     });
     if (effect.migrateShare) {
       (migrationBatch.projectedRows || []).filter(function(row) { return row.plannedIncoming > 0; }).forEach(function(row) {

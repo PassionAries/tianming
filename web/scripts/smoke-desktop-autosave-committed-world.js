@@ -25,6 +25,7 @@ function clone(value) { return JSON.parse(JSON.stringify(value)); }
 async function main() {
   const writes = [];
   const preEndturnWrites = [];
+  const backgroundTransactions = [];
   const localValues = new Map();
   let sessionToken = 'session-a';
   let delayedWriteResolve = null;
@@ -72,6 +73,26 @@ async function main() {
           throw new Error('pre_endturn write guard rejected click-state');
         }
         preEndturnWrites.push({ id, state: clone(state), meta: clone(meta) });
+        return true;
+      },
+      async createCanonicalPayload(state, identity) {
+        return { state: clone(state), identity: clone(identity), json: JSON.stringify(state), checksum: 'background-test' };
+      },
+      async saveManyAtomic(entries, options) {
+        if (context.__backgroundSaveFailuresRemaining > 0) {
+          context.__backgroundSaveFailuresRemaining--;
+          throw new Error('injected background atomic failure');
+        }
+        if (!options || typeof options.writeGuard !== 'function' || options.writeGuard() !== true) {
+          throw new Error('background write guard rejected world');
+        }
+        backgroundTransactions.push({
+          ids: entries.map(entry => entry.id),
+          states: entries.map(entry => clone(entry.gameState)),
+          payloads: entries.map(entry => entry.canonicalPayload),
+          meta: clone(entries[0].meta),
+          transactionId: options.transactionId
+        });
         return true;
       }
     },
@@ -219,6 +240,54 @@ async function main() {
   const newWorldWrite = await context._tmRunDesktopAutoSaveTick({ force: true });
   check('新世界只写入本战役已提交快照', newWorldWrite.ok === true
     && writes[writes.length - 1].gameState._campaignId === 'campaign-b');
+
+  const backgroundLease = {
+    gmRef: context.GM,
+    pRef: context.P,
+    campaignId: context.GM._campaignId,
+    sid: context.GM.sid,
+    turn: context.GM.turn,
+    loadGen: context.window._tmLoadGen
+  };
+  context.GM._aiMemorySummary = '后台摘要已完成';
+  context.GM._monthlyChronicle = [{ turn: context.GM.turn, text: '本月纪事' }];
+  await context.requestBackgroundAutosave({ reason: 'ai-memory-summary-complete', expectedWorldLease: backgroundLease, expectedTurn: context.GM.turn });
+  await context.requestBackgroundAutosave({ reason: 'monthly-chronicle-complete', expectedWorldLease: backgroundLease, expectedTurn: context.GM.turn });
+  await context._tmAwaitBackgroundAutosaves();
+  check('摘要与月度纪事保存请求合并为一个 canonical 双槽事务', backgroundTransactions.length === 1
+    && backgroundTransactions[0].ids.join(',') === 'autosave,slot_0'
+    && backgroundTransactions[0].meta.backgroundReasons.length === 2);
+  check('双槽共享同一 canonical payload 且保存后台完成后的最新状态', backgroundTransactions[0].payloads[0] === backgroundTransactions[0].payloads[1]
+    && backgroundTransactions[0].states[0].GM._aiMemorySummary === '后台摘要已完成'
+    && backgroundTransactions[0].states[1].GM._monthlyChronicle.length === 1);
+  check('后台 canonical 提交后推进 committed snapshot', context.lastCommittedSnapshot.GM._aiMemorySummary === '后台摘要已完成');
+
+  const staleLease = Object.assign({}, backgroundLease);
+  context.GM._campaignId = 'campaign-c';
+  const staleSave = await context.requestBackgroundAutosave({ reason: 'stale-world-result', expectedWorldLease: staleLease, expectedTurn: staleLease.turn });
+  await context._tmAwaitBackgroundAutosaves();
+  check('切档后的旧后台结果不会写入新世界', staleSave.stale === true && backgroundTransactions.length === 1);
+
+  context.GM._campaignId = 'campaign-b';
+  const retryLease = Object.assign({}, backgroundLease, { gmRef: context.GM, pRef: context.P });
+  context.__backgroundSaveFailuresRemaining = 1;
+  await context.requestBackgroundAutosave({ reason: 'retry-once', expectedWorldLease: retryLease, expectedTurn: retryLease.turn });
+  await context._tmAwaitBackgroundAutosaves();
+  await context._tmAwaitBackgroundAutosaves();
+  check('后台保存失败只做有限重试并最终原子成功', backgroundTransactions.length === 2
+    && backgroundTransactions[1].meta.backgroundReasons[0] === 'retry-once');
+
+  const mismatch = await context.requestBackgroundAutosave({ reason: 'wrong-turn', expectedWorldLease: retryLease, expectedTurn: retryLease.turn + 1 });
+  check('后台保存拒绝与 lease 不一致的回合身份', mismatch.stale === true && mismatch.reason === 'background-turn-mismatch');
+
+  const memoryStart = coreSource.indexOf('(function _aiMemoryCompress()');
+  const chronicleStart = coreSource.indexOf('(function _monthlyChronicle()');
+  const chronicleEnd = coreSource.indexOf('\n  })();', chronicleStart);
+  const memoryBlock = coreSource.slice(memoryStart, chronicleStart);
+  const chronicleBlock = coreSource.slice(chronicleStart, chronicleEnd);
+  check('后台摘要和月度纪事都请求正式串行保存队列', /requestBackgroundAutosave/.test(memoryBlock) && /requestBackgroundAutosave/.test(chronicleBlock));
+  check('月度纪事关闭时在任何 AI 调用前退出', chronicleBlock.indexOf('if (!_mCfg.monthlyEnabled) return;') >= 0
+    && chronicleBlock.indexOf('if (!_mCfg.monthlyEnabled) return;') < chronicleBlock.indexOf('callAIMessages'));
 
   console.log('[smoke-desktop-autosave-committed-world] pass=' + pass);
 }

@@ -508,8 +508,43 @@
   }
   global._applyRegentDecisions = _applyRegentDecisions;
 
-  function _tmGateReason(label, reason, item) {
-    var payload = { label: label || '', reason: reason || '', item: item || null };
+  var _tmPreflightCollector = null;
+  var _tmPreflightContext = null;
+  var _tmPreflightSideEffects = true;
+
+  function _tmGateCode(label, reason) {
+    var text = String(reason || '').toLowerCase();
+    if (/ambiguous|conflicting|歧义/.test(text)) return 'ambiguous-reference';
+    if (/not in active|not active|not found|未找到|不存在|无法解析/.test(text)) return String(label || 'entity') + '-not-found';
+    if (/already dead|is dead|死亡/.test(text)) return 'target-not-living';
+    if (/duplicate/.test(text)) return 'duplicate-entity';
+    if (/missing/.test(text)) return 'missing-required-field';
+    if (/amount|finite|numeric|nan|infinity/.test(text)) return 'invalid-numeric-value';
+    if (/invalid target/.test(text)) return 'invalid-target';
+    if (/invalid kind|unsupported/.test(text)) return 'unsupported-change-type';
+    return 'writeback-preflight-rejected';
+  }
+
+  function _tmGateTarget(item) {
+    if (!item || typeof item !== 'object') return '';
+    return item.characterId || item.charId || item.factionId || item.regionId || item.id ||
+      item.name || item.charName || item.character || item.faction || item.target || item.post || '';
+  }
+
+  function _tmGateReason(label, reason, item, overrideCode) {
+    var context = _tmPreflightContext || {};
+    var payload = {
+      label: label || '',
+      field: context.field || label || '',
+      index: Number.isInteger(context.index) ? context.index : null,
+      code: overrideCode || _tmGateCode(label, reason),
+      target: _tmGateTarget(item),
+      reason: reason || '',
+      retryable: /not-found|ambiguous-reference|missing-required-field|invalid-target/.test(overrideCode || _tmGateCode(label, reason)),
+      item: item || null
+    };
+    if (Array.isArray(_tmPreflightCollector)) _tmPreflightCollector.push(payload);
+    if (!_tmPreflightSideEffects) return false;
     try { if (typeof global.recordAIDiagnostic === 'function') global.recordAIDiagnostic('write_gate', payload); } catch(_) {}
     _tmPushAIWeakHint(label, reason, item);
     return false;
@@ -651,6 +686,7 @@
   }
 
   function _tmWeakEntityHint(label, reason, item, resolution) {
+    if (Array.isArray(_tmPreflightCollector)) return _tmGateReason(label, reason, item, 'entity-reference-not-found');
     _tmPushAIWeakHint(label, reason, item, resolution);
     return true;
   }
@@ -682,9 +718,15 @@
     function keepArray(field, label, fn) {
       if (!Array.isArray(aiOutput[field])) return;
       var kept = [];
-      aiOutput[field].forEach(function(item) {
-        if (fn(item)) kept.push(item);
-        else blocked++;
+      aiOutput[field].forEach(function(item, index) {
+        var previousContext = _tmPreflightContext;
+        _tmPreflightContext = { field: field, label: label, index: index };
+        try {
+          if (fn(item)) kept.push(item);
+          else blocked++;
+        } finally {
+          _tmPreflightContext = previousContext;
+        }
       });
       aiOutput[field] = kept;
     }
@@ -866,6 +908,173 @@
     return aiOutput;
   }
   global.preflightAIWriteBack = preflightAIWriteBack;
+
+  function _tmCloneWriteback(value, seen) {
+    if (value == null || typeof value !== 'object') return value;
+    seen = seen || (typeof WeakMap === 'function' ? new WeakMap() : null);
+    if (seen && seen.has(value)) return seen.get(value);
+    var out = Array.isArray(value) ? [] : {};
+    if (seen) seen.set(value, out);
+    Object.keys(value).forEach(function(key) { out[key] = _tmCloneWriteback(value[key], seen); });
+    return out;
+  }
+
+  function _tmStrictIdentity(rows, ref, kind, field, index, failures, opts) {
+    opts = opts || {};
+    var raw = String(ref == null ? '' : ref).trim();
+    if (!raw) {
+      failures.push({ field: field, index: index, code: 'missing-required-field', target: '', retryable: true, reason: kind + ' reference is missing' });
+      return null;
+    }
+    if (!Array.isArray(rows)) {
+      failures.push({ field: field, index: index, code: kind + '-collection-unavailable', target: raw, retryable: false, reason: kind + ' collection is unavailable' });
+      return null;
+    }
+    var byId = rows.filter(function(row) { return row && row.id != null && String(row.id).trim() === raw; });
+    if (byId.length === 1) return byId[0];
+    if (byId.length > 1) {
+      failures.push({ field: field, index: index, code: 'ambiguous-reference', target: raw, retryable: true, reason: kind + ' id is not unique' });
+      return null;
+    }
+    var byName = rows.filter(function(row) { return row && row.name != null && String(row.name).trim() === raw; });
+    if (byName.length === 1) return byName[0];
+    failures.push({
+      field: field,
+      index: index,
+      code: byName.length > 1 ? 'ambiguous-reference' : kind + '-not-found',
+      target: raw,
+      retryable: true,
+      reason: byName.length > 1 ? kind + ' name is ambiguous; use stable id' : kind + ' is not in the current world'
+    });
+    return null;
+  }
+
+  function _tmWalkOfficeNodes(nodes, out) {
+    if (!Array.isArray(nodes)) return;
+    nodes.forEach(function(node) {
+      if (!node || typeof node !== 'object') return;
+      out.push(node);
+      if (Array.isArray(node.subs)) _tmWalkOfficeNodes(node.subs, out);
+      if (Array.isArray(node.children)) _tmWalkOfficeNodes(node.children, out);
+      if (Array.isArray(node.positions)) _tmWalkOfficeNodes(node.positions, out);
+    });
+  }
+
+  function _tmStrictOfficeExists(G, ref) {
+    var raw = String(ref == null ? '' : ref).trim();
+    if (!raw) return false;
+    var nodes = [];
+    _tmWalkOfficeNodes(G && G.officeTree, nodes);
+    return nodes.some(function(node) {
+      return [node.id, node.name, node.title, node.position, node.officialTitle].some(function(value) {
+        return value != null && String(value).trim() === raw;
+      });
+    });
+  }
+
+  function _tmStrictRegionRows(G) {
+    var rows = [];
+    var seen = [];
+    function add(row) {
+      if (!row || typeof row !== 'object' || seen.indexOf(row) >= 0) return;
+      seen.push(row); rows.push(row);
+      if (Array.isArray(row.children)) row.children.forEach(add);
+      if (Array.isArray(row.subs)) row.subs.forEach(add);
+      if (Array.isArray(row.divisions)) row.divisions.forEach(add);
+    }
+    var map = G && (G.mapData || G.map);
+    if (map && Array.isArray(map.regions)) map.regions.forEach(add);
+    if (G && G.regionMap && typeof G.regionMap === 'object') Object.keys(G.regionMap).forEach(function(key) { add(G.regionMap[key]); });
+    if (G && G.adminHierarchy && typeof G.adminHierarchy === 'object') Object.keys(G.adminHierarchy).forEach(function(key) { add(G.adminHierarchy[key]); });
+    return rows;
+  }
+
+  function _tmValidateFiniteFields(root, path, failures, seen) {
+    if (!root || typeof root !== 'object') return;
+    seen = seen || (typeof WeakSet === 'function' ? new WeakSet() : null);
+    if (seen && seen.has(root)) return;
+    if (seen) seen.add(root);
+    Object.keys(root).forEach(function(key) {
+      var value = root[key];
+      var nextPath = path ? path + '.' + key : key;
+      if (typeof value === 'number' && !Number.isFinite(value)) {
+        failures.push({ field: nextPath, index: null, code: 'invalid-numeric-value', target: nextPath, retryable: true, reason: 'numeric writeback value must be finite' });
+      } else if (value && typeof value === 'object') {
+        _tmValidateFiniteFields(value, nextPath, failures, seen);
+      }
+    });
+  }
+
+  /**
+   * 对 detached AI 输出执行严格预检。旧 preflight 的“剔除坏项后继续”仅保留给
+   * 兼容调用；主回合使用本入口，任何剔除或弱引用都转成结构化失败。
+   */
+  function validateAIWriteBackBatch(aiOutput, opts) {
+    opts = opts || {};
+    var G = global.GM;
+    var failures = [];
+    if (!G || typeof G !== 'object' || !aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
+      return { ok: false, output: null, failures: [{ field: '', index: null, code: 'invalid-writeback-batch', target: '', retryable: false, reason: 'GM and AI writeback must be objects' }] };
+    }
+    var detached = _tmCloneWriteback(aiOutput);
+    var previousCollector = _tmPreflightCollector;
+    var previousSideEffects = _tmPreflightSideEffects;
+    var previousContext = _tmPreflightContext;
+    _tmPreflightCollector = failures;
+    _tmPreflightSideEffects = false;
+    _tmPreflightContext = null;
+    try {
+      var deathNormalization = normalizeAIWriteBackDeaths(detached, { source: opts.source || 'strict-preflight', deferDeaths: true });
+      (deathNormalization.failed || []).forEach(function(failure, index) {
+        failures.push({ field: 'char_updates', index: index, code: 'invalid-character-death', target: failure.char_update || '', retryable: true, reason: failure.reason || 'invalid character death' });
+      });
+      preflightAIWriteBack(detached, { source: opts.source || 'strict-preflight' });
+    } finally {
+      _tmPreflightCollector = previousCollector;
+      _tmPreflightSideEffects = previousSideEffects;
+      _tmPreflightContext = previousContext;
+    }
+
+    function validateRefs(field, rows, kind, refOf, extra) {
+      (Array.isArray(detached[field]) ? detached[field] : []).forEach(function(item, index) {
+        var ref = refOf(item || {});
+        var entity = _tmStrictIdentity(rows, ref, kind, field, index, failures);
+        if (entity && extra) extra(item, entity, index);
+      });
+    }
+    validateRefs('appointments', G.chars, 'character', function(item) { return item.characterId || item.charId || item.charName; }, function(item, entity, index) {
+      if (entity.alive === false || entity.dead === true) failures.push({ field: 'appointments', index: index, code: 'target-not-living', target: entity.id || entity.name, retryable: true, reason: 'appointment target is not living' });
+      var action = String(item.action || '').toLowerCase();
+      var post = action === 'transfer' ? item.toPosition : item.position;
+      if ((action === 'appoint' || action === 'transfer') && !_tmStrictOfficeExists(G, post)) failures.push({ field: 'appointments', index: index, code: 'office-not-found', target: post || '', retryable: true, reason: 'office position is not declared in current office tree' });
+    });
+    validateRefs('char_updates', G.chars, 'character', function(item) { return item.characterId || item.charId || item.name; });
+    validateRefs('office_assignments', G.chars, 'character', function(item) { return item.characterId || item.charId || item.name; }, function(item, entity, index) {
+      var action = String(item.action || 'appoint').toLowerCase();
+      if ((action === 'appoint' || action === 'transfer' || action === 'concurrent') && !_tmStrictOfficeExists(G, item.post)) failures.push({ field: 'office_assignments', index: index, code: 'office-not-found', target: item.post || '', retryable: true, reason: 'office position is not declared in current office tree' });
+    });
+    validateRefs('personnel_changes', G.chars, 'character', function(item) { return item.characterId || item.charId || item.name; });
+    validateRefs('faction_updates', G.facs, 'faction', function(item) { return item.factionId || item.id || item.name; });
+    validateRefs('faction_dissolve', G.facs, 'faction', function(item) { return item.factionId || item.id || item.name; });
+
+    var regionRows = _tmStrictRegionRows(G);
+    ['region_updates', 'population_adjustments', 'central_local_actions', 'environment_actions'].forEach(function(field) {
+      (Array.isArray(detached[field]) ? detached[field] : []).forEach(function(item, index) {
+        var ref = item && (item.regionId || item.region_id || item.region || item.targetRegion || item.target);
+        if (ref) _tmStrictIdentity(regionRows, ref, 'region', field, index, failures);
+      });
+    });
+    _tmValidateFiniteFields(detached, '', failures);
+
+    var unique = [];
+    var seenFailures = Object.create(null);
+    failures.forEach(function(failure) {
+      var key = [failure.field, failure.index, failure.code, failure.target, failure.reason].join('|');
+      if (!seenFailures[key]) { seenFailures[key] = true; unique.push(failure); }
+    });
+    return { ok: unique.length === 0, output: detached, failures: unique };
+  }
+  global.validateAIWriteBackBatch = validateAIWriteBackBatch;
 
   function _applyBattleResult(G, aiOutput, applied) {
     if (!G || !aiOutput || !aiOutput.battleResult) return;
@@ -1149,6 +1358,20 @@
     var G = global.GM;
     var P0 = global.P;
     if (!G || !aiOutput || typeof aiOutput !== 'object') return { ok: false, applied: { failed: [{ reason: 'invalid GM/AI output' }] } };
+    if (aiOutput._strictValidation === true) {
+      var strictPreflight = validateAIWriteBackBatch(aiOutput, { source:'applyAITurnChangesAtomic' });
+      if (!strictPreflight.ok) {
+        return {
+          ok:false,
+          rolledBack:false,
+          preflightRejected:true,
+          applied:{ failed:strictPreflight.failures.map(function(failure) {
+            return Object.assign({ reason:failure.reason || failure.code }, failure);
+          }) }
+        };
+      }
+      aiOutput = strictPreflight.output;
+    }
     var gSnapshot, pSnapshot;
     try {
       gSnapshot = _captureAIStateObject(G, ['_postTurnJobs', '_postTurnDetachedJobs', '_indices']);
@@ -1205,7 +1428,7 @@
   //>>ACA-SPLIT22-RECONCILE-BODY-END
   // ── forward 回填：本片复核/善后族 → bucket（origin 委托 shim 调用期解析）──
   __acaP._processDeathEpitaphs = _processDeathEpitaphs; __acaP._reconcilePlayerMovements = _reconcilePlayerMovements; __acaP._reconcilePlayerFiscalReforms = _reconcilePlayerFiscalReforms; __acaP._applyOfficeDutyTick = _applyOfficeDutyTick; __acaP._applyTaxAuthorityGate = _applyTaxAuthorityGate; __acaP._applyDirectiveCompliance = _applyDirectiveCompliance;
-  __acaP._applyRegentDecisions = _applyRegentDecisions; __acaP.preflightAIWriteBack = preflightAIWriteBack; __acaP._applyBattleResult = _applyBattleResult; __acaP._applyFiscalDeficitPenalties = _applyFiscalDeficitPenalties; __acaP._hasInstantArrivalRule = _hasInstantArrivalRule;
+  __acaP._applyRegentDecisions = _applyRegentDecisions; __acaP.preflightAIWriteBack = preflightAIWriteBack; __acaP.validateAIWriteBackBatch = validateAIWriteBackBatch; __acaP._applyBattleResult = _applyBattleResult; __acaP._applyFiscalDeficitPenalties = _applyFiscalDeficitPenalties; __acaP._hasInstantArrivalRule = _hasInstantArrivalRule;
   __acaP._captureValidatorBaseline = _captureValidatorBaseline; __acaP._collectValidatorFailures = _collectValidatorFailures; __acaP._runConsistencyValidator = _runConsistencyValidator;
   __acaP.applyAITurnChangesAtomic = applyAITurnChangesAtomic; __acaP._syncFiscalScalars = _syncFiscalScalars;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : this));

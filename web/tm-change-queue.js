@@ -29,338 +29,284 @@ var ChangeQueue = (function() {
   var queue = [];
   var isApplying = false;
   var appliedChanges = [];
+  var deadLetters = [];
+  var sequence = 0;
+  var limits = { soft: 512, hard: 1024, maxAttempts: 3, deadLetters: 200 };
+  var unsafeFields = { '__proto__': true, 'prototype': true, 'constructor': true };
 
-  /**
-   * 添加变动到队列
-   * @param {Object} change - 变动对象
-   * @param {string} change.type - 类型：'treasury'|'variable'|'character'|'faction'|'province'|'nation'
-   * @param {string} change.target - 目标ID
-   * @param {string} change.field - 字段名
-   * @param {number} [change.delta] - 变动值（累积模式）
-   * @param {number} [change.newValue] - 新值（绝对值模式）
-   * @param {string} change.description - 描述
-   * @param {string} change.source - 来源
-   */
+  function _nowTurn() {
+    return (typeof GM !== 'undefined' && GM && Number.isFinite(Number(GM.turn))) ? Number(GM.turn) : 0;
+  }
+
+  function _failure(code, message, retryable, change) {
+    return {
+      ok: false,
+      code: String(code || 'change-failed'),
+      message: String(message || code || 'change failed'),
+      retryable: retryable === true,
+      target: change && change.target,
+      field: change && change.field
+    };
+  }
+
+  function _finite(value) {
+    var number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function _validField(change) {
+    var field = change && typeof change.field === 'string' ? change.field.trim() : '';
+    return field && !unsafeFields[field] ? field : null;
+  }
+
+  function _resolveByStableIdOrUniqueName(rows, target, kind) {
+    if (!Array.isArray(rows)) return _failure(kind + '-collection-unavailable', kind + ' collection unavailable', true, { target: target });
+    var ref = String(target == null ? '' : target).trim();
+    if (!ref) return _failure(kind + '-target-missing', kind + ' target missing', false, { target: target });
+    var byId = rows.filter(function(row){ return row && String(row.id || '') === ref; });
+    if (byId.length === 1) return { ok: true, value: byId[0] };
+    if (byId.length > 1) return _failure(kind + '-id-ambiguous', kind + ' id is not unique: ' + ref, false, { target: target });
+    var byName = rows.filter(function(row){ return row && String(row.name || '').trim() === ref; });
+    if (byName.length === 1) return { ok: true, value: byName[0], migratedFromName: true };
+    if (byName.length > 1) return _failure(kind + '-name-ambiguous', kind + ' name is ambiguous: ' + ref, false, { target: target });
+    return _failure(kind + '-not-found', kind + ' not found: ' + ref, false, { target: target });
+  }
+
+  function _numericMutation(change, target, field, min, max, label, appliedRecord) {
+    var oldValue = _finite(target[field]);
+    if (oldValue === null) return _failure('invalid-existing-numeric-value', label + ' existing value is not finite', false, change);
+    var next;
+    if (change.newValue !== undefined) next = _finite(change.newValue);
+    else if (change.delta !== undefined) {
+      var delta = _finite(change.delta);
+      if (delta === null) return _failure('invalid-numeric-value', label + ' delta is not finite', false, change);
+      next = oldValue + delta;
+    } else return _failure('numeric-operation-missing', label + ' requires delta or newValue', false, change);
+    if (next === null || !Number.isFinite(next)) return _failure('invalid-numeric-value', label + ' result is not finite', false, change);
+    if (min !== null && next < min) next = min;
+    if (max !== null && next > max) next = max;
+    target[field] = next;
+    var actualDelta = next - oldValue;
+    return {
+      ok: true,
+      changed: actualDelta !== 0,
+      log: label + ': ' + oldValue.toFixed(1) + ' → ' + next.toFixed(1) +
+        ' (实际: ' + (actualDelta >= 0 ? '+' : '') + actualDelta.toFixed(1) + ') [' + change.description + ']',
+      applied: Object.assign({
+        type: change.type, target: change.target, field: field, delta: actualDelta,
+        description: change.description, source: change.source
+      }, appliedRecord || {}),
+      undo: function(){ target[field] = oldValue; }
+    };
+  }
+
+  function _handlerTreasury(change) {
+    var field = _validField(change);
+    if (!field) return _failure('invalid-field', 'treasury field is invalid', false, change);
+    var delta = _finite(change.delta);
+    if (delta === null) return _failure('invalid-numeric-value', 'treasury delta is not finite', false, change);
+    return {
+      ok: true, changed: false,
+      log: '国库' + field + ': ' + (delta >= 0 ? '+' : '') + delta + ' [' + change.description + ']',
+      applied: { type:'treasury', field:field, delta:delta, originalDelta:delta, description:change.description, source:change.source },
+      undo: function(){}
+    };
+  }
+
+  function _handlerVariable(change) {
+    if (typeof GM === 'undefined' || !GM || !GM.vars || typeof GM.vars !== 'object' || Array.isArray(GM.vars)) {
+      return _failure('variable-collection-unavailable', 'GM.vars unavailable', true, change);
+    }
+    var variable = GM.vars[change.target];
+    if (!variable || typeof variable !== 'object') return _failure('variable-not-found', 'variable not found: ' + change.target, false, change);
+    var min = variable.min == null ? 0 : _finite(variable.min);
+    var max = variable.max == null ? 999999999 : _finite(variable.max);
+    if (min === null || max === null || min > max) return _failure('invalid-variable-bounds', 'variable bounds are invalid: ' + change.target, false, change);
+    return _numericMutation(change, variable, 'value', min, max, String(change.target));
+  }
+
+  function _handlerCharacter(change) {
+    if (typeof GM === 'undefined' || !GM) return _failure('world-unavailable', 'GM unavailable', true, change);
+    var resolved = _resolveByStableIdOrUniqueName(GM.chars, change.target, 'character');
+    if (!resolved.ok) return resolved;
+    var field = _validField(change);
+    if (!field) return _failure('invalid-field', 'character field is invalid', false, change);
+    var min = change.min == null ? 0 : _finite(change.min);
+    var max = change.max == null ? 100 : _finite(change.max);
+    if (min === null || max === null || min > max) return _failure('invalid-character-bounds', 'character bounds are invalid', false, change);
+    return _numericMutation(change, resolved.value, field, min, max, resolved.value.name + '.' + field, { targetId: resolved.value.id || '' });
+  }
+
+  function _handlerFaction(change) {
+    if (typeof GM === 'undefined' || !GM) return _failure('world-unavailable', 'GM unavailable', true, change);
+    var resolved = _resolveByStableIdOrUniqueName(GM.facs, change.target, 'faction');
+    if (!resolved.ok) return resolved;
+    var field = _validField(change);
+    if (!field) return _failure('invalid-field', 'faction field is invalid', false, change);
+    return _numericMutation(change, resolved.value, field, null, null, resolved.value.name + '.' + field, { targetId: resolved.value.id || '' });
+  }
+
+  function _runtimeMap() {
+    if (typeof ensureWritableRuntimeMap === 'function') return ensureWritableRuntimeMap();
+    if (typeof GM !== 'undefined' && GM && GM.mapData && Array.isArray(GM.mapData.regions)) return GM.mapData;
+    return null;
+  }
+
+  function _handlerProvince(change) {
+    var map = _runtimeMap();
+    if (!map || !Array.isArray(map.regions)) return _failure('runtime-map-unavailable', 'writable runtime map unavailable', true, change);
+    var resolved = _resolveByStableIdOrUniqueName(map.regions, change.target, 'region');
+    if (!resolved.ok) return resolved;
+    var field = _validField(change);
+    if (!field) return _failure('invalid-field', 'region field is invalid', false, change);
+    return _numericMutation(change, resolved.value, field, null, null, resolved.value.name + '.' + field, { targetId: resolved.value.id || '' });
+  }
+
+  function _handlerNation(change) {
+    if (typeof GM === 'undefined' || !GM || typeof GM !== 'object') return _failure('world-unavailable', 'GM unavailable', true, change);
+    var field = _validField(change);
+    if (!field) return _failure('invalid-field', 'nation field is invalid', false, change);
+    return _numericMutation(change, GM, field, null, null, 'GM.' + field);
+  }
+
+  var handlers = {
+    treasury: _handlerTreasury,
+    variable: _handlerVariable,
+    character: _handlerCharacter,
+    faction: _handlerFaction,
+    province: _handlerProvince,
+    nation: _handlerNation
+  };
+
+  function _deadLetter(change, failure) {
+    deadLetters.push({
+      change: Object.assign({}, change),
+      attempts: change.attempts || 0,
+      reason: failure.code,
+      message: failure.message,
+      droppedAtTurn: _nowTurn(),
+      droppedAt: Date.now()
+    });
+    if (deadLetters.length > limits.deadLetters) deadLetters = deadLetters.slice(-limits.deadLetters);
+  }
+
   function enqueue(change) {
-    var id = Date.now() + '_' + (typeof random==='function'?random():Math.random()).toString(36).substr(2, 9);
-    var timestamp = Date.now();
-
+    if (!change || typeof change !== 'object') return { ok:false, code:'invalid-change' };
+    var explicitId = change.id == null ? '' : String(change.id);
+    if (explicitId && queue.some(function(row){ return row.id === explicitId; })) return { ok:true, duplicate:true, id:explicitId };
+    if (queue.length >= limits.hard) {
+      console.error('[ChangeQueue] hard capacity reached:', limits.hard);
+      return { ok:false, code:'queue-capacity-exceeded', capacity:limits.hard };
+    }
+    var turn = _nowTurn();
+    var previous = queue.length ? queue[queue.length - 1] : null;
+    var mergeable = previous && change.newValue === undefined && previous.newValue === undefined &&
+      previous.type === change.type && previous.target === change.target && previous.field === change.field &&
+      previous.source === (change.source || 'unknown') && previous.queuedTurn === turn;
+    if (mergeable) {
+      var previousDelta = _finite(previous.delta), nextDelta = _finite(change.delta);
+      if (previousDelta !== null && nextDelta !== null) {
+        previous.delta = previousDelta + nextDelta;
+        previous.description = change.description || previous.description;
+        return { ok:true, merged:true, id:previous.id };
+      }
+    }
+    sequence += 1;
     var request = {
-      id: id,
+      id: explicitId || ('cq_' + Date.now() + '_' + sequence),
       type: change.type,
       target: change.target,
       field: change.field,
       delta: change.delta,
       newValue: change.newValue,
+      min: change.min,
+      max: change.max,
       description: change.description || '未知变动',
       source: change.source || 'unknown',
-      timestamp: timestamp
+      timestamp: Date.now(),
+      firstQueuedAt: Date.now(),
+      queuedTurn: turn,
+      attempts: Number.isInteger(change.attempts) && change.attempts >= 0 ? change.attempts : 0,
+      lastErrorCode: change.lastErrorCode || '',
+      lastErrorAt: change.lastErrorAt || 0
     };
-
     queue.push(request);
-
+    if (queue.length === limits.soft) console.warn('[ChangeQueue] soft capacity reached:', limits.soft);
     _dbg('[ChangeQueue] 已加入待结算队列: ' + request.description + ' (队列长度: ' + queue.length + ')');
+    return { ok:true, id:request.id, pendingCount:queue.length };
   }
 
-  /**
-   * 应用所有变动到游戏状态
-   * ⚠️ 警告：只有 endTurn() 可以调用此方法！
-   * @returns {Object} { logs: string[], appliedCount: number }
-   */
   function applyAll() {
-    if (isApplying) {
-      console.error('[ChangeQueue] applyAll 正在执行中，防止重入！');
-      return { logs: [], appliedCount: 0, failedCount: queue.length, errors: ['applyAll reentry'], ok: false };
-    }
-
+    if (isApplying) return { logs:[], appliedCount:0, failedCount:queue.length, errors:['applyAll reentry'], failures:[{code:'apply-reentry'}], ok:false, pendingCount:queue.length };
     isApplying = true;
     appliedChanges = [];
-
-    var logs = [];
-    var appliedCount = 0;
-    var failedCount = 0;
-    var errors = [];
-    var failedChanges = [];
-    var multiplier = 1;
-
-    _dbg('[ChangeQueue] 开始应用 ' + queue.length + ' 个变动');
-
+    var logs = [], localApplied = [], undos = [];
+    var originalQueue = queue.slice();
+    var processedQueue;
     try {
-      // 应用软下限系统
-      var processedQueue = (typeof SoftFloorSystem !== 'undefined' && SoftFloorSystem && SoftFloorSystem.processChanges)
-        ? SoftFloorSystem.processChanges(queue)
-        : queue.slice();
-      _dbg('[ChangeQueue] 软下限系统处理完成');
-
-      for (var i = 0; i < processedQueue.length; i++) {
+      processedQueue = (typeof SoftFloorSystem !== 'undefined' && SoftFloorSystem && typeof SoftFloorSystem.processChanges === 'function')
+        ? SoftFloorSystem.processChanges(originalQueue.slice()) : originalQueue.slice();
+      if (!Array.isArray(processedQueue)) throw new Error('SoftFloorSystem returned non-array changes');
+      for (var i=0;i<processedQueue.length;i++) {
         var change = processedQueue[i];
-
-        try {
-          switch (change.type) {
-          case 'treasury':
-            applyTreasuryChange(change, logs, multiplier);
-            break;
-          case 'variable':
-            applyVariableChange(change, logs, multiplier);
-            break;
-          case 'character':
-            applyCharacterChange(change, logs, multiplier);
-            break;
-          case 'faction':
-            applyFactionChange(change, logs, multiplier);
-            break;
-          case 'province':
-            applyProvinceChange(change, logs, multiplier);
-            break;
-          case 'nation':
-            applyNationChange(change, logs, multiplier);
-            break;
-          default:
-            throw new Error('Unknown change type: ' + change.type);
+        var handler = change && handlers[change.type];
+        var result = handler ? handler(change) : _failure('unsupported-change-type', 'unsupported change type: ' + (change && change.type), false, change);
+        if (!result || result.ok !== true) {
+          var failure = result && result.ok === false ? result : _failure('handler-result-invalid', 'handler returned no explicit result', false, change);
+          for (var u=undos.length-1;u>=0;u--) undos[u]();
+          var original = originalQueue.find(function(row){ return row.id === (change && change.id); }) || change;
+          var priorAttempts = Number(original.attempts);
+          original.attempts = (Number.isFinite(priorAttempts) && priorAttempts >= 0 ? Math.floor(priorAttempts) : 0) + 1;
+          original.lastErrorCode = failure.code;
+          original.lastErrorAt = Date.now();
+          if (!failure.retryable || original.attempts >= limits.maxAttempts) {
+            _deadLetter(original, failure);
+            queue = originalQueue.filter(function(row){ return row.id !== original.id; });
+          } else queue = originalQueue;
+          appliedChanges = [];
+          console.error('[ChangeQueue] batch rolled back:', failure.code, failure.message);
+          return {
+            logs:[], appliedCount:0, failedCount:1, errors:[failure.message],
+            failures:[Object.assign({ index:i, id:original && original.id, attempts:original && original.attempts }, failure)],
+            ok:false, rolledBack:true, pendingCount:queue.length, deadLetterCount:deadLetters.length,
+            executionRate:0
+          };
         }
-
-        appliedCount++;
-        } catch (changeError) {
-          failedCount++;
-          failedChanges.push(change);
-          errors.push((change && change.id ? change.id + ': ' : '') + (changeError && changeError.message || String(changeError)));
-          console.error('[ChangeQueue] failed to apply change:', change, changeError);
-        }
+        undos.push(typeof result.undo === 'function' ? result.undo : function(){});
+        if (result.log) logs.push(result.log);
+        if (result.applied) localApplied.push(result.applied);
       }
-
-      if (failedCount > 0) {
-        queue = failedChanges;
-        _dbg('[ChangeQueue] applied ' + appliedCount + ', kept failed ' + failedCount);
-      } else {
-        _dbg('[ChangeQueue] 成功应用 ' + appliedCount + ' 个变动');
-      }
-
+      appliedChanges = localApplied;
+      return {
+        logs:logs, appliedCount:processedQueue.length, failedCount:0, errors:[], failures:[],
+        ok:true, pendingCount:queue.length, deadLetterCount:deadLetters.length,
+        executionRate:processedQueue.length ? 100 : 0
+      };
     } catch (error) {
-      failedCount = queue.length;
-      errors.push(error && error.message || String(error));
-      failedChanges = queue.slice();
-      queue = failedChanges;
-      console.error('[ChangeQueue] 应用变动失败:', error);
+      for (var j=undos.length-1;j>=0;j--) {
+        try { undos[j](); } catch (undoError) { console.error('[ChangeQueue] rollback failed:', undoError); }
+      }
+      appliedChanges = [];
+      console.error('[ChangeQueue] apply failed:', error);
+      return { logs:[], appliedCount:0, failedCount:originalQueue.length, errors:[error && error.message || String(error)], failures:[{code:'apply-exception',retryable:true}], ok:false, rolledBack:true, pendingCount:queue.length, deadLetterCount:deadLetters.length, executionRate:0 };
     } finally {
       isApplying = false;
     }
-
-    return { logs: logs, appliedCount: appliedCount, failedCount: failedCount, errors: errors, ok: failedCount === 0, pendingCount: queue.length };
   }
 
-  /**
-   * 清空队列
-   */
-  function clear() {
-    var count = queue.length;
-    queue = [];
-    _dbg('[ChangeQueue] 已清空 ' + count + ' 个变动');
-  }
-
-  /**
-   * 获取队列长度
-   */
-  function length() {
-    return queue.length;
-  }
-
-  /**
-   * 获取队列统计
-   */
+  function clear() { var count=queue.length;queue=[];_dbg('[ChangeQueue] 已清空 '+count+' 个变动'); }
+  function length() { return queue.length; }
   function getStats() {
-    var stats = {
-      total: queue.length,
-      byType: {}
-    };
-
-    queue.forEach(function(change) {
-      if (!stats.byType[change.type]) {
-        stats.byType[change.type] = 0;
-      }
-      stats.byType[change.type]++;
-    });
-
+    var stats={ total:queue.length, byType:{}, deadLetterCount:deadLetters.length, limits:Object.assign({},limits) };
+    queue.forEach(function(change){stats.byType[change.type]=(stats.byType[change.type]||0)+1;});
     return stats;
   }
+  function getAppliedChanges() { return appliedChanges.slice(); }
+  function getDeadLetters() { return deadLetters.map(function(row){ return Object.assign({}, row, { change:Object.assign({},row.change) }); }); }
 
-  /**
-   * 获取已应用的变动（用于 AccountingSystem）
-   */
-  function getAppliedChanges() {
-    return appliedChanges.slice();
-  }
-
-  // ==================== 私有方法：应用各类变动 ====================
-
-  function applyTreasuryChange(change, logs, multiplier) {
-    var actualDelta = Math.round((change.delta || 0) * multiplier);
-
-    // 记录到 appliedChanges（用于 AccountingSystem）
-    appliedChanges.push({
-      type: 'treasury',
-      field: change.field,
-      delta: actualDelta,
-      originalDelta: change.delta || 0,
-      description: change.description,
-      source: change.source
-    });
-
-    var logMsg = '国库' + change.field + ': ' + (actualDelta >= 0 ? '+' : '') + actualDelta +
-                 ' [' + change.description + ']';
-    logs.push(logMsg);
-    _dbg('[ChangeQueue] ' + logMsg);
-  }
-
-  function applyVariableChange(change, logs, multiplier) {
-    if (!GM.vars[change.target]) {
-      console.warn('[ChangeQueue] 变量不存在: ' + change.target);
-      return;
-    }
-
-    var oldValue = GM.vars[change.target].value || 0;
-    var vMin = GM.vars[change.target].min != null ? GM.vars[change.target].min : 0;
-    var vMax = GM.vars[change.target].max != null ? GM.vars[change.target].max : 999999999;
-    var newValue;
-
-    if (change.newValue !== undefined) {
-      newValue = Math.max(vMin, Math.min(vMax, change.newValue));
-    } else if (change.delta !== undefined) {
-      var actualDelta = change.delta * multiplier;
-      newValue = Math.max(vMin, Math.min(vMax, oldValue + actualDelta));
-    } else {
-      return;
-    }
-
-    GM.vars[change.target].value = newValue;
-
-    var actualChange = newValue - oldValue;
-    var logMsg = change.target + ': ' + oldValue.toFixed(1) + ' → ' + newValue.toFixed(1) +
-                 ' (实际: ' + (actualChange >= 0 ? '+' : '') + actualChange.toFixed(1) +
-                 ', 原始: ' + (change.delta >= 0 ? '+' : '') + (change.delta || 0) + ') [' + change.description + ']';
-    logs.push(logMsg);
-    _dbg('[ChangeQueue] ' + logMsg);
-  }
-
-  function applyCharacterChange(change, logs, multiplier) {
-    var char = GM.chars.find(function(c) { return c.name === change.target; });
-    if (!char) {
-      console.warn('[ChangeQueue] 角色不存在: ' + change.target);
-      return;
-    }
-
-    var oldValue = char[change.field] || 0;
-    var cMin = change.min != null ? change.min : 0;
-    var cMax = change.max != null ? change.max : 100;
-    var newValue;
-
-    if (change.newValue !== undefined) {
-      newValue = Math.max(cMin, Math.min(cMax, change.newValue));
-    } else if (change.delta !== undefined) {
-      var actualDelta = change.delta * multiplier;
-      newValue = Math.max(cMin, Math.min(cMax, oldValue + actualDelta));
-    } else {
-      return;
-    }
-
-    char[change.field] = newValue;
-
-    var actualChange = newValue - oldValue;
-    var logMsg = char.name + '.' + change.field + ': ' + oldValue.toFixed(1) + ' → ' + newValue.toFixed(1) +
-                 ' (实际: ' + (actualChange >= 0 ? '+' : '') + actualChange.toFixed(1) + ') [' + change.description + ']';
-    logs.push(logMsg);
-    _dbg('[ChangeQueue] ' + logMsg);
-  }
-
-  function applyFactionChange(change, logs, multiplier) {
-    var fac = GM.facs.find(function(f) { return f.name === change.target; });
-    if (!fac) {
-      console.warn('[ChangeQueue] 势力不存在: ' + change.target);
-      return;
-    }
-
-    var oldValue = fac[change.field] || 0;
-    var newValue;
-
-    if (change.newValue !== undefined) {
-      newValue = change.newValue;
-    } else if (change.delta !== undefined) {
-      var actualDelta = change.delta * multiplier;
-      newValue = oldValue + actualDelta;
-    } else {
-      return;
-    }
-
-    fac[change.field] = newValue;
-
-    var actualChange = newValue - oldValue;
-    var logMsg = fac.name + '.' + change.field + ': ' + oldValue.toFixed(1) + ' → ' + newValue.toFixed(1) +
-                 ' (实际: ' + (actualChange >= 0 ? '+' : '') + actualChange.toFixed(1) + ') [' + change.description + ']';
-    logs.push(logMsg);
-    _dbg('[ChangeQueue] ' + logMsg);
-  }
-
-  function applyProvinceChange(change, logs, multiplier) {
-    // 省份变动（如果有地图系统）
-    if (!P.map || !P.map.regions) return;
-
-    var province = P.map.regions.find(function(r) { return r.id === change.target; });
-    if (!province) {
-      console.warn('[ChangeQueue] 省份不存在: ' + change.target);
-      return;
-    }
-
-    var oldValue = province[change.field] || 0;
-    var newValue;
-
-    if (change.newValue !== undefined) {
-      newValue = change.newValue;
-    } else if (change.delta !== undefined) {
-      var actualDelta = change.delta * multiplier;
-      newValue = oldValue + actualDelta;
-    } else {
-      return;
-    }
-
-    province[change.field] = newValue;
-
-    var actualChange = newValue - oldValue;
-    var logMsg = province.name + '.' + change.field + ': ' + oldValue.toFixed(1) + ' → ' + newValue.toFixed(1) +
-                 ' (实际: ' + (actualChange >= 0 ? '+' : '') + actualChange.toFixed(1) + ') [' + change.description + ']';
-    logs.push(logMsg);
-    _dbg('[ChangeQueue] ' + logMsg);
-  }
-
-  function applyNationChange(change, logs, multiplier) {
-    // 国家级变动
-    var oldValue = GM[change.field] || 0;
-    var newValue;
-
-    if (change.newValue !== undefined) {
-      newValue = change.newValue;
-    } else if (change.delta !== undefined) {
-      var actualDelta = change.delta * multiplier;
-      newValue = oldValue + actualDelta;
-    } else {
-      return;
-    }
-
-    GM[change.field] = newValue;
-
-    var actualChange = newValue - oldValue;
-    var logMsg = 'GM.' + change.field + ': ' + oldValue.toFixed(1) + ' → ' + newValue.toFixed(1) +
-                 ' (实际: ' + (actualChange >= 0 ? '+' : '') + actualChange.toFixed(1) + ') [' + change.description + ']';
-    logs.push(logMsg);
-    _dbg('[ChangeQueue] ' + logMsg);
-  }
-
-  // 公开接口
   return {
-    enqueue: enqueue,
-    applyAll: applyAll,
-    clear: clear,
-    length: length,
-    getStats: getStats,
-    getAppliedChanges: getAppliedChanges
+    enqueue:enqueue, applyAll:applyAll, clear:clear, length:length,
+    getStats:getStats, getAppliedChanges:getAppliedChanges, getDeadLetters:getDeadLetters
   };
 })();
 
@@ -520,74 +466,99 @@ var AccountingSystem = (function() {
  * 4. 官制联动（任命/罢免自动触发权力重分配）
  */
 
-function ensureReactiveQueueState() {
-  if (typeof GM === 'undefined' || !GM) return false;
-  if (!GM._listeners || typeof GM._listeners !== 'object' || Array.isArray(GM._listeners)) {
-    GM._listeners = {};
+var REACTIVE_QUEUE_BATCH_LIMIT = 1000;
+var REACTIVE_QUEUE_HARD_LIMIT = 4096;
+
+function ensureReactiveQueueState(targetGM) {
+  var G = targetGM || ((typeof GM !== 'undefined' && GM) ? GM : null);
+  if (!G) return false;
+  if (!G._listeners || typeof G._listeners !== 'object' || Array.isArray(G._listeners)) G._listeners = {};
+  if (!Array.isArray(G._changeQueue)) G._changeQueue = [];
+  return G;
+}
+
+function _reactiveQueueScheduled(G) {
+  return !!(G && G._changeQueueScheduled);
+}
+
+function _setReactiveQueueScheduled(G, value) {
+  if (!G) return;
+  try {
+    Object.defineProperty(G, '_changeQueueScheduled', { value:!!value, writable:true, configurable:true, enumerable:false });
+  } catch (error) {
+    G._changeQueueScheduled = !!value;
   }
-  if (!Array.isArray(GM._changeQueue)) {
-    GM._changeQueue = [];
-  }
-  return true;
+}
+
+function _scheduleReactiveQueue(G) {
+  if (!G || _reactiveQueueScheduled(G)) return;
+  _setReactiveQueueScheduled(G, true);
+  var schedule = typeof queueMicrotask === 'function' ? queueMicrotask : function(fn){ Promise.resolve().then(fn); };
+  schedule(function(){
+    _setReactiveQueueScheduled(G, false);
+    processChangeQueue(G);
+  });
 }
 
 // 注册监听器
 function registerListener(entityType, propertyName, callback, priority) {
-  if (!ensureReactiveQueueState()) return;
+  var G = ensureReactiveQueueState();
+  if (!G || typeof callback !== 'function') return { ok:false, code:'invalid-listener' };
   priority = priority || 5;
   var key = entityType + '.' + propertyName;
-  if (!GM._listeners[key]) {
-    GM._listeners[key] = [];
-  }
-  GM._listeners[key].push({
-    callback: callback,
-    priority: priority
-  });
-  // 按优先级排序（数字越小优先级越高）
-  GM._listeners[key].sort(function(a, b) {
-    return a.priority - b.priority;
-  });
+  if (!G._listeners[key]) G._listeners[key] = [];
+  G._listeners[key].push({ callback:callback, priority:priority });
+  G._listeners[key].sort(function(a,b){ return a.priority-b.priority; });
+  return { ok:true };
 }
 
-// 触发属性变化监听
+// 触发属性变化监听；同一微任务内同对象同字段只保留最早旧值与最终新值。
 function triggerPropertyChange(entityType, entity, propertyName, oldValue, newValue) {
-  if (oldValue === newValue) return;
-  if (!ensureReactiveQueueState()) return;
-
+  if (oldValue === newValue) return { ok:true, changed:false };
+  var G = ensureReactiveQueueState();
+  if (!G) return { ok:false, code:'world-unavailable' };
   var key = entityType + '.' + propertyName;
-  var listeners = GM._listeners[key];
-  if (!listeners || listeners.length === 0) return;
-
-  // 添加到变化队列
-  GM._changeQueue.push({
-    entityType: entityType,
-    entity: entity,
-    propertyName: propertyName,
-    oldValue: oldValue,
-    newValue: newValue,
-    listeners: listeners
-  });
+  var listeners = G._listeners[key];
+  if (!Array.isArray(listeners) || listeners.length === 0) return { ok:true, changed:false };
+  var existing = null;
+  for (var i=G._changeQueue.length-1;i>=0;i--) {
+    var row=G._changeQueue[i];
+    if (row && row.entity === entity && row.propertyName === propertyName && row.entityType === entityType) { existing=row; break; }
+  }
+  if (existing) existing.newValue = newValue;
+  else {
+    if (G._changeQueue.length >= REACTIVE_QUEUE_HARD_LIMIT) {
+      console.error('[ReactivePropertyQueue] hard capacity reached:', REACTIVE_QUEUE_HARD_LIMIT);
+      return { ok:false, code:'reactive-queue-capacity-exceeded' };
+    }
+    G._changeQueue.push({
+      entityType:entityType, entity:entity, propertyName:propertyName,
+      oldValue:oldValue, newValue:newValue, listeners:listeners.slice()
+    });
+  }
+  _scheduleReactiveQueue(G);
+  return { ok:true, changed:true, merged:!!existing };
 }
 
-// 处理变化队列（批量处理，避免重复计算）
-function processChangeQueue() {
-  if (!ensureReactiveQueueState()) return;
-  if (GM._changeQueue.length === 0) return;
-
-  var queue = GM._changeQueue.slice();
-  GM._changeQueue = [];
-
-  queue.forEach(function(change) {
-    change.listeners.forEach(function(listener) {
-      // 守护：存档恢复后 listener.callback 可能已经丢失（函数不序列化）
+// 独立消费响应式属性事件；从不读取或调用 ChangeQueue 的闭包队列。
+function processChangeQueue(targetGM) {
+  var G = ensureReactiveQueueState(targetGM);
+  if (!G || G._changeQueue.length === 0) return { ok:true, processedEvents:0, listenerFailures:0, pendingCount:0 };
+  var batch = G._changeQueue.splice(0, REACTIVE_QUEUE_BATCH_LIMIT);
+  var listenerFailures = 0;
+  batch.forEach(function(change) {
+    (Array.isArray(change.listeners) ? change.listeners : []).forEach(function(listener) {
       if (!listener || typeof listener.callback !== 'function') return;
       try {
         listener.callback(change.entity, change.propertyName, change.oldValue, change.newValue);
-      } catch (e) {
-        console.error('监听器执行失败:', e);
+      } catch (error) {
+        listenerFailures++;
+        console.error('[ReactivePropertyQueue] listener failed:', error);
       }
     });
   });
+  if (G._changeQueue.length > 0) _scheduleReactiveQueue(G);
+  return { ok:listenerFailures===0, processedEvents:batch.length, listenerFailures:listenerFailures, pendingCount:G._changeQueue.length };
 }
 
 // 创建响应式属性（自动触发监听）

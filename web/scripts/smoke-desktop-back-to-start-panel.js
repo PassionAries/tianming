@@ -1,10 +1,4 @@
 #!/usr/bin/env node
-/* eslint-env node */
-// smoke-desktop-back-to-start-panel.js
-// 回归:正式库剧本(projectOnly·无磁盘文件)从「选择游戏模式」页点「返回」
-// 不得再走 desktopStartScn 按文件名读盘(必报「加载失败」),应经
-// desktopBackToStartPanel 用内存 _pendingStartPayload 重建存档名面板。
-
 'use strict';
 
 const fs = require('fs');
@@ -13,41 +7,95 @@ const vm = require('vm');
 
 const ROOT = path.resolve(__dirname, '..');
 let passed = 0;
-
 function assert(cond, msg) {
-  if (!cond) { console.error('[smoke-desktop-back-to-start-panel] FAIL: ' + msg); process.exit(1); }
-  passed += 1;
+  if (!cond) throw new Error('[smoke-desktop-back-to-start-panel] ' + msg);
+  passed++;
 }
 
 const toasts = [];
-const elements = {};
-function el(id) {
-  if (!elements[id]) elements[id] = { id: id, value: '', style: {}, innerHTML: '', classList: { add() {}, remove() {}, contains() { return false; } } };
-  return elements[id];
+const elements = Object.create(null);
+const createdTags = [];
+let htmlWrites = 0;
+
+function makeNode(tag) {
+  let nodeId = '';
+  let text = '';
+  const node = {
+    nodeType: 1,
+    tagName: String(tag || 'div').toUpperCase(),
+    children: [],
+    parentNode: null,
+    style: {},
+    dataset: {},
+    className: '',
+    value: '',
+    listeners: Object.create(null),
+    appendChild(child) {
+      this.children.push(child);
+      if (child && typeof child === 'object') child.parentNode = this;
+      return child;
+    },
+    replaceChildren(...children) {
+      this.children.forEach((child) => { if (child && typeof child === 'object') child.parentNode = null; });
+      this.children = [];
+      children.forEach((child) => this.appendChild(child));
+    },
+    addEventListener(type, handler) {
+      if (!this.listeners[type]) this.listeners[type] = [];
+      this.listeners[type].push(handler);
+    },
+    click() { (this.listeners.click || []).forEach((handler) => handler({ currentTarget: this, target: this })); },
+    classList: { add() {}, remove() {}, contains() { return false; } }
+  };
+  Object.defineProperty(node, 'id', {
+    get() { return nodeId; },
+    set(value) { nodeId = String(value || ''); if (nodeId) elements[nodeId] = node; }
+  });
+  Object.defineProperty(node, 'textContent', {
+    get() { return text + node.children.map((child) => child && child.textContent || '').join(''); },
+    set(value) { text = String(value == null ? '' : value); if (text === '') node.children = []; }
+  });
+  Object.defineProperty(node, 'innerHTML', {
+    get() { return ''; },
+    set() { htmlWrites++; }
+  });
+  createdTags.push(node.tagName);
+  return node;
 }
 
+function findNodes(root, predicate, out = []) {
+  if (!root) return out;
+  if (predicate(root)) out.push(root);
+  (root.children || []).forEach((child) => findNodes(child, predicate, out));
+  return out;
+}
+
+elements['main-view'] = makeNode('main');
+elements.launch = makeNode('section');
+
 const ctx = {
-  console: console,
-  setTimeout: setTimeout,
-  clearTimeout: clearTimeout,
-  Date: Date,
-  JSON: JSON,
-  Promise: Promise,
+  console,
+  setTimeout,
+  clearTimeout,
+  Date,
+  JSON,
+  Promise,
   fetch: async () => ({ ok: false }),
   confirm: () => true,
   P: { scenarios: [{ id: 'proj-1', name: '测试正式库剧本', era: '测试纪元', role: '测试帝' }], conf: {}, _indices: {} },
   GM: {},
-  toast: (m) => toasts.push(String(m)),
+  toast: (message) => toasts.push(String(message)),
   _dbg: () => {},
-  _$: el,
+  _$: (id) => elements[id] || null,
   buildIndices: () => { ctx.P._indices = { scenarioById: {} }; },
-  findScenarioById: (id) => ctx.P.scenarios.find((s) => s && s.id === id) || null,
+  findScenarioById: (id) => ctx.P.scenarios.find((scenario) => scenario && scenario.id === id) || null,
   startGame: () => { ctx.__started = true; },
   document: {
-    getElementById: el,
+    getElementById: (id) => elements[id] || null,
     querySelector: () => null,
     addEventListener: () => {},
-    createElement: () => ({ style: {}, setAttribute() {}, appendChild() {} })
+    createElement: makeNode,
+    createTextNode(value) { const node = makeNode('#text'); node.nodeType = 3; node.textContent = value; return node; }
   }
 };
 ctx.window = ctx;
@@ -59,39 +107,32 @@ ctx.window.tianming = {
   deleteScenario: async () => ({ success: true })
 };
 vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-electron.js'), 'utf8'), ctx, { filename: 'tm-electron.js', timeout: 10000 });
 
-const code = fs.readFileSync(path.join(ROOT, 'tm-electron.js'), 'utf8');
-vm.runInContext(code, ctx, { filename: 'tm-electron.js', timeout: 10000 });
-
-// 1. 正式库剧本 → 存档名面板
 assert(typeof ctx.desktopStartProjectScn === 'function', 'desktopStartProjectScn should exist');
 assert(typeof ctx.desktopBackToStartPanel === 'function', 'desktopBackToStartPanel should exist');
 ctx.desktopStartProjectScn('proj-1');
-const panel1 = el('main-view').innerHTML;
-assert(panel1.indexOf('start-save-name') >= 0, 'project scenario should open save-name panel');
-assert(ctx._pendingStartPayload && ctx._pendingStartPayload.scn && ctx._pendingStartPayload.scn.id === 'proj-1',
-  'pending payload should hold the project scenario');
+assert(elements['start-save-name'] && elements['start-save-name'].tagName === 'INPUT', 'project scenario should render a real save-name input');
+assert(ctx._pendingStartPayload && ctx._pendingStartPayload.scn.id === 'proj-1', 'pending payload should hold the project scenario');
 
-// 2. 确认 → 模式选择面板·返回按钮必须走 desktopBackToStartPanel
-el('start-save-name').value = '测试存档';
+elements['start-save-name'].value = '测试存档';
 ctx.desktopConfirmStart();
-const panel2 = el('main-view').innerHTML;
-assert(panel2.indexOf('desktopBackToStartPanel()') >= 0, 'mode panel return button should call desktopBackToStartPanel');
-assert(panel2.indexOf('desktopStartScn(window._pendingStartPayload') < 0,
-  'mode panel return button must not reload from disk by filename');
+const modePanel = elements['main-view'].children[0];
+const backButtons = findNodes(modePanel, (node) => node.tagName === 'BUTTON' && node.textContent === '返回');
+assert(backButtons.length === 1, 'mode panel should contain one return button');
+assert((backButtons[0].listeners.click || []).length === 1, 'return button uses one closure event listener');
+assert(!Object.prototype.hasOwnProperty.call(backButtons[0], 'onclick'), 'return button does not use an inline onclick property');
 
-// 3. 返回 → 回到存档名面板·不读盘·无「加载失败」
 const diskBefore = ctx.__diskLoadAttempts || 0;
-ctx.desktopBackToStartPanel();
-const panel3 = el('main-view').innerHTML;
-assert(panel3.indexOf('start-save-name') >= 0, 'back should rebuild save-name panel');
+backButtons[0].click();
+assert(elements['start-save-name'] && elements['start-save-name'].value.indexOf('测试正式库剧本_') === 0, 'back should rebuild the save-name panel from memory');
 assert((ctx.__diskLoadAttempts || 0) === diskBefore, 'back must not attempt disk load');
-assert(!toasts.some((t) => t.indexOf('加载失败') >= 0), 'back must not toast 加载失败, got: ' + JSON.stringify(toasts));
+assert(!toasts.some((message) => message.includes('加载失败')), 'back must not report disk load failure');
 
-// 4. payload 缺失时 fallback showScnSelect 不抛
 ctx._pendingStartPayload = null;
 ctx.desktopBackToStartPanel();
-assert(true, 'fallback path should not throw');
+assert(true, 'missing payload fallback does not throw');
+assert(htmlWrites === 0, 'desktop flow never writes innerHTML');
+assert(!createdTags.includes('SCRIPT') && !createdTags.includes('IMG'), 'desktop flow does not create injected active tags');
 
 console.log('smoke-desktop-back-to-start-panel OK: ' + passed + ' assertions');
-process.exit(0);

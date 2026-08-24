@@ -362,6 +362,42 @@ async function main() {
   // D. 真跑 apply stage，确认 prompt 宣告的五个扩展字段不再被 dispatcher 丢弃。
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-endturn-apply-stages.js'), 'utf8'), ctx, { filename: 'tm-endturn-apply-stages.js' });
 
+  // D0. 主回合严格预检必须在真实 GM 写入前完成；修复只重做结构化失败项且最多两次。
+  ctx.GM = baseGM({ chars: [{ id: 'char-a', name: '甲臣', alive: true, loyalty: 40 }] });
+  const invalidWriteback = { shizhengji: '甲臣获赏。', char_updates: [{ characterId: 'ghost-char', updates: { loyalty: 60 } }] };
+  const beforePreflight = JSON.stringify(ctx.GM);
+  const rejectedPreflight = ctx.validateAIWriteBackBatch(invalidWriteback, { source: 'smoke' });
+  check(rejectedPreflight.ok === false && rejectedPreflight.failures.some((failure) => failure.code === 'character-not-found'), 'strict preflight returns a structured missing-character failure');
+  check(JSON.stringify(ctx.GM) === beforePreflight && invalidWriteback.char_updates[0].characterId === 'ghost-char', 'strict preflight mutates neither live GM nor the caller batch');
+
+  let repairCalls = 0;
+  ctx.callAI = async function targetedRepair() {
+    repairCalls++;
+    return JSON.stringify({
+      repairs: [{ field: 'char_updates', index: 0, item: { characterId: 'char-a', updates: { loyalty: 60 } } }],
+      semanticUnchanged: true,
+      narrativePatch: ''
+    });
+  };
+  const repaired = await ctx.TM.Endturn.AI.apply._validateAndRepairMainWriteback(invalidWriteback, { source: 'smoke' });
+  check(repaired.ok && repaired.repairAttempts === 1 && repairCalls === 1 && repaired.output.char_updates[0].characterId === 'char-a', 'one targeted repair fixes the structure and revalidates the whole batch');
+  check(invalidWriteback.char_updates[0].characterId === 'ghost-char' && JSON.stringify(ctx.GM) === beforePreflight, 'repair remains detached until the atomic applier is invoked');
+
+  repairCalls = 0;
+  ctx.callAI = async function ineffectiveRepair() {
+    repairCalls++;
+    return JSON.stringify({
+      repairs: [{ field: 'char_updates', index: 0, item: { characterId: 'still-ghost', updates: { loyalty: 60 } } }],
+      semanticUnchanged: true,
+      narrativePatch: ''
+    });
+  };
+  let terminalRepairError = null;
+  try { await ctx.TM.Endturn.AI.apply._validateAndRepairMainWriteback(invalidWriteback, { source: 'smoke-fail' }); }
+  catch (error) { terminalRepairError = error; }
+  check(terminalRepairError && terminalRepairError.code === 'ai-writeback-preflight-failed' && terminalRepairError.repairAttempts === 2 && repairCalls === 2, 'invalid repair is bounded to two attempts and returns a retryable turn-level error');
+  check(Array.isArray(terminalRepairError.writebackFailures) && terminalRepairError.writebackFailures[0].finalRollbackReason === 'preflight-failed' && JSON.stringify(ctx.GM) === beforePreflight, 'terminal repair failure preserves structured diagnostics and leaves world state untouched');
+
   // faction_succession 的主链 consumer 之后，post stage 必须补齐所有领袖镜像。
   ctx.GM = baseGM({
     chars: [{ name: '韩旷', alive: true }],
@@ -392,7 +428,8 @@ async function main() {
   check(captured.length >= 1, 'apply stage must invoke applyAITurnChanges');
   const dispatched = captured[0];
   ['tax_reforms', 'class_updates', 'region_updates', 'project_updates', 'anyPathChanges'].forEach((field) => {
-    check(dispatched[field] === p1[field] && dispatched[field].length === 1, 'dispatcher must forward ' + field);
+    check(dispatched[field] !== p1[field] && JSON.stringify(dispatched[field]) === JSON.stringify(p1[field]) && dispatched[field].length === 1,
+      'dispatcher must forward a detached but equivalent ' + field);
   });
 
   console.log('[smoke-ai-writeback-integrity] PASS assertions=' + assertions);

@@ -10,6 +10,9 @@ const ROOT = path.resolve(__dirname, '..');
 const sandbox = { window: {}, console, Date, Math, JSON };
 sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
+sandbox.validateAIWriteBackBatch = function(output) {
+  return { ok: true, output: JSON.parse(JSON.stringify(output)), failures: [] };
+}; // 本 smoke 聚焦 archive sink；严格预检本体由 smoke-ai-writeback-integrity 覆盖。
 vm.createContext(sandbox);
 
 function load(file) {

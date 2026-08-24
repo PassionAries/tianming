@@ -429,7 +429,7 @@
                         else p.holder = '';
                       }
                     });
-                    if (n.subs) _rmHolder(n.subs);
+                    if (Array.isArray(n.subs)) _rmHolder(n.subs);
                   });
                 })(GM.officeTree);
               }
@@ -1523,7 +1523,7 @@
                   var found = n.positions.find(function(p){ return p && p.name === sp.position; });
                   if (found && !targetPos) { targetPos = found; targetDept = n; }
                 }
-                if (n.subs) walk(n.subs, chain);
+                if (Array.isArray(n.subs)) walk(n.subs, chain);
               });
             })(GM.officeTree, '');
             if (!targetPos) {
@@ -2896,7 +2896,7 @@
                                   }
                                 });
                               }
-                              if (nd.subs) _findNewPos(nd.subs);
+                              if (Array.isArray(nd.subs)) _findNewPos(nd.subs);
                             });
                           })(GM.officeTree);
                         }
@@ -2936,7 +2936,7 @@
                                 }
                               });
                             }
-                            if (nd2.subs) _findTP(nd2.subs);
+                            if (Array.isArray(nd2.subs)) _findTP(nd2.subs);
                           });
                         })(GM.officeTree);
                         var _tch = findCharByName(_tPerson);
@@ -3037,7 +3037,7 @@
                     }
                   });
                 }
-                if (node.subs) walkTree(node.subs);
+                if (Array.isArray(node.subs)) walkTree(node.subs);
               });
             })(GM.officeTree);
             // 单一真相源:树无精确匹配的人事变动·仍把意图写入人物 officialTitle(派生据此落座/卸座)·
@@ -3073,7 +3073,7 @@
                       };
                       n.positions.push(_newPos);
                     }
-                    if (n.subs) _addPos(n.subs);
+                    if (Array.isArray(n.subs)) _addPos(n.subs);
                   });
                 })(GM.officeTree);
                 addEB('官制改革', oc.dept + '增设' + oc.position + (oc.reason ? '（' + oc.reason + '）' : ''));
@@ -3084,10 +3084,10 @@
                   (function _addSub(ns) {
                     ns.forEach(function(n) {
                       if (n.name === oc.dept) {
-                        if (!n.subs) n.subs = [];
+                        if (!Array.isArray(n.subs)) n.subs = [];
                         n.subs.push({ name: oc.newDept, desc: oc.reason||'', positions: [], subs: [], functions: [] });
                       }
-                      if (n.subs) _addSub(n.subs);
+                      if (Array.isArray(n.subs)) _addSub(n.subs);
                     });
                   })(GM.officeTree);
                   addEB('官制改革', oc.dept + '下增设' + oc.newDept);
@@ -3110,38 +3110,38 @@
                         });
                         n.positions = n.positions.filter(function(p) { return p.name !== oc.position; });
                       }
-                      if (n.subs) _delPos(n.subs);
+                      if (Array.isArray(n.subs)) _delPos(n.subs);
                     });
                   })(GM.officeTree);
                   addEB('官制改革', '裁撤' + oc.dept + oc.position);
                 } else {
                   // 裁撤部门
                   GM.officeTree = GM.officeTree.filter(function(d) { return d.name !== oc.dept; });
-                  (function _delSub(ns) { ns.forEach(function(n) { if (n.subs) { n.subs = n.subs.filter(function(s) { return s.name !== oc.dept; }); _delSub(n.subs); } }); })(GM.officeTree);
+                  (function _delSub(ns) { if (!Array.isArray(ns)) return; ns.forEach(function(n) { if (Array.isArray(n.subs)) { n.subs = n.subs.filter(function(s) { return s.name !== oc.dept; }); _delSub(n.subs); } }); })(GM.officeTree);
                   addEB('官制改革', '裁撤' + oc.dept + (oc.reason ? '（' + oc.reason + '）' : ''));
                 }
               } else if (_rd.indexOf('改名') >= 0 || _rd.indexOf('更名') >= 0) {
-                (function _rename(ns) { ns.forEach(function(n) { if (n.name === oc.dept && oc.newDept) n.name = oc.newDept; if (n.subs) _rename(n.subs); }); })(GM.officeTree);
+                (function _rename(ns) { if (!Array.isArray(ns)) return; ns.forEach(function(n) { if (n.name === oc.dept && oc.newDept) n.name = oc.newDept; if (Array.isArray(n.subs)) _rename(n.subs); }); })(GM.officeTree);
                 addEB('官制改革', oc.dept + '更名为' + (oc.newDept||''));
               } else if (_rd.indexOf('合并') >= 0) {
                 // 合并：将oc.dept合并入oc.newDept（职位转移）
                 var _srcDept = null;
-                (function _findSrc(ns) { ns.forEach(function(n) { if (n.name === oc.dept) _srcDept = n; if (n.subs) _findSrc(n.subs); }); })(GM.officeTree);
+                (function _findSrc(ns) { if (!Array.isArray(ns)) return; ns.forEach(function(n) { if (n.name === oc.dept) _srcDept = n; if (Array.isArray(n.subs)) _findSrc(n.subs); }); })(GM.officeTree);
                 if (_srcDept) {
                   (function _findDst(ns) {
                     ns.forEach(function(n) {
                       if (n.name === oc.newDept) {
                         if (!n.positions) n.positions = [];
                         (_srcDept.positions||[]).forEach(function(p) { n.positions.push(p); });
-                        if (!n.subs) n.subs = [];
-                        (_srcDept.subs||[]).forEach(function(s) { n.subs.push(s); });
+                        if (!Array.isArray(n.subs)) n.subs = [];
+                        (Array.isArray(_srcDept.subs) ? _srcDept.subs : []).forEach(function(s) { n.subs.push(s); });
                       }
-                      if (n.subs) _findDst(n.subs);
+                      if (Array.isArray(n.subs)) _findDst(n.subs);
                     });
                   })(GM.officeTree);
                   // 删除源部门
                   GM.officeTree = GM.officeTree.filter(function(d) { return d.name !== oc.dept; });
-                  (function _delMerged(ns) { ns.forEach(function(n) { if (n.subs) { n.subs = n.subs.filter(function(s) { return s.name !== oc.dept; }); _delMerged(n.subs); } }); })(GM.officeTree);
+                  (function _delMerged(ns) { if (!Array.isArray(ns)) return; ns.forEach(function(n) { if (Array.isArray(n.subs)) { n.subs = n.subs.filter(function(s) { return s.name !== oc.dept; }); _delMerged(n.subs); } }); })(GM.officeTree);
                   addEB('官制改革', oc.dept + '并入' + oc.newDept);
                 }
               } else if (_rd.indexOf('拆分') >= 0 && Array.isArray(oc.splitInto) && oc.splitInto.length > 0) {
@@ -3150,7 +3150,7 @@
                 (function _findSp(ns, parent) {
                   ns.forEach(function(n) {
                     if (n.name === oc.dept) { _splitSrc = n; _splitParent = parent; }
-                    if (n.subs) _findSp(n.subs, n);
+                    if (Array.isArray(n.subs)) _findSp(n.subs, n);
                   });
                 })(GM.officeTree, null);
                 if (_splitSrc) {
@@ -3203,14 +3203,14 @@
                           establishedCount: 1, vacancyCount: 1, actualHolders: []
                         });
                       }
-                      if (n.subs) _ap(n.subs);
+                      if (Array.isArray(n.subs)) _ap(n.subs);
                     }); })(GM.officeTree);
                     _restructureCount++;
                   } else if (atom.action === '裁撤' && subOC.position && subOC.dept) {
-                    (function _dp(ns) { ns.forEach(function(n) { if (n.name === subOC.dept && n.positions) n.positions = n.positions.filter(function(p) { return p.name !== subOC.position; }); if (n.subs) _dp(n.subs); }); })(GM.officeTree);
+                    (function _dp(ns) { if (!Array.isArray(ns)) return; ns.forEach(function(n) { if (n.name === subOC.dept && n.positions) n.positions = n.positions.filter(function(p) { return p.name !== subOC.position; }); if (Array.isArray(n.subs)) _dp(n.subs); }); })(GM.officeTree);
                     _restructureCount++;
                   } else if (atom.action === '改名' && subOC.dept && subOC.newDept) {
-                    (function _rn(ns) { ns.forEach(function(n) { if (n.name === subOC.dept) n.name = subOC.newDept; if (n.subs) _rn(n.subs); }); })(GM.officeTree);
+                    (function _rn(ns) { if (!Array.isArray(ns)) return; ns.forEach(function(n) { if (n.name === subOC.dept) n.name = subOC.newDept; if (Array.isArray(n.subs)) _rn(n.subs); }); })(GM.officeTree);
                     _restructureCount++;
                   }
                 });
@@ -3235,7 +3235,7 @@
                       }
                     });
                   }
-                  if (n.subs) _recHistory(n.subs);
+                  if (Array.isArray(n.subs)) _recHistory(n.subs);
                 });
               })(GM.officeTree);
             }
@@ -3280,7 +3280,7 @@
             if (!oa.dept) return;
             // 找到对应部门
             var _targetDept = null;
-            (function _fd(ns) { ns.forEach(function(n) { if (n.name === oa.dept) _targetDept = n; if (n.subs) _fd(n.subs); }); })(GM.officeTree);
+            (function _fd(ns) { if (!Array.isArray(ns)) return; ns.forEach(function(n) { if (n.name === oa.dept) _targetDept = n; if (Array.isArray(n.subs)) _fd(n.subs); }); })(GM.officeTree);
             if (!_targetDept) return;
             // actualCount变动（递补/离职）
             if (oa.actualCount_delta) {
@@ -3664,7 +3664,7 @@
                         }
                       });
                     }
-                    if (nd.subs) _syncOffPos(nd.subs);
+                    if (Array.isArray(nd.subs)) _syncOffPos(nd.subs);
                   });
                 })(GM.officeTree);
               }
@@ -3680,7 +3680,7 @@
                   (function _clrOffPos(nodes) {
                     nodes.forEach(function(nd) {
                       if (nd.positions) nd.positions.forEach(function(p) { if (p.name === _targetDiv.officialPosition && p.holder === _removedGov) p.holder = ''; });
-                      if (nd.subs) _clrOffPos(nd.subs);
+                      if (Array.isArray(nd.subs)) _clrOffPos(nd.subs);
                     });
                   })(GM.officeTree);
                 }

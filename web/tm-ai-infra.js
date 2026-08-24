@@ -584,11 +584,12 @@ async function _aiFetchWithRetryInner(url, body, signal, opts) {
   for (var attempt = 0; attempt <= maxRetries; attempt++) {
     var ctrl = new AbortController();
     var timedOut = false;
-    var aborter = function() { timedOut = true; ctrl.abort(); };
-    var timer = setTimeout(aborter, timeoutMs);
+    var timeoutAborter = function() { timedOut = true; ctrl.abort(); };
+    var externalAborter = function() { ctrl.abort(); };
+    var timer = setTimeout(timeoutAborter, timeoutMs);
     if (signal) {
       if (signal.aborted) { clearTimeout(timer); throw new Error('Aborted'); }
-      signal.addEventListener('abort', aborter);
+      signal.addEventListener('abort', externalAborter);
     }
     try {
       var resp = await fetch(url, {
@@ -688,6 +689,9 @@ async function _aiFetchWithRetryInner(url, body, signal, opts) {
         if (!e.lastRaw) e.lastRaw = _aiLastRaw;
         throw e;
       }
+    } finally {
+      clearTimeout(timer);
+      if (signal && typeof signal.removeEventListener === 'function') signal.removeEventListener('abort', externalAborter);
     }
   }
   throw lastError || new Error('_aiFetchWithRetry: 重试耗尽');
@@ -932,7 +936,8 @@ async function callAIWithTools(prompt, tools, opts) {
     var ctrl = new AbortController();
     var timer = setTimeout(function() { ctrl.abort(); }, (opts.timeoutMs != null ? opts.timeoutMs : 180000));
     if (opts.signal && opts.signal.aborted) { clearTimeout(timer); throw new Error('Aborted'); } // 已置位的 signal 监听器永不触发·排队期被取消的请求曾照常发出白烧token(2026-07-04 审查定罪)
-    if (opts.signal) opts.signal.addEventListener('abort', function() { ctrl.abort(); });
+    var onExternalAbort = function() { ctrl.abort(); };
+    if (opts.signal) opts.signal.addEventListener('abort', onExternalAbort);
     try {
       var resp = await fetch(url, { method: 'POST', headers: headers, body: JSON.stringify(body), signal: ctrl.signal });
       if (!resp.ok) {
@@ -947,6 +952,7 @@ async function callAIWithTools(prompt, tools, opts) {
       return await resp.json();
     } finally {
       clearTimeout(timer);
+      if (opts.signal && typeof opts.signal.removeEventListener === 'function') opts.signal.removeEventListener('abort', onExternalAbort);
     }
   }
   try {
@@ -1205,7 +1211,8 @@ async function _callAIMessagesStreamDirect(messages, maxTok, opts) {
   var ctrl = new AbortController();
   var timer = setTimeout(function() { ctrl.abort(); }, (opts.timeoutMs != null ? opts.timeoutMs : 180000));
   if (opts.signal && opts.signal.aborted) { clearTimeout(timer); throw new Error('Aborted'); } // 同 _toolFetchQueued·已置位预检(2026-07-04 审查定罪)
-  if (opts.signal) opts.signal.addEventListener('abort', function() { ctrl.abort(); });
+  var onExternalAbort = function() { ctrl.abort(); };
+  if (opts.signal) opts.signal.addEventListener('abort', onExternalAbort);
   var _scaledTok = _finalizedBody
     ? maxTok
     : Math.round((maxTok || 500) * ((typeof getCompressionParams === 'function') ? Math.max(1.0, getCompressionParams().scale) : 1.0));
@@ -1279,7 +1286,10 @@ async function _callAIMessagesStreamDirect(messages, maxTok, opts) {
     }
     if (opts.onDone) opts.onDone(full);
     return full;
-  } finally { clearTimeout(timer); }
+  } finally {
+    clearTimeout(timer);
+    if (opts.signal && typeof opts.signal.removeEventListener === 'function') opts.signal.removeEventListener('abort', onExternalAbort);
+  }
 }
 
 async function callAIMessagesStream(messages, maxTok, opts) {
@@ -2094,12 +2104,8 @@ function calcDateFromTurn(turn){
   G.year = Number(di.adYear); G.month = isFinite(Number(di.solarMonth)) ? Number(di.solarMonth) : 1; G.day = isFinite(Number(di.solarDay)) ? Number(di.solarDay) : 1; return { year: G.year, month: G.month, day: G.day };
 }
 
-/**
- * 获取回合时间显示（主显示函数）
- * @returns {string} HTML字符串，包含tooltip
- */
-function getTS(turn){
-  if(!P.time) return '第'+turn+'回合';
+function _tmTimeDisplayParts(turn){
+  if(!P.time) return { main:'第'+turn+'回合', tip:'' };
   var di=calcDateFromTurn(turn);
   var t=P.time;
 
@@ -2134,7 +2140,28 @@ function getTS(turn){
   // 干支年
   tipParts.push(di.gzYearStr+'年');
 
-  return '<span title="'+tipParts.join(' | ')+'" style="cursor:help;border-bottom:1px dotted var(--gold-d);">'+main+'</span>';
+  return { main:main, tip:tipParts.join(' | ') };
+}
+
+function _tmEscapeTimeHtml(value, attribute){
+  var text=String(value==null?'':value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return attribute?text.replace(/"/g,'&quot;').replace(/'/g,'&#39;'):text;
+}
+
+/** 兼容旧渲染器的安全 HTML；新代码优先使用 createTSElement/getTSText。 */
+function getTS(turn){
+  var parts=_tmTimeDisplayParts(turn);
+  return '<span title="'+_tmEscapeTimeHtml(parts.tip,true)+'" style="cursor:help;border-bottom:1px dotted var(--gold-d);">'+_tmEscapeTimeHtml(parts.main,false)+'</span>';
+}
+
+function createTSElement(turn){
+  var parts=_tmTimeDisplayParts(turn);
+  var span=document.createElement('span');
+  span.textContent=parts.main;
+  span.title=parts.tip;
+  span.style.cursor='help';
+  span.style.borderBottom='1px dotted var(--gold-d)';
+  return span;
 }
 
 /**
@@ -2142,17 +2169,7 @@ function getTS(turn){
  * @returns {string}
  */
 function getTSText(turn){
-  if(!P.time) return '第'+turn+'回合';
-  var di=calcDateFromTurn(turn);
-  var t=P.time;
-  var main='';
-  if(di.eraInfo) main+=di.eraInfo.era+di.eraInfo.ryStr;
-  else { var ay=Math.abs(di.adYear); main+=(di.adYear<0?(t.prefix||'')+ay:ay)+(t.suffix||''); }
-  var _mn2=lunarMonthName(di.lunarMonth);
-  if(di.lunarMonth===11||di.lunarMonth===12) main+=_mn2;
-  else main+=di.season+_mn2;
-  main+=di.gzDayStr+'日';
-  return main;
+  return _tmTimeDisplayParts(turn).main;
 }
 function getSE(turn){var si=(P.time.startS+(turn-1))%(P.time.seasons||[]).length;return(P.time.sEffects||[])[si]||"";}
 
@@ -2389,7 +2406,22 @@ function _buildLongTermActionsDigest() {
   }
   return lines.length > 0 ? lines.join('\n') : '';
 }
-function renderEraNamesList(){var t=P.time;var el=_$("t-era-list");if(!el)return;var eraList=(t.eraNames||[]);if(!eraList.length){el.innerHTML="<div style=\"color:var(--txt-d);font-size:12px;\">\u6682\u65E0</div>";return;}el.innerHTML=eraList.map(function(e,i){return "<div style=\"display:flex;gap:6px;align-items:center;margin-bottom:3px;\">"+"<input id=\"t-era-n-"+i+"\" value=\""+((e&&e.name)||"")+"\" placeholder=\"\u5E74\u53F7\u540D\" style=\"width:80px\">"+"<input type=\"number\" id=\"t-era-y-"+i+"\" value=\""+((e&&e.startYear)||0)+"\" placeholder=\"\u5E74\" style=\"width:60px\">"+"<input type=\"number\" id=\"t-era-m-"+i+"\" value=\""+((e&&e.startMonth)||1)+"\" placeholder=\"\u6708\" style=\"width:44px\">"+"<input type=\"number\" id=\"t-era-d-"+i+"\" value=\""+((e&&e.startDay)||1)+"\" placeholder=\"\u65e5\" style=\"width:44px\">"+"<button class=\"bd bsm\" onclick=\"_eraUpd("+i+")\">\u4FDD</button>"+"<button class=\"bd bsm\" onclick=\"_eraDel("+i+")\">\u5220</button>"+"</div>";}).join("");}window._eraAdd=function(){if(!P.time.eraNames)P.time.eraNames=[];P.time.eraNames.push({name:"",startYear:P.time.year,startMonth:1,startDay:1});renderEraNamesList();};window._eraDel=function(i){if(!P.time.eraNames)return;P.time.eraNames.splice(i,1);renderEraNamesList();};window._eraUpd=function(i){var e=P.time.eraNames[i];if(!e)return;var n=document.getElementById("t-era-n-"+i);if(n)e.name=n.value;var y=document.getElementById("t-era-y-"+i);if(y)e.startYear=+y.value||P.time.year;var m=document.getElementById("t-era-m-"+i);if(m)e.startMonth=+m.value||1;var d=document.getElementById("t-era-d-"+i);if(d)e.startDay=+d.value||1;saveT();};function saveT(){var t=P.time;var ids=["t-year","t-prefix","t-suffix","t-per-turn","t-seasons","t-start-s","t-reign","t-reign-y","t-display","t-template","t-start-month","t-start-day"];ids.forEach(function(id){var el=_$(id);if(!el)return;var v=el.value;if(id==="t-year")t.year=+v;else if(id==="t-prefix")t.prefix=v;else if(id==="t-suffix")t.suffix=v;else if(id==="t-per-turn")t.perTurn=v;else if(id==="t-seasons")t.seasons=v.split(",").map(function(s){return s.trim();});else if(id==="t-start-s")t.startS=+v;else if(id==="t-reign")t.reign=v;else if(id==="t-reign-y")t.reignY=+v;else if(id==="t-display")t.display=v;else if(id==="t-template")t.template=v;else if(id==="t-start-month")t.startMonth=+v||1;else if(id==="t-start-day")t.startDay=+v||1;});var egz=_$("t-enable-ganzhi");if(egz)t.enableGanzhi=egz.checked;var egzd=_$("t-enable-ganzhi-day");if(egzd)t.enableGanzhiDay=egzd.checked;var een=_$("t-enable-era-name");if(een)t.enableEraName=een.checked;toast("\u5DF2\u4FDD\u5B58");}
+function renderEraNamesList(){
+  var t=P.time;var el=_$("t-era-list");if(!el)return;var eraList=Array.isArray(t.eraNames)?t.eraNames:[];
+  if(!eraList.length){var empty=document.createElement('div');empty.style.cssText='color:var(--txt-d);font-size:12px';empty.textContent='暂无';if(el.replaceChildren)el.replaceChildren(empty);else{el.textContent='';el.appendChild(empty);}return;}
+  var rows=eraList.map(function(e,i){
+    e=e||{};var row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;margin-bottom:3px';
+    function input(id,type,value,placeholder,width){var node=document.createElement('input');node.id=id;node.type=type;node.value=String(value);node.placeholder=placeholder;node.style.width=width;row.appendChild(node);}
+    input('t-era-n-'+i,'text',e.name==null?'':e.name,'年号名','80px');
+    input('t-era-y-'+i,'number',Number.isFinite(Number(e.startYear))?Number(e.startYear):0,'年','60px');
+    input('t-era-m-'+i,'number',Number.isFinite(Number(e.startMonth))?Number(e.startMonth):1,'月','44px');
+    input('t-era-d-'+i,'number',Number.isFinite(Number(e.startDay))?Number(e.startDay):1,'日','44px');
+    var save=document.createElement('button');save.type='button';save.className='bd bsm';save.textContent='保';save.addEventListener('click',function(){window._eraUpd(i);});row.appendChild(save);
+    var del=document.createElement('button');del.type='button';del.className='bd bsm';del.textContent='删';del.addEventListener('click',function(){window._eraDel(i);});row.appendChild(del);return row;
+  });
+  if(el.replaceChildren)el.replaceChildren.apply(el,rows);else{el.textContent='';rows.forEach(function(row){el.appendChild(row);});}
+}
+window._eraAdd=function(){if(!P.time.eraNames)P.time.eraNames=[];P.time.eraNames.push({name:"",startYear:P.time.year,startMonth:1,startDay:1});renderEraNamesList();};window._eraDel=function(i){if(!P.time.eraNames)return;P.time.eraNames.splice(i,1);renderEraNamesList();};window._eraUpd=function(i){var e=P.time.eraNames[i];if(!e)return;var n=document.getElementById("t-era-n-"+i);if(n)e.name=n.value;var y=document.getElementById("t-era-y-"+i);if(y)e.startYear=+y.value||P.time.year;var m=document.getElementById("t-era-m-"+i);if(m)e.startMonth=+m.value||1;var d=document.getElementById("t-era-d-"+i);if(d)e.startDay=+d.value||1;saveT();};function saveT(){var t=P.time;var ids=["t-year","t-prefix","t-suffix","t-per-turn","t-seasons","t-start-s","t-reign","t-reign-y","t-display","t-template","t-start-month","t-start-day"];ids.forEach(function(id){var el=_$(id);if(!el)return;var v=el.value;if(id==="t-year")t.year=+v;else if(id==="t-prefix")t.prefix=v;else if(id==="t-suffix")t.suffix=v;else if(id==="t-per-turn")t.perTurn=v;else if(id==="t-seasons")t.seasons=v.split(",").map(function(s){return s.trim();});else if(id==="t-start-s")t.startS=+v;else if(id==="t-reign")t.reign=v;else if(id==="t-reign-y")t.reignY=+v;else if(id==="t-display")t.display=v;else if(id==="t-template")t.template=v;else if(id==="t-start-month")t.startMonth=+v||1;else if(id==="t-start-day")t.startDay=+v||1;});var egz=_$("t-enable-ganzhi");if(egz)t.enableGanzhi=egz.checked;var egzd=_$("t-enable-ganzhi-day");if(egzd)t.enableGanzhiDay=egzd.checked;var een=_$("t-enable-era-name");if(een)t.enableEraName=een.checked;toast("已保存");}
 function loadT(){var t=P.time;var map={"t-year":t.year,"t-prefix":t.prefix||"","t-suffix":t.suffix||"","t-per-turn":t.perTurn||"1s","t-seasons":(t.seasons||[]).join(","),"t-start-s":t.startS||0,"t-reign":t.reign||"","t-reign-y":t.reignY||1,"t-display":t.display||"year_season","t-template":t.template||"","t-start-month":t.startMonth||1,"t-start-day":t.startDay||1};Object.keys(map).forEach(function(id){var el=_$(id);if(el)el.value=map[id];});var egz=_$("t-enable-ganzhi");if(egz)egz.checked=!!t.enableGanzhi;var egzd=_$("t-enable-ganzhi-day");if(egzd)egzd.checked=!!t.enableGanzhiDay;var een=_$("t-enable-era-name");if(een)een.checked=!!t.enableEraName;renderEraNamesList();}
 
 // ============================================================

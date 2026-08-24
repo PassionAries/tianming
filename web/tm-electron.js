@@ -46,8 +46,62 @@ if(window.tianming&&window.tianming.isDesktop){
     }
   }
 
-  function _desktopHtmlArg(value){
-    return JSON.stringify(value == null ? '' : value).replace(/"/g, '&quot;');
+  function _desktopElement(tag, className, text){
+    var el = document.createElement(tag);
+    if (className) el.className = className;
+    if (text !== undefined && text !== null) el.textContent = String(text);
+    return el;
+  }
+
+  function _desktopReplaceChildren(parent){
+    var children = Array.prototype.slice.call(arguments, 1);
+    if (parent && typeof parent.replaceChildren === 'function') {
+      parent.replaceChildren.apply(parent, children);
+      return;
+    }
+    if (!parent) return;
+    parent.textContent = '';
+    children.forEach(function(child){ parent.appendChild(child); });
+  }
+
+  function _desktopButton(label, className, handler){
+    var button = _desktopElement('button', className, label);
+    button.type = 'button';
+    button.addEventListener('click', handler);
+    return button;
+  }
+
+  function _desktopPanel(title, subtitle){
+    var panel = _desktopElement('div', 'pnl');
+    var head = _desktopElement('div', 'pnl-hd');
+    var titleWrap = subtitle ? _desktopElement('div') : head;
+    titleWrap.appendChild(_desktopElement('div', 'pnl-t', title));
+    if (subtitle) titleWrap.appendChild(_desktopElement('div', 'pnl-sub', subtitle));
+    if (subtitle) head.appendChild(titleWrap);
+    panel.appendChild(head);
+    return panel;
+  }
+
+  function _desktopFooter(panel){
+    var footer = _desktopElement('div', 'rw pnl-ft');
+    panel.appendChild(footer);
+    return footer;
+  }
+
+  function _desktopScenarioStartPanel(scn, name, defName){
+    var panel = _desktopPanel('开始游戏', '剧本：' + String(scn.name || name || scn.id || ''));
+    var field = _desktopElement('div', 'fd full');
+    field.style.marginBottom = '1.2rem';
+    field.appendChild(_desktopElement('label', '', '存档名（可修改）'));
+    var input = _desktopElement('input');
+    input.id = 'start-save-name';
+    input.value = String(defName || '');
+    field.appendChild(input);
+    panel.appendChild(field);
+    var footer = _desktopFooter(panel);
+    footer.appendChild(_desktopButton('▶ 开始', 'bt bp', function(){ window.desktopConfirmStart(); }));
+    footer.appendChild(_desktopButton('返回', 'bt bs', function(){ showScnSelect(); }));
+    return panel;
   }
 
   function _normalizeDesktopScenario(scn, fallbackName){
@@ -119,17 +173,7 @@ if(window.tianming&&window.tianming.isDesktop){
     var pad=function(n){return String(n).padStart(2,'0');};
     var defName=(scn.name||name||scn.id)+'_'+pad(now.getMonth()+1)+pad(now.getDate())+'_'+pad(now.getHours())+pad(now.getMinutes());
     window._pendingStartPayload={scn:scn,origName:name||scn.name||scn.id};
-    var html='<div class="pnl">';
-    html+='<div class="pnl-hd"><div><div class="pnl-t">\u5f00\u59cb\u6e38\u620f</div>';
-    html+='<div class="pnl-sub">\u5267\u672c\uff1a'+(scn.name||name||scn.id)+'</div></div></div>';
-    html+='<div class="fd full" style="margin-bottom:1.2rem">';
-    html+='<label>\u5b58\u6863\u540d\uff08\u53ef\u4fee\u6539\uff09</label>';
-    html+='<input id="start-save-name" value="'+defName+'"></div>';
-    html+='<div class="pnl-ft">';
-    html+='<button class="bt bp" onclick="desktopConfirmStart()">\u25b6 \u5f00\u59cb</button>';
-    html+='<button class="bt bs" onclick="showScnSelect()">\u8fd4\u56de</button>';
-    html+='</div></div>';
-    showPanel(html);
+    showPanel(_desktopScenarioStartPanel(scn, name, defName));
   }
 
   // --- 主菜单显示/隐藏辅助 ---
@@ -143,12 +187,15 @@ if(window.tianming&&window.tianming.isDesktop){
   function showMain(){
     var hero = _getLaunchHero(); if (hero) hero.style.display='';
     var mv = document.getElementById('main-view');
-    if (mv) { mv.style.display='none'; mv.innerHTML=''; }
+    if (mv) { mv.style.display='none'; _desktopReplaceChildren(mv); }
   }
-  function showPanel(html){
+  function showPanel(content){
     var hero = _getLaunchHero(); if (hero) hero.style.display='none';
     var mv = document.getElementById('main-view');
-    if (mv) { mv.style.display='block'; mv.innerHTML=html; }
+    if (mv) {
+      mv.style.display='block';
+      _desktopReplaceChildren(mv, typeof content === 'string' ? document.createTextNode(content) : content);
+    }
     var lc = document.getElementById('launch'); if (lc) lc.style.display='flex';
   }
 
@@ -157,27 +204,28 @@ if(window.tianming&&window.tianming.isDesktop){
     await _ensureOfficialScenarioFiles();
     var list=await window.tianming.listScenarios();
     var files=list.success?list.files:[];
-    var html='<div class="pnl">';
-    html+='<div class="pnl-hd"><span class="pnl-t">剧本管理</span></div>';
+    var panel=_desktopPanel('剧本管理');
     if(!files.length){
-      html+='<p class="pnl-empty">暂无剧本，请先新建。</p>';
+      panel.appendChild(_desktopElement('p', 'pnl-empty', '暂无剧本，请先新建。'));
     }else{
-      html+='<div class="pnl-list">';
+      var listEl=_desktopElement('div', 'pnl-list');
       files.forEach(function(f){
-        html+='<div class="pnl-row cd">';
-        html+='<div class="pnl-row-info"><span class="pnl-row-name">'+f.name+'</span><span class="pnl-row-meta">'+f.modifiedStr+'</span></div>';
-        html+='<div class="rw" style="gap:0.4rem">';
-        html+='<button class="bt bs bsm" onclick="desktopEnterScn('+JSON.stringify(f.name).replace(/"/g,'&quot;')+')">编辑</button>';
-        html+='<button class="bt bd bsm" onclick="desktopDeleteScn('+JSON.stringify(f.name).replace(/"/g,'&quot;')+')">删除</button>';
-        html+='</div></div>';
+        var row=_desktopElement('div', 'pnl-row cd');
+        var info=_desktopElement('div', 'pnl-row-info');
+        info.appendChild(_desktopElement('span', 'pnl-row-name', f && f.name));
+        info.appendChild(_desktopElement('span', 'pnl-row-meta', f && f.modifiedStr));
+        row.appendChild(info);
+        var actions=_desktopElement('div', 'rw'); actions.style.gap='0.4rem';
+        actions.appendChild(_desktopButton('编辑', 'bt bs bsm', function(){ window.desktopEnterScn(f.name); }));
+        actions.appendChild(_desktopButton('删除', 'bt bd bsm', function(){ window.desktopDeleteScn(f.name); }));
+        row.appendChild(actions); listEl.appendChild(row);
       });
-      html+='</div>';
+      panel.appendChild(listEl);
     }
-    html+='<div class="rw pnl-ft">';
-    html+='<button class="bt bp" onclick="createNewScn()">＋ 新建剧本</button>';
-    html+='<button class="bt bs" onclick="showMain()">返回</button>';
-    html+='</div></div>';
-    showPanel(html);
+    var footer=_desktopFooter(panel);
+    footer.appendChild(_desktopButton('＋ 新建剧本', 'bt bp', function(){ createNewScn(); }));
+    footer.appendChild(_desktopButton('返回', 'bt bs', showMain));
+    showPanel(panel);
   };
 
   window.desktopEnterScn=async function(name){
@@ -237,66 +285,35 @@ if(window.tianming&&window.tianming.isDesktop){
     var list=await window.tianming.listScenarios();
     var files=list.success?list.files:[];
     files=files.concat(_projectScenarioListItems(files));
-    var html='<div class="pnl">';
-    html+='<div class="pnl-hd"><span class="pnl-t">选择剧本</span></div>';
+    var panel=_desktopPanel('选择剧本');
     if(!files.length){
-      html+='<p class="pnl-empty">暂无剧本。</p>';
+      panel.appendChild(_desktopElement('p', 'pnl-empty', '暂无剧本。'));
     }else{
-      html+='<div class="pnl-list">';
+      var listEl=_desktopElement('div', 'pnl-list');
       files.forEach(function(f){
         var label = _scenarioSourceLabel(f);
-        var startCall = f.projectOnly ? 'desktopStartProjectScn('+_desktopHtmlArg(f.id)+')' : 'desktopStartScn('+_desktopHtmlArg(f.name)+')';
-        html+='<div class="pnl-row cd">';
-        html+='<div class="pnl-row-info"><span class="pnl-row-name">'+(f.title||f.name||f.id)+'</span><span class="pnl-row-meta">'+(label?label+' · ':'')+(f.modifiedStr||'')+'</span></div>';
-        html+='<button class="bt bp bsm" onclick="'+startCall+'">开始</button>';
-        html+='</div>';
+        var row=_desktopElement('div', 'pnl-row cd');
+        row.dataset.scenarioId=String(f.id || '');
+        var info=_desktopElement('div', 'pnl-row-info');
+        info.appendChild(_desktopElement('span', 'pnl-row-name', f.title||f.name||f.id));
+        info.appendChild(_desktopElement('span', 'pnl-row-meta', (label?label+' · ':'')+(f.modifiedStr||'')));
+        row.appendChild(info);
+        row.appendChild(_desktopButton('开始', 'bt bp bsm', function(){
+          if (f.projectOnly) window.desktopStartProjectScn(f.id);
+          else window.desktopStartScn(f.name);
+        }));
+        listEl.appendChild(row);
       });
-      html+='</div>';
+      panel.appendChild(listEl);
     }
-    html+='<div class="rw pnl-ft">';
-    html+='<button class="bt bs" onclick="showMain()">返回</button>';
-    html+='</div></div>';
-    showPanel(html);
+    _desktopFooter(panel).appendChild(_desktopButton('返回', 'bt bs', showMain));
+    showPanel(panel);
   };
 
   window.desktopStartScn=async function(name){
     var r=await _loadScenarioWithHotFallback(name);
     if(!r.success){toast('加载失败: '+(r.error||''));return;}
-    var scn=r.data;
-    // 生成稳定ID：用文件名生成确定性id（避免重复）
-    if(!scn.id){scn.id='scn_file_'+name.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g,'_');}
-    // 兼容editor格式字段 → game格式字段
-    if(!scn.era && scn.dynasty) scn.era = scn.dynasty;
-    if(!scn.role && scn.emperor) scn.role = scn.emperor;
-    if(!scn.background && scn.overview) scn.background = scn.overview;
-    if(!scn.desc && scn.overview) scn.desc = scn.overview;
-    // 预先添加到 P.scenarios 并建立索引
-    var existing=P.scenarios.findIndex(function(s){return s.id===scn.id;});
-    if(existing>=0){P.scenarios[existing]=scn;}else{P.scenarios.push(scn);}
-    // 展开数组数据到 P 顶层（供 doActualStart 使用）
-    ['characters','factions','parties','classes','items','relations'].forEach(function(key){
-      if(scn[key]&&scn[key].length>0){
-        P[key]=(P[key]||[]).filter(function(it){return it.sid!==scn.id;});
-        scn[key].forEach(function(it){it.sid=scn.id;});
-        P[key]=P[key].concat(scn[key]);
-      }
-    });
-    if (typeof buildIndices === 'function') buildIndices();
-    var now=new Date();
-    var pad=function(n){return String(n).padStart(2,'0');};
-    var defName=(scn.name||name)+'_'+pad(now.getMonth()+1)+pad(now.getDate())+'_'+pad(now.getHours())+pad(now.getMinutes());
-    window._pendingStartPayload={scn:scn,origName:name};
-    var html='<div class="pnl">';
-    html+='<div class="pnl-hd"><div><div class="pnl-t">\u5f00\u59cb\u6e38\u620f</div>';
-    html+='<div class="pnl-sub">\u5267\u672c\uff1a'+(scn.name||name)+'</div></div></div>';
-    html+='<div class="fd full" style="margin-bottom:1.2rem">';
-    html+='<label>\u5b58\u6863\u540d\uff08\u53ef\u4fee\u6539\uff09</label>';
-    html+='<input id="start-save-name" value="'+defName+'"></div>';
-    html+='<div class="pnl-ft">';
-    html+='<button class="bt bp" onclick="desktopConfirmStart()">\u25b6 \u5f00\u59cb</button>';
-    html+='<button class="bt bs" onclick="showScnSelect()">\u8fd4\u56de</button>';
-    html+='</div></div>';
-    showPanel(html);
+    _prepareDesktopStartScenario(r.data, name);
   };
 
   window.desktopStartProjectScn=function(id){
@@ -320,38 +337,31 @@ if(window.tianming&&window.tianming.isDesktop){
     if(!saveName){toast('请输入存档名');return;}
     window._pendingStartPayload.saveName=saveName;
     // Show mode selection panel
-    var html='<div class="pnl">';
-    html+='<div class="pnl-hd"><div><div class="pnl-t">选择游戏模式</div>';
-    html+='<div class="pnl-sub">存档：'+saveName+'</div></div></div>';
-    html+='<div style="padding:0.5rem 0 1rem">';
-    html+='<div class="mode-opt" id="mo-yanyi" onclick="_pendingSelectMode(this,\'yanyi\')" style="border:2px solid var(--gold);border-radius:8px;padding:0.75rem 1rem;margin-bottom:0.6rem;cursor:pointer;background:rgba(200,160,60,0.12)">';
-    html+='<div style="color:var(--gold);font-weight:700;font-size:1rem">演义模式</div>';
-    html+='<div style="color:var(--txt-d);font-size:0.82rem;margin-top:0.25rem">小说化演绎，AI可自由发挥，情节更富戏剧性</div>';
-    html+='<div style="color:var(--txt-d);font-size:0.75rem;margin-top:0.25rem">• 历史名臣：中国古代全部历史名臣都有概率出现</div></div>';
-    html+='<div class="mode-opt" id="mo-light" onclick="_pendingSelectMode(this,\'light_hist\')" style="border:2px solid var(--bdr);border-radius:8px;padding:0.75rem 1rem;margin-bottom:0.6rem;cursor:pointer">';
-    html+='<div style="color:var(--txt-s);font-weight:700;font-size:1rem">轻度史实</div>';
-    html+='<div style="color:var(--txt-d);font-size:0.82rem;margin-top:0.25rem">大事件遵历史，细节可演绎，平衡历史与趣味</div>';
-    html+='<div style="color:var(--txt-d);font-size:0.75rem;margin-top:0.25rem">• 历史名臣：仅出现剧本开始年份前后200年内的历史名臣</div>';
-    html+='<div style="color:var(--txt-d);font-size:0.75rem;margin-top:0.25rem">• 每回合推演后进行历史检查，校正明显史实错误</div></div>';
-    html+='<div class="mode-opt" id="mo-strict" onclick="_pendingSelectMode(this,\'strict_hist\')" style="border:2px solid var(--bdr);border-radius:8px;padding:0.75rem 1rem;cursor:pointer">';
-    html+='<div style="color:var(--txt-s);font-weight:700;font-size:1rem">严格史实</div>';
-    html+='<div style="color:var(--txt-d);font-size:0.82rem;margin-top:0.25rem">严格遵守史实，不得改变历史走向</div>';
-    html+='<div style="color:var(--txt-d);font-size:0.75rem;margin-top:0.25rem">• 历史名臣：仅出现剧本开始年份前后100年内的历史名臣</div>';
-    html+='<div style="color:var(--txt-d);font-size:0.75rem;margin-top:0.25rem">• 每回合推演前检索参考数据库，强制遵循史实</div></div>';
-    html+='<div id="strict-mode-options" style="display:none;margin-top:1rem;padding:1rem;background:rgba(0,0,0,0.2);border-radius:8px">';
-    html+='<div style="color:var(--txt-s);font-weight:600;margin-bottom:0.5rem">📚 参考数据库（可选）</div>';
-    html+='<div style="color:var(--txt-d);font-size:0.82rem;margin-bottom:0.5rem">提供史料文本作为AI推演的参考依据</div>';
-    html+='<textarea id="strict-ref-text" placeholder="粘贴或输入参考史料文本..." style="width:100%;height:120px;padding:0.5rem;background:#1a1a1a;border:1px solid var(--bdr);color:var(--txt-s);border-radius:4px;font-size:0.85rem;resize:vertical"></textarea>';
-    html+='<div style="margin-top:0.5rem;font-size:0.75rem;color:var(--txt-d)">💡 提示：可输入正史记载、大事年表等，AI将严格参照此内容推演</div>';
-    html+='</div>';
-    html+='</div>';
-    html+='<div class="pnl-ft">';
-    html+='<button class="bt bp" id="start-mode-btn" onclick="desktopDoStart()">▶ 开始</button>';
-    html+='<button class="bt bs" onclick="desktopBackToStartPanel()">返回</button>';
-    html+='</div></div>';
+    var panel=_desktopPanel('选择游戏模式', '存档：'+saveName);
+    var modes=_desktopElement('div'); modes.style.cssText='padding:0.5rem 0 1rem';
+    function addMode(id, mode, title, desc, notes, selected){
+      var opt=_desktopElement('div', 'mode-opt'); opt.id=id;
+      opt.style.cssText='border:2px solid '+(selected?'var(--gold)':'var(--bdr)')+';border-radius:8px;padding:0.75rem 1rem;margin-bottom:0.6rem;cursor:pointer;'+(selected?'background:rgba(200,160,60,0.12)':'');
+      var heading=_desktopElement('div', '', title); heading.style.cssText='color:'+(selected?'var(--gold)':'var(--txt-s)')+';font-weight:700;font-size:1rem'; opt.appendChild(heading);
+      var detail=_desktopElement('div', '', desc); detail.style.cssText='color:var(--txt-d);font-size:0.82rem;margin-top:0.25rem'; opt.appendChild(detail);
+      notes.forEach(function(note){ var n=_desktopElement('div', '', '• '+note); n.style.cssText='color:var(--txt-d);font-size:0.75rem;margin-top:0.25rem'; opt.appendChild(n); });
+      opt.addEventListener('click', function(){ window._pendingSelectMode(opt, mode); }); modes.appendChild(opt);
+    }
+    addMode('mo-yanyi','yanyi','演义模式','小说化演绎，AI可自由发挥，情节更富戏剧性',['历史名臣：中国古代全部历史名臣都有概率出现'],true);
+    addMode('mo-light','light_hist','轻度史实','大事件遵历史，细节可演绎，平衡历史与趣味',['历史名臣：仅出现剧本开始年份前后200年内的历史名臣','每回合推演后进行历史检查，校正明显史实错误'],false);
+    addMode('mo-strict','strict_hist','严格史实','严格遵守史实，不得改变历史走向',['历史名臣：仅出现剧本开始年份前后100年内的历史名臣','每回合推演前检索参考数据库，强制遵循史实'],false);
+    var strictOptions=_desktopElement('div'); strictOptions.id='strict-mode-options'; strictOptions.style.cssText='display:none;margin-top:1rem;padding:1rem;background:rgba(0,0,0,0.2);border-radius:8px';
+    strictOptions.appendChild(_desktopElement('div', '', '📚 参考数据库（可选）'));
+    strictOptions.appendChild(_desktopElement('div', '', '提供史料文本作为AI推演的参考依据'));
+    var ref=_desktopElement('textarea'); ref.id='strict-ref-text'; ref.placeholder='粘贴或输入参考史料文本...'; ref.style.cssText='width:100%;height:120px;padding:0.5rem;background:#1a1a1a;border:1px solid var(--bdr);color:var(--txt-s);border-radius:4px;font-size:0.85rem;resize:vertical'; strictOptions.appendChild(ref);
+    strictOptions.appendChild(_desktopElement('div', '', '💡 提示：可输入正史记载、大事年表等，AI将严格参照此内容推演'));
+    modes.appendChild(strictOptions); panel.appendChild(modes);
+    var footer=_desktopFooter(panel);
+    var startButton=_desktopButton('▶ 开始', 'bt bp', function(){ window.desktopDoStart(); }); startButton.id='start-mode-btn'; footer.appendChild(startButton);
+    footer.appendChild(_desktopButton('返回', 'bt bs', function(){ window.desktopBackToStartPanel(); }));
     window._pendingStartMode='yanyi';
     window._pendingRefText='';
-    showPanel(html);
+    showPanel(panel);
   };
   window._pendingSelectMode=function(el,mode){
     window._pendingStartMode=mode;
@@ -431,7 +441,7 @@ if(window.tianming&&window.tianming.isDesktop){
 // 老版无脑 setTimeout 10ms focus·这 10ms 内 phase8 wrapper / panel render 会 innerHTML 重建
 // e.target 变孤儿节点·focus() 给已脱树元素 → 光标消失
 // 新版·1) 立即尝试 (大多场景原生 OK·不需延迟) 2) fallback 时验证 target.isConnected
-document.addEventListener("mousedown",function(e){
+function _tmElectronGlobalMouseDown(e){
   var t=e.target.tagName;
   if(t!=="INPUT"&&t!=="TEXTAREA"&&t!=="SELECT")return;
   var target=e.target;
@@ -443,7 +453,11 @@ document.addEventListener("mousedown",function(e){
       console.log("[focus-fix] target detached, skip focus:",t);
     }
   },10);
-});
+}
+if(!window.__tmElectronGlobalMouseDownInstalled){
+  window.__tmElectronGlobalMouseDownInstalled=true;
+  document.addEventListener("mousedown",_tmElectronGlobalMouseDown);
+}
 
 // 地图编辑器（覆盖简版）
 renderMapTab=function(em){
@@ -628,11 +642,15 @@ function drawRegions(ctx){
 
 function renderRegionList(){
   var el=_$("region-list");if(!el)return;
-  el.innerHTML=P.mapData.regions.map(function(r,i){
-    return "<div style=\"display:flex;align-items:center;justify-content:space-between;padding:0.4rem 0.5rem;border-bottom:1px solid rgba(42,42,62,0.4);font-size:0.8rem;cursor:pointer;"+(i===mapSelIdx?"background:var(--bg-4);":"")+"\" onclick=\"selectRegion("+i+")\">"+
-      "<div><span style=\"width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:0.35rem;background:"+r.color+";\"></span>"+r.name+"</div>"+
-      "<button class=\"bd bsm\" onclick=\"event.stopPropagation();P.mapData.regions.splice("+i+",1);mapSelIdx=-1;drawMapEditor();renderRegionList();_$('region-detail').style.display='none';\" style=\"padding:0.1rem 0.3rem;\">\u2715</button></div>";
-  }).join("")||"<div style=\"color:var(--txt-d);font-size:0.82rem;padding:0.5rem;\">\u65E0\u533A\u57DF</div>";
+  var rows=(P.mapData&&Array.isArray(P.mapData.regions))?P.mapData.regions:[];
+  if(!rows.length){var empty=document.createElement('div');empty.style.cssText='color:var(--txt-d);font-size:0.82rem;padding:0.5rem';empty.textContent='无区域';if(el.replaceChildren)el.replaceChildren(empty);else{el.textContent='';el.appendChild(empty);}return;}
+  var nodes=rows.map(function(r,i){
+    var row=document.createElement('div');row.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:0.4rem 0.5rem;border-bottom:1px solid rgba(42,42,62,0.4);font-size:0.8rem;cursor:pointer;'+(i===mapSelIdx?'background:var(--bg-4);':'');
+    row.addEventListener('click',function(){selectRegion(i);});
+    var label=document.createElement('div');var dot=document.createElement('span');dot.style.cssText='width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:0.35rem';dot.style.background=/^#[0-9a-f]{3,8}$/i.test(String(r.color||''))?String(r.color):'#c9a84c';label.appendChild(dot);label.appendChild(document.createTextNode(String(r.name||'')));row.appendChild(label);
+    var del=document.createElement('button');del.type='button';del.className='bd bsm';del.style.padding='0.1rem 0.3rem';del.textContent='✕';del.addEventListener('click',function(event){event.stopPropagation();P.mapData.regions.splice(i,1);mapSelIdx=-1;drawMapEditor();renderRegionList();var detail=_$('region-detail');if(detail)detail.style.display='none';});row.appendChild(del);return row;
+  });
+  if(el.replaceChildren)el.replaceChildren.apply(el,nodes);else{el.textContent='';nodes.forEach(function(node){el.appendChild(node);});}
 }
 
 function selectRegion(i){

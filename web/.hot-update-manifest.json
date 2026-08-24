@@ -2,7 +2,7 @@
   "type": "tianming-hot-update",
   "version": "1.3.4.11",
   "entry": "index.html",
-  "generatedAt": "2026-08-24T04:37:13.653Z",
+  "generatedAt": "2026-08-24T16:27:04.782Z",
   "files": [
     {
       "path": "_preview_map.json",
@@ -3346,8 +3346,8 @@
     },
     {
       "path": "startup-script-phases.json",
-      "sha256": "7231e9089c5d4f46e202c752c0acb44396426e05bd8afe4ad9d6bf454089ab1a",
-      "size": 315463
+      "sha256": "1ddc4a7f255d511666630ad9e97c04f157b2f05792344648a64c946b4da01d5f",
+      "size": 316417
     },
     {
       "path": "styles.css",
@@ -3371,8 +3371,8 @@
     },
     {
       "path": "tm-ai-change-applier-reconcile.js",
-      "sha256": "e05672c0f4b26550807ad6669f25c593c3ba0c0bae7de99f2b199064e18fbda2",
-      "size": 74252
+      "sha256": "5b33a3323b649d0f5d94051a38ae7fc59c42f55adca44b0fc0c65ff05a04aaed",
+      "size": 86091
     },
     {
       "path": "tm-ai-change-applier-validators.js",
@@ -3411,8 +3411,8 @@
     },
     {
       "path": "tm-ai-infra.js",
-      "sha256": "629866a5ec55944c26d3b464b2b313ee2a75d12123b04d4370478d643bebbd63",
-      "size": 157487
+      "sha256": "b970b680765ca0a9165b3b6dd284a5d3800b2283283491a1cb71d1be55846de3",
+      "size": 159022
     },
     {
       "path": "tm-ai-narrative-guards.js",
@@ -3551,8 +3551,8 @@
     },
     {
       "path": "tm-change-queue.js",
-      "sha256": "9092dd5c6d689dcb060ee4eea752dc40cee4747b57fa5b202705acb7149ad811",
-      "size": 26986
+      "sha256": "c1cc8657e9eff5c38246e791d9c33eb024e2ef19e4fb63ac530f966867c7aeae",
+      "size": 32629
     },
     {
       "path": "tm-changelog.js",
@@ -3821,8 +3821,8 @@
     },
     {
       "path": "tm-economy-engine-currency.js",
-      "sha256": "50a488e6b0b8f5e1e70dfbbf88005c1c701ff76f665219435816856c1f674695",
-      "size": 60889
+      "sha256": "af0161932083b8a897c7128e7ddee41a4571181c5005e8d5a07c1c867df724ad",
+      "size": 61414
     },
     {
       "path": "tm-economy-engine.js",
@@ -3866,8 +3866,8 @@
     },
     {
       "path": "tm-electron.js",
-      "sha256": "f70e64bab1aa7a3005cb0da4cbf375953b42e4409fe7e0655998ae43898ea44b",
-      "size": 37331
+      "sha256": "090a08b7a80a78236d6f23e4e05c0ef8af8d5a05602890e57cdbfb98cc049f19",
+      "size": 37558
     },
     {
       "path": "tm-endturn-agent-depth-tools.js",
@@ -3921,18 +3921,18 @@
     },
     {
       "path": "tm-endturn-apply-stages.js",
-      "sha256": "7a6ac0f6ef3d69341c235df26312272a4b87cfa53742eb160c61af75cd52409d",
-      "size": 74258
+      "sha256": "5c5029423fbf7e2d6f7c2dbca7dc8542366dd50692c084093a258e004d525cd2",
+      "size": 81336
     },
     {
       "path": "tm-endturn-apply.js",
-      "sha256": "debb00e9b0412de419e3fae67142fed22d819aa3d84e14d91f48fa17ed516c35",
-      "size": 370858
+      "sha256": "93eaedfe7fadeaf85e17928f8f7a72986d121036566c3ed4de008fbe07e17268",
+      "size": 371435
     },
     {
       "path": "tm-endturn-core.js",
-      "sha256": "73af5a29921533df72969071596cf603d9b9587dae0df6fb596b6258956ba74b",
-      "size": 97673
+      "sha256": "1793098e0d5ab7b88ef6f0e049a0a6f8a692c99ca7f41b4c500e5bf4276c8d6d",
+      "size": 100079
     },
     {
       "path": "tm-endturn-edict.js",
@@ -4886,8 +4886,8 @@
     },
     {
       "path": "tm-office-system.js",
-      "sha256": "81af85c77f93771356e90d376ebc0abcdd62868f42f7d3e7680afe21e18e565a",
-      "size": 97965
+      "sha256": "62ef651ff568397255373973416d9bb7dd39e69ec3b910e72e415ea13fdddd83",
+      "size": 98233
     },
     {
       "path": "tm-office-vacancy.js",
@@ -4966,8 +4966,8 @@
     },
     {
       "path": "tm-patches-start.js",
-      "sha256": "7092336ffe5dcb59a54a1ebef12cb1762f6d7fd6446c1e4d5058b499a65b6467",
-      "size": 116949
+      "sha256": "dc21177eae481e991f99cd2309f2fb03a529eb7fa81c30124327f20f63d6748e",
+      "size": 119033
     },
     {
       "path": "tm-patches.js",
@@ -5111,8 +5111,8 @@
     },
     {
       "path": "tm-save-lifecycle.js",
-      "sha256": "171023dd7b216f6f59f6686053da867141d86a6e11e98419d1ceeb6c97f26099",
-      "size": 153767
+      "sha256": "3ef9be4ccbb52683a4322b6c0192454ea601e845eb3ccb5019be94380de40795",
+      "size": 165169
     },
     {
       "path": "tm-save-manager.js",

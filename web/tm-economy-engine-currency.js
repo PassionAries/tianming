@@ -178,6 +178,16 @@
 (function(global) {
   'use strict';
 
+  // Precision contract: coin output, seigniorage and month ratios legitimately produce
+  // fractional base units. Runtime ledgers therefore retain finite IEEE-754 values;
+  // rounding is presentation-only. Do not round the whole treasury at a subsystem edge.
+  var CURRENCY_PRECISION_CONTRACT = Object.freeze({
+    ledgerAllowsFractional: true,
+    minimumStoredIncrement: 0,
+    displayRounding: 'nearest-integer-or-compact',
+    settlementQuantization: 'none'
+  });
+
   // ═══════════════════════════════════════════════════════════════════
   //  数据模型 — 默认值工厂
   // ═══════════════════════════════════════════════════════════════════
@@ -1061,6 +1071,7 @@
     PAPER_PRESETS: PAPER_PRESETS,
     DYNASTY_COIN_DEFAULTS: DYNASTY_COIN_DEFAULTS,
     PAPER_DATA_25: PAPER_DATA_25,
+    PRECISION_CONTRACT: CURRENCY_PRECISION_CONTRACT,
     _updatePaperStateAtomic: _updatePaperStateAtomic,
     _checkPaperCollapseAtomic: _checkPaperCollapseAtomic,
     _updateGrainPriceAtomic: _updateGrainPriceAtomic,

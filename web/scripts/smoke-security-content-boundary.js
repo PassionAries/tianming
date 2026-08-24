@@ -179,9 +179,9 @@ function runDesktopFallbackSaveProbe() {
       desktopLoadSave(value) { loadRequest = value; },
       desktopDeleteSave(value) { deleteRequest = value; }
     },
-    showPanel(shell) {
-      ok(shell === '<div id="tm-desktop-save-panel"></div>', '降级面板只使用固定静态容器');
-      nodesById['tm-desktop-save-panel'] = makeNode('div');
+    showPanel(root) {
+      ok(root && root.tagName === 'DIV' && root.id === 'tm-desktop-save-panel', '降级面板传入真实 DOM 根节点');
+      nodesById['tm-desktop-save-panel'] = root;
     },
     _$: id => nodesById[id] || null,
     importSaveFile() {},

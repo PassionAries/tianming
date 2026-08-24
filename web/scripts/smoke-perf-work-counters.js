@@ -70,6 +70,27 @@ check(syncValue === 7 && perf.reportByName('memory.rank').count === 1,
     && Object.keys(perf.report()).length === 0,
   'reset clears samples and structural work without stale exported objects');
 
+  perf.enabled = false;
+  perf.count('disabled.counter', 1);
+  perf.gauge('disabled.gauge', 2);
+  const disabledValue = await perf.withSpan('disabled.span', async () => 11);
+  check(disabledValue === 11
+    && Object.keys(perf.workReport().counters).length === 0
+    && Object.keys(perf.workReport().gauges).length === 0
+    && perf.workReport().activeSpans.length === 0
+    && Object.keys(perf.report()).length === 0,
+  'enabled=false disables timing spans and deterministic workload sampling together');
+
+  perf.enabled = true;
+  perf.timingEnabled = false;
+  perf.workloadEnabled = true;
+  perf.count('workload.only', 3);
+  perf.withSpan('timing.disabled', () => 12);
+  check(perf.workReport().counters['workload.only'] === 3
+    && !perf.report()['timing.disabled'],
+  'timing and workload sampling can be controlled independently');
+  perf.timingEnabled = true;
+
   console.log('[smoke-perf-work-counters] pass=' + passed);
 }()).catch((error) => {
   console.error(error);

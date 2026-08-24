@@ -1160,30 +1160,87 @@
     var relation = _relationIndex(opts.GM);
     var hitsById = Object.create(null);
     var hitsByNode = Object.create(null);
+    var rowsByNode = Object.create(null);
+    var rowsByGram = Object.create(null);
     rows.forEach(function(row) {
       var hitId = String(row.hit && (row.hit.id || row.hit.key || row.hit.uuid || row.hit.sourceId) || ('hit-' + row.index));
       hitsById[hitId] = row.hit;
       row.nodes.forEach(function(node) {
         if (!hitsByNode[node]) hitsByNode[node] = [];
         hitsByNode[node].push(row.hit);
+        if (!rowsByNode[node]) rowsByNode[node] = [];
+        rowsByNode[node].push(row);
       });
     });
+    // Only unresolved legacy/fuzzy targets need a substring index. Stable
+    // exact edges use rowsByNode and allocate no gram buckets at all.
+    var fuzzyTargets = Object.create(null);
+    relation.relationEdges.forEach(function(edge) {
+      if (!edge) return;
+      var type = String(edge.type || '').toLowerCase();
+      if (type !== 'supersedes' && type !== 'contradicts') return;
+      [edge.dst].concat(type === 'contradicts' ? [edge.src] : []).forEach(function(value) {
+        var target = normalizeNode(value);
+        if (target.length >= 4 && !rowsByNode[target]) fuzzyTargets[target] = true;
+      });
+    });
+    var wantedGrams = Object.create(null);
+    Object.keys(fuzzyTargets).forEach(function(target) {
+      for (var at = 0; at <= target.length - 4; at++) wantedGrams[target.slice(at, at + 4)] = true;
+    });
+    if (Object.keys(wantedGrams).length) {
+      rows.forEach(function(row) {
+        var rowGrams = Object.create(null);
+        row.nodes.forEach(function(node) {
+          if (node.length < 4) return;
+          for (var at = 0; at <= node.length - 4; at++) {
+            var gram = node.slice(at, at + 4);
+            if (!wantedGrams[gram] || rowGrams[gram]) continue;
+            rowGrams[gram] = true;
+            if (!rowsByGram[gram]) rowsByGram[gram] = [];
+            rowsByGram[gram].push(row);
+          }
+        });
+      });
+    }
+    function rowsMatchingTarget(targetValue) {
+      var target = normalizeNode(targetValue);
+      if (!target) return [];
+      var candidates = [];
+      var seenRows = Object.create(null);
+      function addCandidates(list) {
+        arr(list).forEach(function(row) {
+          if (!row || seenRows[row.index]) return;
+          seenRows[row.index] = true;
+          candidates.push(row);
+        });
+      }
+      addCandidates(rowsByNode[target]);
+      // Stable/exact node identities are authoritative. Substring matching is
+      // only a compatibility fallback for legacy fuzzy relations that have no
+      // exact destination in the current hit set.
+      if (!candidates.length && target.length >= 4) {
+        var smallestBucket = null;
+        for (var gramAt = 0; gramAt <= target.length - 4; gramAt++) {
+          var bucket = rowsByGram[target.slice(gramAt, gramAt + 4)];
+          if (bucket && (!smallestBucket || bucket.length < smallestBucket.length)) smallestBucket = bucket;
+        }
+        addCandidates(smallestBucket);
+      }
+      candidates.sort(function(left, right) { return left.index - right.index; });
+      return candidates.filter(function(row) {
+        _perfCount('memory.edgeCandidateChecks', 1);
+        return _nodesMatchTarget(row.nodes, target);
+      });
+    }
     var supersededByHit = [];
     var contradictionByHit = [];
     relation.relationEdges.forEach(function(edge) {
       if (!edge) return;
       var type = String(edge.type || '').toLowerCase();
       if (type !== 'supersedes' && type !== 'contradicts') return;
-      var destinations = [];
-      var sources = [];
-      rows.forEach(function(row) {
-        _perfCount('memory.edgeCandidateChecks', 1);
-        if (_nodesMatchTarget(row.nodes, edge.dst)) destinations.push(row);
-        if (type === 'contradicts') {
-          _perfCount('memory.edgeCandidateChecks', 1);
-          if (_nodesMatchTarget(row.nodes, edge.src)) sources.push(row);
-        }
-      });
+      var destinations = rowsMatchingTarget(edge.dst);
+      var sources = type === 'contradicts' ? rowsMatchingTarget(edge.src) : [];
       if (type === 'supersedes') {
         destinations.forEach(function(row) {
           if (!supersededByHit[row.index]) supersededByHit[row.index] = edge;

@@ -92,6 +92,55 @@ const scaleMetrics = [];
   });
 });
 
+const twoDimensionalMetrics = [];
+[500, 2000, 10000].forEach((hitCount) => {
+  [2, 100, 1000].forEach((edgeCount) => {
+    const scaleGM = {
+      _campaignId: `campaign-memory-${hitCount}-${edgeCount}`,
+      _timelineId: `timeline-memory-${hitCount}-${edgeCount}`,
+      turn: 10001,
+      _memoryRevision: 1,
+      _memoryEdgeRevision: 1,
+      _memEdges: Array.from({ length: edgeCount }, (_, edgeIndex) => ({
+        type: 'supersedes',
+        src: `replacement-${edgeIndex}`,
+        dst: `memory-${edgeIndex % hitCount}`,
+      })),
+      _edictRelations: [],
+    };
+    perf.reset();
+    MR.rankHitsDetailed(makeHits(hitCount), { GM: scaleGM, turn: scaleGM.turn });
+    const work = perf.workReport().counters;
+    assert.strictEqual(work['memory.edgeTableBuilds'], 1,
+      `${hitCount} hits/${edgeCount} edges should build one relation table`);
+    assert.strictEqual(work['memory.hitNodeBuilds'], hitCount,
+      `${hitCount} hits/${edgeCount} edges should normalize each hit once`);
+    assert(work['memory.edgeCandidateChecks'] <= edgeCount * 2,
+      `${hitCount} hits/${edgeCount} exact edges should use reverse lookup rather than H×E scanning`);
+    twoDimensionalMetrics.push({
+      hits: hitCount,
+      edges: edgeCount,
+      checks: work['memory.edgeCandidateChecks'],
+    });
+  });
+});
+
+const legacyGM = {
+  _campaignId: 'campaign-memory-fuzzy',
+  _timelineId: 'timeline-memory-fuzzy',
+  turn: 20,
+  _memoryRevision: 1,
+  _memoryEdgeRevision: 1,
+  _memEdges: [{ type: 'supersedes', src: 'new-record', dst: 'legacy-needle' }],
+  _edictRelations: [],
+};
+const legacyFuzzy = MR.rankHitsDetailed([
+  { id: 'new-record', source: 'shiji', text: 'new record', status: 'active' },
+  { id: 'prefix-legacy-needle-suffix', source: 'shiji', text: 'old record', status: 'active' },
+], { GM: legacyGM, turn: legacyGM.turn });
+assert(!legacyFuzzy.ranked.some((hit) => hit.id === 'prefix-legacy-needle-suffix'),
+  'legacy fuzzy relation falls back to bounded substring candidates when no exact node exists');
+
 perf.reset();
 const compiled = MC.compileHits(makeHits(500), { maxTokens: 320 });
 report = perf.workReport();
@@ -101,4 +150,4 @@ assert.strictEqual(compiled.compilationIndex.fragmentTokenCosts.chronology.lengt
 assert(compiled.tokenEstimate <= 320, 'pre-rendered fragment compression should preserve the hard token budget');
 assert(compiled.text.startsWith('<memory-context'), 'compiled context should preserve the production schema');
 
-console.log('smoke-memory-relation-index ok ' + JSON.stringify(scaleMetrics));
+console.log('smoke-memory-relation-index ok ' + JSON.stringify({ scaleMetrics, twoDimensionalMetrics }));

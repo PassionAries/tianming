@@ -2,7 +2,7 @@
   "type": "tianming-hot-update",
   "version": "1.3.4.11",
   "entry": "index.html",
-  "generatedAt": "2026-08-23T22:43:09.818Z",
+  "generatedAt": "2026-08-24T02:03:51.620Z",
   "files": [
     {
       "path": "_preview_map.json",
@@ -4601,8 +4601,8 @@
     },
     {
       "path": "tm-map-system.js",
-      "sha256": "fb5e9f9bb79a0556d86941862ae99159a2035c85a8dccf4cb02d5b28f3b46d12",
-      "size": 94283
+      "sha256": "dce9af4206ce066617867c1dae01592f0ad0a3e485edcebaf541ede33cc2fec2",
+      "size": 94218
     },
     {
       "path": "tm-mapeditor-fit.js",
@@ -4676,8 +4676,8 @@
     },
     {
       "path": "tm-memory-retrieval.js",
-      "sha256": "5f2bd1e3928e19839c6964898384f2bbfa508ce9c5cb2e6607c1a8be5b14b275",
-      "size": 60079
+      "sha256": "8bb7a422ff6a43d6e792622b6b26c224edf785e598c75c8ddf7ff45aeceb19d9",
+      "size": 62675
     },
     {
       "path": "tm-memory-source-bound.js",
@@ -4981,8 +4981,8 @@
     },
     {
       "path": "tm-perf.js",
-      "sha256": "fda174aaab6615ba95622a77b255d49eef31efd010463640edc7f2833f6c0e4e",
-      "size": 21029
+      "sha256": "7ac344794d1ea4a1fb9769c6ea4036ba7986bc5952121b097b63e40a4421d09f",
+      "size": 21524
     },
     {
       "path": "tm-pinch-pan.js",
@@ -5121,8 +5121,8 @@
     },
     {
       "path": "tm-semantic-recall.js",
-      "sha256": "55a2911cc52bb8621f2174769af1b48baeee59ed0a54473b8c4962a2a8bf5401",
-      "size": 32495
+      "sha256": "7cd354184274fd5fa572c2f4f54f5c0c3f860cfd39208a433c7f46ec914b21f9",
+      "size": 43888
     },
     {
       "path": "tm-semantic-worker.js",

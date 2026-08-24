@@ -128,6 +128,17 @@ const gameB = context.ensureWritableRuntimeMap();
 check(gameB.regions[0].development === 40 && gameA.regions[0].development !== gameB.regions[0].development,
   'new world B clones the immutable template and inherits no world A changes');
 
+context.GM = {
+  sid: scenario.id,
+  facs: clone(P.factions),
+  turn: 1,
+  mapData: { mapSchemaVersion: 1 }
+};
+const recoveredFromEmptyPlaceholder = context.ensureWritableRuntimeMap();
+check(recoveredFromEmptyPlaceholder.regions.length === 1
+  && recoveredFromEmptyPlaceholder.regions[0].id === 'region-capital',
+'empty schema-v1 placeholder cannot mask a valid frozen P/scenario template');
+
 const frozenLegacyMap = deepFreeze(clone(scenario.map));
 const frozenLegacyBytes = JSON.stringify(frozenLegacyMap);
 context.GM = { sid: scenario.id, facs: clone(P.factions), turn: 2, map: frozenLegacyMap };

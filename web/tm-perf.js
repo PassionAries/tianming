@@ -42,19 +42,20 @@
   var spanSequence = 0;
   var thresholds = {}; // name → { ms, handler, triggeredCount }
   var MAX_PER_NAME = 500;
-  var enabled = true;
+  var timingEnabled = true;
+  var workloadEnabled = true;
 
   function now() {
     return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   }
 
   function mark(name) {
-    if (!enabled || !name) return;
+    if (!timingEnabled || !name) return;
     marks[name] = now();
   }
 
   function measure(name) {
-    if (!enabled || !name) return 0;
+    if (!timingEnabled || !name) return 0;
     var start = marks[name];
     if (typeof start !== 'number') return 0;
     var dt = now() - start;
@@ -72,6 +73,7 @@
 
   /** Increment a deterministic unit-of-work counter. */
   function count(name, delta) {
+    if (!workloadEnabled) return 0;
     if (!name) throw new TypeError('[perf] counter name is required');
     var increment = _finiteDelta(delta, 1, 'counter delta');
     counters[name] = (counters[name] || 0) + increment;
@@ -80,12 +82,14 @@
 
   /** Record the latest value of a deterministic gauge. */
   function gauge(name, value) {
+    if (!workloadEnabled) return 0;
     if (!name) throw new TypeError('[perf] gauge name is required');
     gauges[name] = _finiteDelta(value, 0, 'gauge value');
     return gauges[name];
   }
 
   function beginSpan(name, metadata) {
+    if (!timingEnabled) return null;
     if (!name) throw new TypeError('[perf] span name is required');
     var span = {
       id: 'span-' + (++spanSequence),
@@ -105,12 +109,13 @@
     span.duration = duration;
     if (outcome && typeof outcome === 'object') span.outcome = Object.assign({}, outcome);
     delete activeSpans[span.id];
-    _record(span.name, duration);
+    if (timingEnabled) _record(span.name, duration);
     return duration;
   }
 
   function withSpan(name, fn, metadata) {
     if (typeof fn !== 'function') throw new TypeError('[perf] withSpan requires a function');
+    if (!timingEnabled) return fn(null);
     var span = beginSpan(name, metadata);
     try {
       var result = fn(span);
@@ -157,7 +162,7 @@
     obj[key] = orig;
     var tag = sampleName || methodName;
     var wrapped = function() {
-      if (!enabled) return orig.apply(this, arguments);
+      if (!timingEnabled) return orig.apply(this, arguments);
       var t0 = now();
       try {
         var ret = orig.apply(this, arguments);
@@ -261,7 +266,7 @@
 
   /** 手动记录一次时长（用于已经有 start/end 的场景） */
   function record(name, ms) {
-    if (!enabled || !name || typeof ms !== 'number') return;
+    if (!timingEnabled || !name || typeof ms !== 'number') return;
     _record(name, ms);
   }
 
@@ -527,8 +532,12 @@
     getBaseline: function(){ return baseline; },
     _renderPanel: renderPanel,
     _closePanel: closePanel,
-    get enabled() { return enabled; },
-    set enabled(v) { enabled = !!v; },
+    get enabled() { return timingEnabled || workloadEnabled; },
+    set enabled(v) { timingEnabled = !!v; workloadEnabled = !!v; },
+    get timingEnabled() { return timingEnabled; },
+    set timingEnabled(v) { timingEnabled = !!v; },
+    get workloadEnabled() { return workloadEnabled; },
+    set workloadEnabled(v) { workloadEnabled = !!v; },
     _samples: samples,
     _marks: marks,
     _counters: counters,

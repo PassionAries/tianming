@@ -169,7 +169,7 @@ function ensureWritableRuntimeMap(options) {
 
   var existing = GM.mapData;
   if (!options.forceClone && existing && typeof existing === 'object'
-      && (hasRuntimeMapContent(existing) || existing.mapSchemaVersion === TM_RUNTIME_MAP_SCHEMA_VERSION)) {
+      && hasRuntimeMapContent(existing)) {
     if (existing.mapSchemaVersion !== TM_RUNTIME_MAP_SCHEMA_VERSION) {
       _normalizeGameMapRuntimeInPlace(existing);
     }

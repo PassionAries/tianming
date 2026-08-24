@@ -161,8 +161,10 @@ function snapshotCounters() { return Object.assign({}, counters); }
   before = snapshotCounters();
   result = await context.SemanticRecall.buildIndex({ batchSize: 32 });
   check(result.added === 0 && delta('semantic.sourceRowsVisited', before) === 0
-    && delta('semantic.embedTextCount', before) === 0,
-  'rebuilding without appends performs zero source-row and embedding work');
+    && delta('semantic.embedTextCount', before) === 0
+    && delta('semantic.existingIdVisits', before) === 0
+    && delta('semantic.idbPutCount', before) === 0,
+  'rebuilding without appends performs zero source, existing-id, embedding or IDB write work');
 
   const query = '固定历史记录文本内容';
   const queryVec = embedding(query);
@@ -188,6 +190,55 @@ function snapshotCounters() { return Object.assign({}, counters); }
   result = await context.SemanticRecall.buildIndex({ batchSize: 32 });
   check(result.added === 1 && context.__semanticState.index.length === 1 && oldIndexSize > 1,
     'timeline switch invalidates in-memory cursor/index and never reuses world A vectors');
+
+  context.GM = {
+    running: true,
+    turn: 200,
+    _campaignId: 'camp-semantic-sliding',
+    _timelineId: 'tml_semantic_sliding_12345678',
+    shijiHistory: Array.from({ length: 200 }, (_, i) => ({
+      id: 'sliding-' + i,
+      turn: i + 1,
+      shilu: '滑窗史记第' + i + '条足够长的固定历史记录文本内容。'
+    })),
+    _foreshadows: [], _chronicleTracks: [], _memTables: { eventHistory: { rows: [] } }
+  };
+  result = await context.SemanticRecall.buildIndex({ batchSize: 32 });
+  check(result.added === 200, 'sliding-window fixture indexes the initial 200 records');
+  let slidingAdded = 0;
+  let slidingVisited = 0;
+  for (let step = 200; step < 300; step += 1) {
+    context.GM.turn = step + 1;
+    context.GM.shijiHistory.push({
+      id: 'sliding-' + step,
+      turn: step + 1,
+      shilu: '滑窗史记第' + step + '条足够长的固定历史记录文本内容。'
+    });
+    context.GM.shijiHistory.splice(0, context.GM.shijiHistory.length - 200);
+    result = await context.SemanticRecall.buildIndex({ batchSize: 32 });
+    slidingAdded += result.added;
+    slidingVisited += result.visited;
+  }
+  check(slidingAdded === 100 && slidingVisited === 100 && context.__semanticState.index.length === 300,
+    '200-row production sliding window indexes each of 100 later records exactly once');
+
+  context.GM = {
+    running: true,
+    turn: 200,
+    _campaignId: 'camp-semantic-fingerprint',
+    _timelineId: 'tml_semantic_fingerprint_12345678',
+    shijiHistory: Array.from({ length: 200 }, (_, i) => ({
+      turn: i + 1,
+      shilu: '无显式编号史记第' + i + '条足够长的固定历史记录文本内容。'
+    })),
+    _foreshadows: [], _chronicleTracks: [], _memTables: { eventHistory: { rows: [] } }
+  };
+  result = await context.SemanticRecall.buildIndex({ batchSize: 32 });
+  context.GM.shijiHistory.push({ turn: 201, shilu: '无显式编号史记新增一条足够长的固定历史记录文本内容。' });
+  context.GM.shijiHistory.splice(0, 1);
+  result = await context.SemanticRecall.buildIndex({ batchSize: 32 });
+  check(result.added === 1 && result.visited === 1,
+    'content fingerprint keeps no-id sliding rows stable without offset-derived identities');
 
   context.GM = {
     running: true,

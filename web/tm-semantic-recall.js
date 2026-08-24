@@ -25,9 +25,16 @@
     modelLoading: false,   // 加载中（防止重复加载）
     pipeline: null,        // transformers.js feature-extraction pipeline
     index: [],             // [{ id, source, turn, text, vec }]
+    existingIds: new Set(),// source|sourceId; load once, append only after durable commit
     lastIndexedTurn: 0,    // 上次索引到的 turn
     cursors: Object.create(null),
     worldKey: '',
+    worldRef: null,
+    pRef: null,
+    worldGeneration: 0,
+    loadGeneration: 0,
+    sessionToken: '',
+    _idxLoadTried: false,
     modelVersion: 'bge-small-zh-v1.5:index-v2',
     modelName: 'Xenova/bge-small-zh-v1.5',
     threshold: 0.45, // S1(2026-06-03): 0.55->0.45 放松(bge-small-zh 0.55 偏严·ST 建议 0.3-0.5)·call-site 可经 P.conf.semanticRecallThreshold 覆盖
@@ -48,6 +55,8 @@
   // 下方原主线程路径·行为与旧版完全一致。
   var _rpcSeq = 0;
   var _rpcPending = {};
+  var _buildFlights = Object.create(null);
+  var _loadFlights = Object.create(null);
 
   function _workerOnMessage(ev) {
     var m = ev.data || {};
@@ -336,8 +345,26 @@
     return fn();
   }
 
-  function _worldIdentity() {
-    var gm = typeof GM !== 'undefined' && GM ? GM : null;
+  function _loadGeneration() {
+    var value = Number(global && global._tmLoadGen);
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+  }
+
+  function _sessionToken() {
+    try {
+      if (global && typeof global._tmGetDesktopAutoSaveSessionToken === 'function') {
+        return String(global._tmGetDesktopAutoSaveSessionToken() || '');
+      }
+    } catch (error) {
+      if (global.TM && global.TM.errors && typeof global.TM.errors.capture === 'function') {
+        global.TM.errors.capture(error, 'SemanticRecall.sessionToken');
+      }
+    }
+    return '';
+  }
+
+  function _worldIdentity(gm) {
+    gm = gm || (typeof GM !== 'undefined' && GM ? GM : null);
     var campaignId = String(gm && (gm._campaignId || gm._runId) || '');
     var timelineId = String(gm && gm._timelineId || '');
     return {
@@ -349,10 +376,21 @@
   }
 
   function _ensureWorldState() {
-    var identity = _worldIdentity();
-    if (STATE.worldKey !== identity.key) {
+    var gm = typeof GM !== 'undefined' && GM ? GM : null;
+    var p = typeof P !== 'undefined' && P ? P : null;
+    var identity = _worldIdentity(gm);
+    var loadGeneration = _loadGeneration();
+    var sessionToken = _sessionToken();
+    if (STATE.worldKey !== identity.key || STATE.worldRef !== gm || STATE.pRef !== p
+        || STATE.loadGeneration !== loadGeneration || STATE.sessionToken !== sessionToken) {
       STATE.worldKey = identity.key;
+      STATE.worldRef = gm;
+      STATE.pRef = p;
+      STATE.worldGeneration += 1;
+      STATE.loadGeneration = loadGeneration;
+      STATE.sessionToken = sessionToken;
       STATE.index = [];
+      STATE.existingIds = new Set();
       STATE.cursors = Object.create(null);
       STATE.lastIndexedTurn = 0;
       STATE._idxLoadTried = false;
@@ -360,18 +398,89 @@
     return identity;
   }
 
-  function _cursor(source) {
-    if (!STATE.cursors[source]) {
-      STATE.cursors[source] = {
+  function _emptyCursor(source) {
+    return {
+      source: source,
+      lastStableId: '',
+      lastSeq: 0,
+      lastArrayOffset: 0,
+      lastTurn: 0,
+      revision: 0
+    };
+  }
+
+  function _cloneCursors(cursors) {
+    var out = Object.create(null);
+    Object.keys(cursors && typeof cursors === 'object' ? cursors : {}).forEach(function(source) {
+      if (!source || source === '__proto__' || source === 'prototype' || source === 'constructor') return;
+      var cursor = cursors[source] || {};
+      out[source] = {
         source: source,
-        lastStableId: '',
-        lastSeq: 0,
-        lastArrayOffset: 0,
-        lastTurn: 0,
-        revision: 0
+        lastStableId: String(cursor.lastStableId || ''),
+        lastSeq: Number.isFinite(Number(cursor.lastSeq)) && Number(cursor.lastSeq) >= 0 ? Math.floor(Number(cursor.lastSeq)) : 0,
+        lastArrayOffset: Number.isFinite(Number(cursor.lastArrayOffset)) && Number(cursor.lastArrayOffset) >= 0 ? Math.floor(Number(cursor.lastArrayOffset)) : 0,
+        lastTurn: Number.isFinite(Number(cursor.lastTurn)) && Number(cursor.lastTurn) >= 0 ? Number(cursor.lastTurn) : 0,
+        revision: Number.isFinite(Number(cursor.revision)) && Number(cursor.revision) >= 0 ? Math.floor(Number(cursor.revision)) : 0
       };
+    });
+    return out;
+  }
+
+  function _cursorIn(cursors, source) {
+    if (!cursors[source]) cursors[source] = _emptyCursor(source);
+    return cursors[source];
+  }
+
+  function _captureWorldLease(identity) {
+    return {
+      campaignId: identity.campaignId,
+      timelineId: identity.timelineId,
+      modelVersion: identity.modelVersion,
+      worldKey: identity.key,
+      worldGeneration: STATE.worldGeneration,
+      loadGeneration: STATE.loadGeneration,
+      sessionToken: STATE.sessionToken,
+      gmRef: STATE.worldRef,
+      pRef: STATE.pRef,
+      token: identity.key + '#g' + STATE.worldGeneration
+    };
+  }
+
+  function _isLeaseCurrent(lease) {
+    if (!lease) return false;
+    var gm = typeof GM !== 'undefined' && GM ? GM : null;
+    var p = typeof P !== 'undefined' && P ? P : null;
+    return gm === lease.gmRef && p === lease.pRef
+      && _worldIdentity(gm).key === lease.worldKey
+      && _loadGeneration() === lease.loadGeneration
+      && _sessionToken() === lease.sessionToken
+      && STATE.worldKey === lease.worldKey
+      && STATE.worldGeneration === lease.worldGeneration
+      && STATE.worldRef === lease.gmRef;
+  }
+
+  function _assertLeaseCurrent(lease, stage) {
+    if (_isLeaseCurrent(lease)) return;
+    var error = new Error('semantic index world lease expired at ' + String(stage || 'async boundary'));
+    error.code = 'semantic_world_changed';
+    throw error;
+  }
+
+  function _stableFingerprint(value) {
+    var text;
+    try { text = typeof value === 'string' ? value : JSON.stringify(value); }
+    catch (error) { text = String(value == null ? '' : value); }
+    if (text == null) text = '';
+    var first = 2166136261;
+    var second = 2246822519;
+    for (var index = 0; index < text.length; index++) {
+      var code = text.charCodeAt(index);
+      first ^= code;
+      first = Math.imul(first, 16777619);
+      second ^= code + index;
+      second = Math.imul(second, 3266489917);
     }
-    return STATE.cursors[source];
+    return 'h' + (first >>> 0).toString(36) + (second >>> 0).toString(36) + 'l' + text.length.toString(36);
   }
 
   // ────── 嵌入计算 ──────
@@ -415,49 +524,78 @@
   }
 
   // ────── 增量索引 ──────
-  // 收集本回合新增 + 历史未索引内容
-  async function buildIndex(opts) {
-    opts = opts || {};
-    // The v2 index is append-only. Expose a verified zero rather than omitting
-    // the metric when no destructive clear was attempted.
-    _perfCount('semantic.idbClearCount', 0);
-    if (!STATE.enabled) return { ok: false, reason: 'disabled' };
-    if (!await ensureModel()) return { ok: false, reason: 'model not ready: ' + STATE.error };
-    if (typeof GM === 'undefined' || !GM) return { ok: false, reason: 'no GM' };
-    var identity = _ensureWorldState();
-    if (!identity.campaignId || !identity.timelineId) return { ok: false, reason: 'world identity unavailable' };
-    // perf round5: 本会话首次索引前·先尝试吃上一会话的持久化索引（同 campaign 才吃）
+  // 收集本回合新增 + 历史未索引内容。所有 cursor/index 修改先进入局部 staged
+  // 状态，只有 embedding 完整且 IndexedDB 事务提交后才发布到 STATE。
+  function _rowScanStart(rows, cursor, identify) {
+    if (!rows.length || !cursor.lastStableId) return 0;
+    var offset = Number(cursor.lastArrayOffset);
+    if (Number.isSafeInteger(offset) && offset > 0 && offset <= rows.length
+        && identify(rows[offset - 1]) === cursor.lastStableId) return offset;
+    for (var index = rows.length - 1; index >= 0; index--) {
+      if (identify(rows[index]) === cursor.lastStableId) return index + 1;
+    }
+    // 源被裁剪、迁移或重排；有界重扫当前窗口，existingIds 会过滤已提交项。
+    return 0;
+  }
+
+  function _validateEmbeddingBatch(vectors, batchLength, expectedDimension) {
+    if (!Array.isArray(vectors) || vectors.length !== batchLength) {
+      throw new Error('semantic embedding batch returned ' + (Array.isArray(vectors) ? vectors.length : 0)
+        + ' vectors for ' + batchLength + ' texts');
+    }
+    var dimension = expectedDimension || 0;
+    vectors.forEach(function(vector) {
+      if (!Array.isArray(vector) || !vector.length) throw new Error('semantic embedding vector is missing or empty');
+      if (!dimension) dimension = vector.length;
+      if (vector.length !== dimension) throw new Error('semantic embedding vector dimension mismatch');
+      for (var component = 0; component < vector.length; component++) {
+        if (!Number.isFinite(Number(vector[component]))) throw new Error('semantic embedding vector contains non-finite values');
+      }
+    });
+    return dimension;
+  }
+
+  async function _buildIndexForLease(opts, identity, lease) {
+    _assertLeaseCurrent(lease, 'build-start');
     if (!STATE._idxLoadTried) {
-      STATE._idxLoadTried = true;
-      try { await loadIndex(); }
-      catch (loadError) {
+      try {
+        await loadIndex(identity, lease);
+        _assertLeaseCurrent(lease, 'load-index');
+      } catch (loadError) {
+        if (loadError && loadError.code === 'semantic_world_changed') throw loadError;
+        if (!_isLeaseCurrent(lease)) throw loadError;
         STATE.error = 'semantic index load failed: ' + (loadError.message || String(loadError));
         if (global.TM && global.TM.errors && typeof global.TM.errors.capture === 'function') {
           global.TM.errors.capture(loadError, 'SemanticRecall.loadIndex');
         } else if (global.console && console.warn) console.warn('[SemanticRecall] index load failed:', loadError);
+        throw loadError;
       }
     }
-    var turn = (GM.turn || 0);
-    var pending = [];
-    var existing = Object.create(null);
-    STATE.index.forEach(function(item) { existing[item.source + '|' + (item.sourceId || item.id)] = true; });
 
-    function visitRows(source, rows, project) {
+    var gm = lease.gmRef;
+    var turn = Number(gm.turn) || 0;
+    var pending = [];
+    var pendingIds = new Set();
+    var nextCursors = _cloneCursors(STATE.cursors);
+    var cursorChanged = false;
+    var sourceRowsVisited = 0;
+
+    function visitRows(source, rows, identify, project) {
       rows = Array.isArray(rows) ? rows : [];
-      var cursor = _cursor(source);
-      var start = Number(cursor.lastArrayOffset) || 0;
-      if (start < 0 || start > rows.length) start = 0;
+      var cursor = _cursorIn(nextCursors, source);
+      var start = _rowScanStart(rows, cursor, identify);
       var newestTurn = cursor.lastTurn || 0;
-      var newestStableId = cursor.lastStableId || '';
       for (var offset = start; offset < rows.length; offset++) {
+        sourceRowsVisited += 1;
         _perfCount('semantic.sourceRowsVisited', 1);
-        var projected = project(rows[offset], offset) || [];
+        var rowStableId = identify(rows[offset]);
+        var projected = project(rows[offset], rowStableId) || [];
         if (!Array.isArray(projected)) projected = [projected];
         projected.forEach(function(item) {
           if (!item || !item.sourceId || !item.text) return;
           var dedupeKey = source + '|' + item.sourceId;
-          if (existing[dedupeKey]) return;
-          existing[dedupeKey] = true;
+          if (STATE.existingIds.has(dedupeKey) || pendingIds.has(dedupeKey)) return;
+          pendingIds.add(dedupeKey);
           pending.push({
             source: source,
             sourceId: String(item.sourceId),
@@ -465,75 +603,88 @@
             text: String(item.text).slice(0, 200)
           });
           newestTurn = Math.max(newestTurn, Number(item.turn) || 0);
-          newestStableId = source + ':' + String(item.sourceId);
         });
       }
+      var nextStableId = rows.length ? identify(rows[rows.length - 1]) : '';
+      if (cursor.lastArrayOffset !== rows.length || cursor.lastStableId !== nextStableId || start < rows.length) {
+        cursorChanged = true;
+      }
       cursor.lastArrayOffset = rows.length;
-      cursor.lastSeq = rows.length;
-      cursor.lastStableId = newestStableId;
+      cursor.lastSeq = (cursor.lastSeq || 0) + Math.max(0, rows.length - start);
+      cursor.lastStableId = nextStableId;
       cursor.lastTurn = newestTurn;
       cursor.revision = (cursor.revision || 0) + Math.max(0, rows.length - start);
     }
 
     await _perfWithSpan('semantic.scan', function() {
-      visitRows('shiji', GM.shijiHistory, function(sh, offset) {
+      visitRows('shiji', gm.shijiHistory, function(sh) {
+        if (!sh) return '';
+        return String(sh.id || ('fp:' + _stableFingerprint([
+          Number(sh.turn) || 0, sh.shilu || '', sh.shizhengji || '', sh.zhengwen || '', sh.shilu_text || ''
+        ])));
+      }, function(sh, stable) {
         if (!sh) return [];
-        var combined = sh.shilu || sh.shizhengji || sh.zhengwen || '';
+        var combined = sh.shilu || sh.shizhengji || sh.zhengwen || sh.shilu_text || '';
         var sentences = String(combined).split(/[。！？\n]/).filter(function(sentence) { return sentence && sentence.length > 8; });
-        var stable = sh.id || ('T' + (Number(sh.turn) || 0) + ':row' + offset);
         return sentences.slice(0, 30).map(function(sentence, sentenceIndex) {
           return { sourceId: stable + ':s' + sentenceIndex, turn: sh.turn, text: sentence };
         });
       });
 
       if (typeof ChronicleTracker !== 'undefined' && ChronicleTracker.getAll) {
-        var allChron = Array.isArray(GM._chronicleTracks) ? GM._chronicleTracks : (ChronicleTracker.getAll({}) || []);
-        visitRows('chronicle', allChron, function(entry, offset) {
+        var allChron = Array.isArray(gm._chronicleTracks) ? gm._chronicleTracks : (ChronicleTracker.getAll({}) || []);
+        visitRows('chronicle', allChron, function(entry) {
+          if (!entry) return '';
+          return String(entry.id || ('fp:' + _stableFingerprint([
+            Number(entry.startTurn) || 0, entry.title || '', entry.description || '', entry.summary || ''
+          ])));
+        }, function(entry, stable) {
           if (!entry) return null;
-          return {
-            sourceId: entry.id || ('row' + offset),
-            turn: entry.startTurn,
-            text: (entry.title || '') + '·' + (entry.description || entry.summary || '')
-          };
+          return { sourceId: stable, turn: entry.startTurn, text: (entry.title || '') + '·' + (entry.description || entry.summary || '') };
         });
       }
 
-      visitRows('foreshadow', GM._foreshadows, function(entry, offset) {
+      visitRows('foreshadow', gm._foreshadows, function(entry) {
+        if (!entry) return '';
+        return String(entry.id || ('fp:' + _stableFingerprint([
+          Number(entry.turn) || 0, entry.content || '', entry.text || '', entry.type || ''
+        ])));
+      }, function(entry, stable) {
         if (!entry) return null;
-        return {
-          sourceId: entry.id || ('T' + (Number(entry.turn) || 0) + ':row' + offset),
-          turn: entry.turn,
-          text: entry.content || entry.text || ''
-        };
+        return { sourceId: stable, turn: entry.turn, text: entry.content || entry.text || '' };
       });
 
-      var eventRows = GM._memTables && GM._memTables.eventHistory && GM._memTables.eventHistory.rows;
-      visitRows('eventHistory', eventRows, function(row, offset) {
+      var eventRows = gm._memTables && gm._memTables.eventHistory && gm._memTables.eventHistory.rows;
+      visitRows('eventHistory', eventRows, function(row) {
+        if (!row) return '';
+        return String(row[0] || ('fp:' + _stableFingerprint(row)));
+      }, function(row, stable) {
         if (!row) return null;
         var rowTurn = Number.parseInt(row[1], 10);
         if (!Number.isFinite(rowTurn)) rowTurn = 0;
-        return {
-          sourceId: row[0] || ('T' + rowTurn + ':row' + offset),
-          turn: rowTurn,
-          text: String(row[2] || '') + ' ' + String(row[5] || '')
-        };
+        return { sourceId: stable, turn: rowTurn, text: String(row[2] || '') + ' ' + String(row[5] || '') };
       });
     }, { world: identity.key });
 
+    _assertLeaseCurrent(lease, 'scan');
     _perfCount('semantic.newRows', pending.length);
+    if (!pending.length && !cursorChanged) {
+      return { ok: true, added: 0, total: STATE.index.length, visited: sourceRowsVisited, reused: true };
+    }
+
     var addedItems = [];
     var batchSize = Number(opts.batchSize);
     if (!Number.isSafeInteger(batchSize) || batchSize < 16 || batchSize > 64) batchSize = 32;
+    var expectedDimension = STATE.index.length && Array.isArray(STATE.index[0].vec) ? STATE.index[0].vec.length : 0;
     for (var batchAt = 0; batchAt < pending.length; batchAt += batchSize) {
       var batch = pending.slice(batchAt, batchAt + batchSize);
       var vectors = await _embedBatch(batch.map(function(item) { return item.text; }));
+      _assertLeaseCurrent(lease, 'embedding-batch');
+      expectedDimension = _validateEmbeddingBatch(vectors, batch.length, expectedDimension);
       for (var vectorIndex = 0; vectorIndex < batch.length; vectorIndex++) {
-        var vector = vectors[vectorIndex];
-        if (!vector) continue;
         var pendingItem = batch[vectorIndex];
-        var storageId = identity.campaignId + ':' + identity.timelineId + ':' + pendingItem.source + ':' + pendingItem.sourceId;
-        var indexItem = {
-          id: storageId,
+        addedItems.push({
+          id: identity.campaignId + ':' + identity.timelineId + ':' + pendingItem.source + ':' + pendingItem.sourceId,
           sourceId: pendingItem.sourceId,
           campaignId: identity.campaignId,
           timelineId: identity.timelineId,
@@ -541,15 +692,43 @@
           source: pendingItem.source,
           turn: pendingItem.turn,
           text: pendingItem.text,
-          vec: vector
-        };
-        STATE.index.push(indexItem);
-        addedItems.push(indexItem);
+          vec: vectors[vectorIndex]
+        });
       }
     }
-    STATE.lastIndexedTurn = turn;
-    if (addedItems.length > 0 || pending.length === 0) await persistIndex(addedItems);
-    return { ok: true, added: addedItems.length, total: STATE.index.length, visited: pending.length };
+
+    var staged = {
+      cursors: nextCursors,
+      newItems: addedItems,
+      count: STATE.index.length + addedItems.length,
+      lastIndexedTurn: (pending.length || cursorChanged) ? turn : STATE.lastIndexedTurn
+    };
+    await _persistStagedIndex(identity, staged, lease);
+    _assertLeaseCurrent(lease, 'persist-complete');
+    addedItems.forEach(function(item) {
+      STATE.index.push(item);
+      STATE.existingIds.add(item.source + '|' + (item.sourceId || item.id));
+    });
+    STATE.cursors = nextCursors;
+    STATE.lastIndexedTurn = staged.lastIndexedTurn;
+    return { ok: true, added: addedItems.length, total: STATE.index.length, visited: sourceRowsVisited };
+  }
+
+  async function buildIndex(opts) {
+    opts = opts || {};
+    _perfCount('semantic.idbClearCount', 0);
+    if (!STATE.enabled) return { ok: false, reason: 'disabled' };
+    if (!await ensureModel()) return { ok: false, reason: 'model not ready: ' + STATE.error };
+    if (typeof GM === 'undefined' || !GM) return { ok: false, reason: 'no GM' };
+    var identity = _ensureWorldState();
+    if (!identity.campaignId || !identity.timelineId) return { ok: false, reason: 'world identity unavailable' };
+    var lease = _captureWorldLease(identity);
+    if (_buildFlights[lease.token]) return _buildFlights[lease.token];
+    var flight = _buildIndexForLease(opts, identity, lease);
+    _buildFlights[lease.token] = flight;
+    return flight.finally(function() {
+      if (_buildFlights[lease.token] === flight) delete _buildFlights[lease.token];
+    });
   }
 
   // ────── 检索 ──────
@@ -557,9 +736,10 @@
     opts = opts || {};
     if (!STATE.enabled || !STATE.modelReady) return [];
     if (!query) return [];
-    _ensureWorldState();
+    var identity = _ensureWorldState();
+    var lease = _captureWorldLease(identity);
     var qVec = await _embed(query);
-    if (!qVec) return [];
+    if (!qVec || !_isLeaseCurrent(lease)) return [];
     var topK = Number(opts.topK);
     if (!Number.isSafeInteger(topK) || topK <= 0 || topK > 100) topK = 6;
     var threshold = opts.threshold != null ? Number(opts.threshold) : STATE.threshold;
@@ -627,6 +807,7 @@
       if (!STATE.enabled || !STATE.modelReady) return;
       // 异步索引·不阻塞
       buildIndex().catch(function(error){
+        if (error && error.code === 'semantic_world_changed') return;
         STATE.error = String(error && (error.message || error) || 'semantic index failure');
         if (global.TM && global.TM.errors && typeof global.TM.errors.capture === 'function') {
           global.TM.errors.capture(error, 'SemanticRecall.autoIndex');
@@ -687,10 +868,12 @@
       + encodeURIComponent(identity.timelineId) + ':' + encodeURIComponent(identity.modelVersion);
   }
 
-  function persistIndex(newItems) {
-    var identity = _ensureWorldState();
-    newItems = Array.isArray(newItems) ? newItems : [];
+  function _persistStagedIndex(identity, staged, lease) {
+    staged = staged || {};
+    var newItems = Array.isArray(staged.newItems) ? staged.newItems : [];
+    _assertLeaseCurrent(lease, 'persist-open');
     return _perfWithSpan('semantic.persist', function() { return _openIdxDB().then(function(db) {
+      _assertLeaseCurrent(lease, 'persist-transaction');
       return new Promise(function(resolve, reject) {
         var tx = db.transaction('idx', 'readwrite');
         var s = tx.objectStore('idx');
@@ -700,29 +883,71 @@
           timelineId: identity.timelineId,
           modelVersion: identity.modelVersion,
           savedAt: Date.now(),
-          count: STATE.index.length,
-          lastIndexedTurn: STATE.lastIndexedTurn,
-          cursors: JSON.parse(JSON.stringify(STATE.cursors))
+          count: Number(staged.count) || 0,
+          lastIndexedTurn: Number(staged.lastIndexedTurn) || 0,
+          cursors: _cloneCursors(staged.cursors)
         };
-        s.put(meta);
-        _perfCount('semantic.idbPutCount', 1);
-        newItems.forEach(function(item) {
-          s.put(item);
+        try {
+          s.put(meta);
           _perfCount('semantic.idbPutCount', 1);
-        });
-        tx.oncomplete = function(){ resolve({ ok: true, count: STATE.index.length }); };
+          newItems.forEach(function(item) {
+            s.put(item);
+            _perfCount('semantic.idbPutCount', 1);
+          });
+        } catch (putError) {
+          try { if (typeof tx.abort === 'function') tx.abort(); }
+          catch (abortError) {
+            if (global.TM && global.TM.errors && typeof global.TM.errors.capture === 'function') {
+              global.TM.errors.capture(abortError, 'SemanticRecall.persistAbort');
+            }
+          }
+          reject(putError);
+          return;
+        }
+        tx.oncomplete = function(){ resolve({ ok: true, count: meta.count }); };
         tx.onerror = function(e) { reject((e.target && e.target.error) || tx.error || new Error('semantic index persist failed')); };
         tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('semantic index persist aborted')); };
       });
     }); }, { added: newItems.length, world: identity.key });
   }
-  function loadIndex() {
+
+  // Compatibility entry point for diagnostics/manual persistence. Production
+  // buildIndex uses _persistStagedIndex and never mutates STATE before commit.
+  function persistIndex(newItems) {
     var identity = _ensureWorldState();
+    var lease = _captureWorldLease(identity);
+    newItems = Array.isArray(newItems) ? newItems : [];
+    return _persistStagedIndex(identity, {
+      newItems: newItems,
+      count: STATE.index.length,
+      lastIndexedTurn: STATE.lastIndexedTurn,
+      cursors: _cloneCursors(STATE.cursors)
+    }, lease);
+  }
+
+  function _loadIndexData(identity, lease) {
+    _assertLeaseCurrent(lease, 'load-open');
     return _openIdxDB().then(function(db) {
+      _assertLeaseCurrent(lease, 'load-query');
       return new Promise(function(resolve, reject) {
         var tx = db.transaction('idx', 'readonly');
         var store = tx.objectStore('idx');
         var req;
+        var loadedResult = null;
+        var requestDone = false;
+        var transactionDone = false;
+        var settled = false;
+        function finishIfReady() {
+          if (!settled && requestDone && transactionDone) {
+            settled = true;
+            resolve(loadedResult);
+          }
+        }
+        function fail(error) {
+          if (settled) return;
+          settled = true;
+          reject(error);
+        }
         try {
           var index = typeof store.index === 'function' ? store.index('worldModel') : null;
           req = index ? index.getAll([identity.campaignId, identity.timelineId, identity.modelVersion]) : store.getAll();
@@ -730,6 +955,8 @@
           req = store.getAll();
         }
         req.onsuccess = function(e) {
+          try { _assertLeaseCurrent(lease, 'load-result'); }
+          catch (leaseError) { fail(leaseError); return; }
           var rows = e.target.result || [];
           var metaId = _semanticMetaId(identity);
           var meta = null, items = [], legacyMeta = null;
@@ -742,20 +969,64 @@
                 && row.modelVersion === identity.modelVersion) items.push(row);
           });
           if (!meta) {
-            STATE.index = [];
-            STATE.cursors = Object.create(null);
-            STATE.lastIndexedTurn = 0;
-            resolve({ ok: false, reason: legacyMeta ? 'legacy-index-rebuild' : 'world index missing', count: 0 });
+            loadedResult = {
+              ok: false,
+              reason: legacyMeta ? 'legacy-index-rebuild' : 'world index missing',
+              items: [],
+              cursors: Object.create(null),
+              lastIndexedTurn: 0
+            };
+            requestDone = true;
+            finishIfReady();
             return;
           }
-          STATE.index = items;
-          STATE.cursors = meta.cursors && typeof meta.cursors === 'object' ? meta.cursors : Object.create(null);
-          STATE.lastIndexedTurn = Number(meta.lastIndexedTurn) || 0;
-          resolve({ ok: true, count: STATE.index.length });
+          loadedResult = {
+            ok: true,
+            items: items,
+            cursors: _cloneCursors(meta.cursors),
+            lastIndexedTurn: Number(meta.lastIndexedTurn) || 0
+          };
+          requestDone = true;
+          finishIfReady();
         };
-        req.onerror = function(e) { reject(e.target.error || new Error('semantic index load failed')); };
-        tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('semantic index load aborted')); };
+        req.onerror = function(e) { fail(e.target.error || new Error('semantic index load failed')); };
+        tx.oncomplete = function() {
+          transactionDone = true;
+          finishIfReady();
+        };
+        tx.onerror = function(e) { fail((e.target && e.target.error) || tx.error || new Error('semantic index load failed')); };
+        tx.onabort = function(e) { fail((e.target && e.target.error) || tx.error || new Error('semantic index load aborted')); };
       });
+    });
+  }
+
+  function _applyLoadedIndex(loaded, lease) {
+    _assertLeaseCurrent(lease, 'load-apply');
+    var items = Array.isArray(loaded && loaded.items) ? loaded.items : [];
+    var existingIds = new Set();
+    items.forEach(function(item) {
+      _perfCount('semantic.existingIdVisits', 1);
+      if (!item || !item.source) return;
+      existingIds.add(item.source + '|' + (item.sourceId || item.id));
+    });
+    STATE.index = items;
+    STATE.existingIds = existingIds;
+    STATE.cursors = _cloneCursors(loaded && loaded.cursors);
+    STATE.lastIndexedTurn = Number(loaded && loaded.lastIndexedTurn) || 0;
+    STATE._idxLoadTried = true;
+    return { ok: !!(loaded && loaded.ok), reason: loaded && loaded.reason || '', count: items.length };
+  }
+
+  function loadIndex(identity, lease) {
+    identity = identity || _ensureWorldState();
+    lease = lease || _captureWorldLease(identity);
+    if (_loadFlights[lease.token]) return _loadFlights[lease.token];
+    var flight = _loadIndexData(identity, lease).then(function(loaded) {
+      return _applyLoadedIndex(loaded, lease);
+    });
+    _loadFlights[lease.token] = flight;
+    return flight.finally(function() {
+      if (_loadFlights[lease.token] === flight) delete _loadFlights[lease.token];
     });
   }
 

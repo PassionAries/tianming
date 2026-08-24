@@ -90,7 +90,7 @@ const domTargets = {
     '_desktopScenarioStartPanel', 'showPanel', 'showScnManage', 'showScnSelect',
     'desktopConfirmStart', 'desktopBackToStartPanel'
   ],
-  'tm-ai-infra.js': ['renderEraNamesList', '_tmTimeDisplayParts', 'createTSElement'],
+  'tm-ai-infra.js': ['renderEraNamesList', '_tmTimeDisplayParts', 'createTSElement', '_buildAICostPanelElement', 'showAICostPanel'],
   'tm-patches-start.js': ['_tmShowOpeningCeremony']
 };
 Object.entries(domTargets).forEach(([file, names]) => {
@@ -121,6 +121,7 @@ check(!/processChangeQueue\s*\(/.test(internalQueueSource), 'internal ChangeQueu
 const reactiveFn = queueFunctions.get('processChangeQueue');
 check(!!reactiveFn && !/\bChangeQueue\b/.test(queueSource.slice(reactiveFn.start, reactiveFn.end)), 'reactive queue consumer must not call internal ChangeQueue');
 check(!/Number\s*\([^)]*\)\s*\|\|\s*0/.test(internalQueueSource), 'internal ChangeQueue must not coerce invalid numbers to zero');
+check(/_finalizeQueuedFailure\s*\(originalQueue,\s*change,\s*exceptionFailure/.test(internalQueueSource), 'ChangeQueue exception path must settle attempts through the shared retry/dead-letter boundary');
 ['_handlerTreasury', '_handlerVariable', '_handlerCharacter', '_handlerFaction', '_handlerProvince', '_handlerNation'].forEach((name) => {
   const fn = queueFunctions.get(name);
   check(!!fn, 'missing ChangeQueue handler ' + name);
@@ -145,6 +146,13 @@ if (coreApply) {
     && coreSource.indexOf('_validateAndRepairMainWriteback') < coreSource.indexOf('applyAITurnChanges'), 'strict preflight must precede the atomic applier');
   check(/_strictValidation\s*:\s*true/.test(coreSource) && /throw\s+new Error\(['\"]AI 主写回未能原子提交/.test(coreSource), 'main writeback retains all-or-nothing rejection semantics');
   check(!/ignore(?:Failures?|Errors?)|partialCommit|continueOnError/i.test(coreSource), 'main writeback must not enable partial success');
+}
+const targetedRepair = writebackFunctions.get('_applyTargetedWritebackRepairs');
+check(!!targetedRepair, 'targeted writeback repair boundary is locatable');
+if (targetedRepair) {
+  const repairSource = writebackParsed.source.slice(targetedRepair.start, targetedRepair.end);
+  check(/repair-target-not-allowed/.test(repairSource) && /duplicate-repair-target/.test(repairSource), 'targeted repairs must enforce failure-slot allowlist and uniqueness');
+  check(/_repairPreservesSemantics/.test(repairSource) && /repair-changed-business-semantics/.test(repairSource), 'targeted repairs must reject non-identity semantic changes in code');
 }
 
 const runtimeFiles = fs.readdirSync(WEB).filter((name) => name.endsWith('.js'));
@@ -186,6 +194,23 @@ const infraFunctions = functionsByName(infraParsed);
   });
   check(adds === 1 && removes === 1 && finallyRemoves === 1, name + ' must pair its abort listener in finally');
 });
+
+const rootDir = path.resolve(WEB, '..');
+const mainSource = fs.readFileSync(path.join(rootDir, 'main-impl.js'), 'utf8');
+const preloadSource = fs.readFileSync(path.join(rootDir, 'preload-impl.js'), 'utf8');
+const saveLifecycleSource = read('tm-save-lifecycle.js');
+check(/ipcMain\.handle\('app-quit',\s*\(\)\s*=>\s*requestApplicationQuit\(/.test(mainSource),
+  'renderer quit requests must pass through the background-save close handshake');
+check(/mainWindow\.on\('close',\s*event\s*=>[\s\S]*?event\.preventDefault\(\)[\s\S]*?requestApplicationQuit\('window-close'\)/.test(mainSource),
+  'native window close must be intercepted until the renderer flush acknowledgement completes');
+check(/app-close-flush-request/.test(mainSource) && /app-close-flush-complete/.test(mainSource),
+  'main process must retain the bounded close-flush request/ack protocol');
+check(/onAppCloseFlushRequest[\s\S]*?_subscribeAppCloseFlush/.test(preloadSource)
+  && /app-close-flush-complete/.test(preloadSource),
+  'preload must expose only the bounded close-flush bridge and acknowledgement');
+check(/_tmInstallDesktopCloseFlushBridge\(\)/.test(saveLifecycleSource)
+  && /_tmFlushBackgroundAutosavesForClose/.test(saveLifecycleSource),
+  'desktop save lifecycle must install the close-time background queue drain');
 
 if (failures.length) {
   console.error('[lint-renderer-writeback-boundaries] FAIL ' + failures.length + '/' + checks);

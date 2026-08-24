@@ -115,33 +115,104 @@
     }
   }
 
-  function _applyTargetedWritebackRepairs(batch, response) {
+  function _writebackRepairSlot(field, index) {
+    return String(field || '') + ':' + (Number.isInteger(index) ? String(index) : '$');
+  }
+
+  function _identityFieldsForFailure(failure) {
+    if (!failure || failure.retryable !== true) return [];
+    var field = String(failure.field || '');
+    var code = String(failure.code || '');
+    if (!/(not-found|ambiguous-reference|missing-required-field|invalid-target|office-not-found)/.test(code)) return [];
+    if (Array.isArray(failure.identityFields) && failure.identityFields.length) return failure.identityFields.slice();
+    if (/^(appointments|char_updates|office_assignments|personnel_changes|character_deaths)$/.test(field)) {
+      if (code === 'office-not-found') return ['post', 'position', 'toPosition', 'officeId'];
+      return ['characterId', 'charId', 'charName', 'character', 'name'];
+    }
+    if (/^(faction_updates|faction_dissolve|faction_succession|battleResult)$/.test(field)) {
+      return [
+        'factionId', 'faction', 'id', 'name',
+        'winnerFactionId', 'winnerFaction', 'winner',
+        'loserFactionId', 'loserFaction', 'loser',
+        'targetFactionId', 'targetFaction', 'newFactionId', 'newFaction', 'toFactionId', 'toFaction'
+      ];
+    }
+    if (/^(region_updates|population_adjustments|central_local_actions|environment_actions)$/.test(field)) {
+      return ['regionId', 'region_id', 'region', 'targetRegion', 'target'];
+    }
+    return [];
+  }
+
+  function _buildWritebackRepairAllowlist(failures) {
+    var allowed = Object.create(null);
+    (Array.isArray(failures) ? failures : []).forEach(function(failure) {
+      var fields = _identityFieldsForFailure(failure);
+      if (!fields.length) return;
+      var slot = _writebackRepairSlot(failure.field, failure.index);
+      if (!allowed[slot]) allowed[slot] = { field:String(failure.field || ''), index:Number.isInteger(failure.index) ? failure.index : null, fields:Object.create(null), failures:[] };
+      fields.forEach(function(field) { allowed[slot].fields[field] = true; });
+      allowed[slot].failures.push(failure);
+    });
+    return allowed;
+  }
+
+  function _repairComparable(value, ignoredTopLevelFields, depth) {
+    if (value == null || typeof value !== 'object') return value;
+    if (Array.isArray(value)) return value.map(function(row) { return _repairComparable(row, null, (depth || 0) + 1); });
+    var out = {};
+    Object.keys(value).sort().forEach(function(key) {
+      if ((depth || 0) === 0 && ignoredTopLevelFields && ignoredTopLevelFields[key]) return;
+      out[key] = _repairComparable(value[key], null, (depth || 0) + 1);
+    });
+    return out;
+  }
+
+  function _repairPreservesSemantics(before, after, allowedFields) {
+    try {
+      return JSON.stringify(_repairComparable(before, allowedFields, 0)) === JSON.stringify(_repairComparable(after, allowedFields, 0));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function _applyTargetedWritebackRepairs(batch, response, allowlist) {
     if (!response || typeof response !== 'object' || !Array.isArray(response.repairs)) {
       return { ok:false, code:'invalid-repair-response' };
     }
-    if (response.semanticUnchanged !== true && !String(response.narrativePatch || '').trim()) {
-      return { ok:false, code:'repair-narrative-mismatch' };
-    }
+    if (response.semanticUnchanged !== true) return { ok:false, code:'repair-semantic-change-requires-regeneration' };
+    if (String(response.narrativePatch || '').trim()) return { ok:false, code:'repair-narrative-patch-not-allowed' };
     var next = _cloneWritebackValue(batch);
     var applied = 0;
-    response.repairs.forEach(function(repair) {
-      if (!repair || typeof repair !== 'object' || !repair.field || !repair.item || typeof repair.item !== 'object') return;
-      var field = String(repair.field);
-      if (!Object.prototype.hasOwnProperty.call(next, field)) return;
-      if (Number.isInteger(repair.index) && Array.isArray(next[field]) && repair.index >= 0 && repair.index < next[field].length) {
-        next[field][repair.index] = _cloneWritebackValue(repair.item);
-        applied++;
-      } else if (repair.index == null && !Array.isArray(next[field])) {
-        next[field] = _cloneWritebackValue(repair.item);
-        applied++;
+    var seen = Object.create(null);
+    for (var repairIndex = 0; repairIndex < response.repairs.length; repairIndex++) {
+      var repair = response.repairs[repairIndex];
+      if (!repair || typeof repair !== 'object' || !repair.field || !repair.item || typeof repair.item !== 'object') {
+        return { ok:false, code:'invalid-repair-item', repairIndex:repairIndex };
       }
-    });
-    if (!applied) return { ok:false, code:'repair-applied-nothing' };
-    var narrativePatch = String(response.narrativePatch || '').trim();
-    if (narrativePatch) {
-      if (Object.prototype.hasOwnProperty.call(next, 'shizhengji')) next.shizhengji = narrativePatch;
-      if (Object.prototype.hasOwnProperty.call(next, 'narrative')) next.narrative = narrativePatch;
+      var field = String(repair.field);
+      var index = Number.isInteger(repair.index) ? repair.index : null;
+      var slot = _writebackRepairSlot(field, index);
+      var permission = allowlist && allowlist[slot];
+      if (!permission) return { ok:false, code:'repair-target-not-allowed', field:field, index:index };
+      if (seen[slot]) return { ok:false, code:'duplicate-repair-target', field:field, index:index };
+      seen[slot] = true;
+      if (!Object.prototype.hasOwnProperty.call(next, field)) return { ok:false, code:'repair-field-missing', field:field };
+      var before;
+      if (index !== null) {
+        if (!Array.isArray(next[field]) || index < 0 || index >= next[field].length) return { ok:false, code:'repair-index-out-of-range', field:field, index:index };
+        before = next[field][index];
+      } else {
+        if (Array.isArray(next[field]) || !next[field] || typeof next[field] !== 'object') return { ok:false, code:'repair-scalar-shape-invalid', field:field };
+        before = next[field];
+      }
+      if (!_repairPreservesSemantics(before, repair.item, permission.fields)) {
+        return { ok:false, code:'repair-changed-business-semantics', field:field, index:index };
+      }
+      if (index !== null) next[field][index] = _cloneWritebackValue(repair.item);
+      else next[field] = _cloneWritebackValue(repair.item);
+      applied++;
     }
+    if (!applied) return { ok:false, code:'repair-applied-nothing' };
     return { ok:true, output:next, applied:applied };
   }
 
@@ -155,22 +226,28 @@
     var current = _cloneWritebackValue(batch);
     var validation = global.validateAIWriteBackBatch(current, { source:opts.source || 'endturn-full-p1' });
     var attempts = 0;
+    var lastRepairFailureCode = '';
     while (!validation.ok && attempts < 2) {
-      attempts++;
       if (typeof callAI !== 'function') break;
-      var failures = validation.failures.slice(0, 24).map(function(failure) {
+      var repairable = validation.failures.filter(function(failure) { return _identityFieldsForFailure(failure).length > 0; }).slice(0, 24);
+      var allowlist = _buildWritebackRepairAllowlist(repairable);
+      if (!Object.keys(allowlist).length) break;
+      attempts++;
+      var failures = repairable.map(function(failure) {
+        var permission = allowlist[_writebackRepairSlot(failure.field, failure.index)];
         return {
           field:failure.field,
           index:failure.index,
           code:failure.code,
           target:failure.target,
           reason:failure.reason,
+          allowedIdentityFields:permission ? Object.keys(permission.fields) : [],
           item:failure.item || (Array.isArray(current[failure.field]) && Number.isInteger(failure.index) ? current[failure.field][failure.index] : current[failure.field])
         };
       });
       var prompt = '【AI 主写回定向修复】\n' +
-        '只修正下列结构化变更中的无效引用或字段；不得重新生成整回合叙事，不得删除失败项，不得新增无关变化。\n' +
-        '若只把错误引用换成同一真实实体的稳定 ID/精确名称，semanticUnchanged=true。若动作语义改变，必须给出与修复后状态一致的完整 narrativePatch。\n' +
+        '只修正下列 retryable 失败槽位中列出的身份引用字段；不得修改动作、数量、方向、效果或任何已通过项目。\n' +
+        '每个槽位最多返回一次 repair；必须 semanticUnchanged=true 且 narrativePatch 为空。无法保持业务语义时不要猜测，本回合将整体重新生成。\n' +
         '返回唯一 JSON：{"repairs":[{"field":"数组字段","index":0,"item":{完整修正项}}],"semanticUnchanged":true,"narrativePatch":""}\n' +
         '失败项：' + JSON.stringify(failures) + '\n' +
         '可用候选：' + JSON.stringify(_collectWritebackRepairCandidates()) + '\n' +
@@ -178,8 +255,11 @@
       var rawRepair = await callAI(prompt, 2200, undefined, 'secondary', {
         priority:'critical', timeoutMs:50000, maxRetries:0, temperature:0
       });
-      var repair = _applyTargetedWritebackRepairs(current, _parseWritebackRepair(rawRepair));
-      if (!repair.ok) continue;
+      var repair = _applyTargetedWritebackRepairs(current, _parseWritebackRepair(rawRepair), allowlist);
+      if (!repair.ok) {
+        lastRepairFailureCode = repair.code || 'repair-rejected';
+        continue;
+      }
       current = repair.output;
       validation = global.validateAIWriteBackBatch(current, { source:'endturn-writeback-repair-' + attempts });
     }
@@ -190,6 +270,7 @@
         return Object.assign({ attempts:attempts, finalRollbackReason:'preflight-failed' }, failure);
       });
       error.repairAttempts = attempts;
+      error.lastRepairFailureCode = lastRepairFailureCode;
       throw error;
     }
     return { ok:true, output:validation.output, repairAttempts:attempts };

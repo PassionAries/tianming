@@ -2467,15 +2467,71 @@ function requestBackgroundAutosave(options){
   return Promise.resolve({ok:true,scheduled:true,reasons:Array.from(_backgroundSavePending.reasons)});
 }
 
-function _tmAwaitBackgroundAutosaves(){
+async function _tmAwaitBackgroundAutosaves(){
   if (_backgroundSaveTimer) {
     clearTimeout(_backgroundSaveTimer);
     _backgroundSaveTimer=null;
   }
-  return _tmDrainBackgroundAutosaves().then(function(result){
-    if (_backgroundSaveInFlight) return _backgroundSaveInFlight;
-    return result;
+  var result={ok:false,skipped:true,reason:'no-background-save'};
+  var drains=0;
+  while (_backgroundSavePending||_backgroundSaveInFlight) {
+    if (_backgroundSaveTimer) {
+      clearTimeout(_backgroundSaveTimer);
+      _backgroundSaveTimer=null;
+    }
+    result=_backgroundSaveInFlight
+      ? await _backgroundSaveInFlight
+      : await _tmDrainBackgroundAutosaves();
+    drains++;
+    // A world transaction cannot be waited out from a close handshake. Keep the
+    // request pending and let the main process cancel this close attempt.
+    if (result&&result.deferred) return result;
+    if (drains>_BACKGROUND_SAVE_MAX_ATTEMPTS+1) {
+      return {ok:false,error:new Error('background save drain exceeded retry limit'),attempts:drains};
+    }
+  }
+  return result;
+}
+
+async function _tmFlushBackgroundAutosavesForClose(){
+  if (isWorldTransactionActive()) {
+    return {ok:false,code:'world-transaction-active',reason:'回合、读档或回滚事务仍在进行'};
+  }
+  try {
+    var result=await _tmAwaitBackgroundAutosaves();
+    if (_backgroundSavePending||_backgroundSaveInFlight) {
+      return {ok:false,code:'background-save-still-pending',reason:'后台保存队列尚未清空'};
+    }
+    if (result&&result.error) {
+      return {
+        ok:false,
+        code:'background-save-flush-failed',
+        reason:result.error&&result.error.message||String(result.error)
+      };
+    }
+    return {ok:true,reason:result&&result.reason||'background-saves-flushed'};
+  } catch(error) {
+    try {
+      if (window.TM&&TM.errors&&typeof TM.errors.captureSilent==='function') {
+        TM.errors.captureSilent(error,'background-save-close-flush');
+      }
+    } catch(reportError) {
+      console.warn('[background-save] 关闭握手错误记录失败:',reportError&&reportError.message||reportError);
+    }
+    return {ok:false,code:'background-save-flush-exception',reason:error&&error.message||String(error)};
+  }
+}
+
+function _tmInstallDesktopCloseFlushBridge(){
+  if (!_tmHasNativeFs()||!window.tianming
+      ||typeof window.tianming.onAppCloseFlushRequest!=='function') return false;
+  if (typeof window._tmCloseFlushBridgeDisposer==='function') return true;
+  var disposer=window.tianming.onAppCloseFlushRequest(function(){
+    return _tmFlushBackgroundAutosavesForClose();
   });
+  if (typeof disposer!=='function') throw new Error('desktop close flush bridge did not return a disposer');
+  window._tmCloseFlushBridgeDisposer=disposer;
+  return true;
 }
 
 function _tmNewDesktopAutoSaveSessionToken(){
@@ -2847,6 +2903,13 @@ if (typeof window !== 'undefined') {
   window.requestBackgroundAutosave = requestBackgroundAutosave;
   window._tmDrainBackgroundAutosaves = _tmDrainBackgroundAutosaves;
   window._tmAwaitBackgroundAutosaves = _tmAwaitBackgroundAutosaves;
+  window._tmFlushBackgroundAutosavesForClose = _tmFlushBackgroundAutosavesForClose;
+  window._tmInstallDesktopCloseFlushBridge = _tmInstallDesktopCloseFlushBridge;
+  try {
+    _tmInstallDesktopCloseFlushBridge();
+  } catch(error) {
+    console.warn('[background-save] 桌面关闭握手安装失败:',error&&error.message||error);
+  }
 }
 if(_tmHasNativeFs()){
   // 每60秒自动存档（仅完整运行局；纯 P 由 project IDB + lite 保存） (timer-leak-ok·文件顶层一次性·桌面端生命周期)

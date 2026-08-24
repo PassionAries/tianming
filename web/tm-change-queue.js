@@ -190,6 +190,41 @@ var ChangeQueue = (function() {
     if (deadLetters.length > limits.deadLetters) deadLetters = deadLetters.slice(-limits.deadLetters);
   }
 
+  function _finalizeQueuedFailure(originalQueue, failedChange, failure, index) {
+    failure = failure && failure.ok === false
+      ? failure
+      : _failure(failure && failure.code || 'apply-exception', failure && failure.message || 'change application failed', failure && failure.retryable === true, failedChange);
+    var targets = [];
+    if (failedChange && failedChange.id) {
+      var matched = originalQueue.find(function(row){ return row && row.id === failedChange.id; });
+      if (matched) targets.push(matched);
+    }
+    // A preprocessing exception has no single owner; every queued item is blocked by
+    // the same batch-level failure and must progress toward the retry ceiling.
+    if (!targets.length) targets = originalQueue.slice();
+    var dropped = Object.create(null);
+    var settled = [];
+    targets.forEach(function(original) {
+      if (!original || typeof original !== 'object') return;
+      var priorAttempts = Number(original.attempts);
+      original.attempts = (Number.isFinite(priorAttempts) && priorAttempts >= 0 ? Math.floor(priorAttempts) : 0) + 1;
+      original.lastErrorCode = failure.code;
+      original.lastErrorAt = Date.now();
+      if (!failure.retryable || original.attempts >= limits.maxAttempts) {
+        _deadLetter(original, failure);
+        if (original.id) dropped[original.id] = true;
+      }
+      settled.push(Object.assign({
+        index: Number.isInteger(index) ? index : originalQueue.indexOf(original),
+        id: original.id,
+        attempts: original.attempts
+      }, failure));
+    });
+    queue = originalQueue.filter(function(row){ return !(row && row.id && dropped[row.id]); });
+    if (!settled.length) settled.push(Object.assign({ index:Number.isInteger(index) ? index : null, attempts:0 }, failure));
+    return settled;
+  }
+
   function enqueue(change) {
     if (!change || typeof change !== 'object') return { ok:false, code:'invalid-change' };
     var explicitId = change.id == null ? '' : String(change.id);
@@ -254,20 +289,12 @@ var ChangeQueue = (function() {
         if (!result || result.ok !== true) {
           var failure = result && result.ok === false ? result : _failure('handler-result-invalid', 'handler returned no explicit result', false, change);
           for (var u=undos.length-1;u>=0;u--) undos[u]();
-          var original = originalQueue.find(function(row){ return row.id === (change && change.id); }) || change;
-          var priorAttempts = Number(original.attempts);
-          original.attempts = (Number.isFinite(priorAttempts) && priorAttempts >= 0 ? Math.floor(priorAttempts) : 0) + 1;
-          original.lastErrorCode = failure.code;
-          original.lastErrorAt = Date.now();
-          if (!failure.retryable || original.attempts >= limits.maxAttempts) {
-            _deadLetter(original, failure);
-            queue = originalQueue.filter(function(row){ return row.id !== original.id; });
-          } else queue = originalQueue;
+          var settledFailures = _finalizeQueuedFailure(originalQueue, change, failure, i);
           appliedChanges = [];
           console.error('[ChangeQueue] batch rolled back:', failure.code, failure.message);
           return {
             logs:[], appliedCount:0, failedCount:1, errors:[failure.message],
-            failures:[Object.assign({ index:i, id:original && original.id, attempts:original && original.attempts }, failure)],
+            failures:settledFailures,
             ok:false, rolledBack:true, pendingCount:queue.length, deadLetterCount:deadLetters.length,
             executionRate:0
           };
@@ -288,7 +315,9 @@ var ChangeQueue = (function() {
       }
       appliedChanges = [];
       console.error('[ChangeQueue] apply failed:', error);
-      return { logs:[], appliedCount:0, failedCount:originalQueue.length, errors:[error && error.message || String(error)], failures:[{code:'apply-exception',retryable:true}], ok:false, rolledBack:true, pendingCount:queue.length, deadLetterCount:deadLetters.length, executionRate:0 };
+      var exceptionFailure = _failure('apply-exception', error && error.message || String(error), true, change);
+      var exceptionFailures = _finalizeQueuedFailure(originalQueue, change, exceptionFailure, i);
+      return { logs:[], appliedCount:0, failedCount:exceptionFailures.length, errors:[exceptionFailure.message], failures:exceptionFailures, ok:false, rolledBack:true, pendingCount:queue.length, deadLetterCount:deadLetters.length, executionRate:0 };
     } finally {
       isApplying = false;
     }

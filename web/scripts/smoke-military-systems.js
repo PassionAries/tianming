@@ -1014,14 +1014,14 @@ context.GM = {
   armies: [{ id:'aa', name:'AA', soldiers:500 }, { id:'dd', name:'DD', soldiers:600 }],
   cities: [{ id:'xian', owner:'Old' }],
   chars: [{ name:'Cmd', alive:true }],
-  facs: [],
+  facs: [{ id:'fac-winner2', name:'Winner2' }, { id:'fac-loser2', name:'Loser2' }],
   _turnReport: []
 };
 let app = context.AIChangeApplier.applyAITurnChanges({
   battleResult:{
     battleId:'applier_br',
-    winnerFactionId:'Winner2',
-    loserFactionId:'Loser2',
+    winnerFactionId:'fac-winner2',
+    loserFactionId:'fac-loser2',
     occupiedCityIds:['xian'],
     casualties:{ attacker:50, defender:60 },
     attackerArmyId:'aa',
@@ -1031,7 +1031,7 @@ let app = context.AIChangeApplier.applyAITurnChanges({
   }
 });
 check(app && app.ok && app.applied.semantic.battleResult === 1, 'applier battleResult semantic count missing');
-checkEq(context.GM.cities[0].owner, 'Winner2', 'applier battleResult city writeback failed');
+checkEq(context.GM.cities[0].owner, 'fac-winner2', 'applier battleResult city writeback failed');
 checkEq(context.GM.armies[0].soldiers, 450, 'applier battleResult attacker casualty failed');
 checkEq(context.GM.chars[0].alive, false, 'applier battleResult commander death failed');
 
@@ -1041,15 +1041,15 @@ context.GM = {
   armies: [],
   cities: [],
   chars: [],
-  facs: [],
+  facs: [{ id:'fac-a', name:'A' }, { id:'fac-b', name:'B' }],
   _turnReport: []
 };
 context.AIChangeApplier.applyAITurnChanges({
   shilu_text:'\u6b64\u6218\u9635\u4ea1\u4e09\u5343\u5175\u3002',
   battleResult:{
     battleId:'validator_br',
-    winnerFactionId:'A',
-    loserFactionId:'B',
+    winnerFactionId:'fac-a',
+    loserFactionId:'fac-b',
     occupiedCityIds:[],
     casualties:{ attacker:1000, defender:2000 },
     postBattleEffects:[]

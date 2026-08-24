@@ -39,7 +39,8 @@ function makeDom() {
       replaceChildren(...children) { this.children = []; children.forEach((child) => this.appendChild(child)); },
       addEventListener(type, fn) { if (!this.listeners[type]) this.listeners[type] = []; this.listeners[type].push(fn); },
       setAttribute(name, attrValue) { this[name] = String(attrValue); },
-      click() { (this.listeners.click || []).forEach((fn) => fn({ currentTarget: this, target: this })); }
+      remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((child) => child !== this); if (id) delete byId[id]; },
+      click() { (this.listeners.click || []).forEach((fn) => fn({ currentTarget: this, target: this, stopPropagation() {} })); }
     };
     Object.defineProperty(value, 'id', { get() { return id; }, set(next) { id = String(next || ''); if (id) byId[id] = value; } });
     Object.defineProperty(value, 'textContent', {
@@ -53,6 +54,7 @@ function makeDom() {
   byId['main-view'] = node('main');
   byId.launch = node('section');
   byId['t-era-list'] = node('div');
+  const body = node('body');
   return {
     byId, tags, node,
     document: {
@@ -60,7 +62,8 @@ function makeDom() {
       createTextNode(text) { const value = node('#text'); value.nodeType = 3; value.textContent = text; return value; },
       getElementById(id) { return byId[id] || null; },
       querySelector() { return null; },
-      addEventListener() {}
+      addEventListener() {},
+      body
     },
     htmlWrites() { return htmlWrites; }
   };
@@ -145,6 +148,46 @@ async function main() {
   const compatibilityHtml = timeCtx.getTS(1);
   assert(!compatibilityHtml.includes('<img') && !compatibilityHtml.includes('<svg') && !compatibilityHtml.includes('<script'), 'legacy time HTML context-encodes active markup');
   assert(timeCtx.__xss === undefined && timeDom.htmlWrites() === 0, 'time display creates no executable markup');
+
+  const costStart = infraSource.indexOf('function _formatCostMoney(');
+  const costEnd = infraSource.indexOf('\n// Phase 7.5', costStart);
+  const costDom = makeDom();
+  let exported = 0;
+  const costCtx = {
+    document: costDom.document,
+    Date, Math, Number, String, Object, Array,
+    GM: {
+      turn: attacks[0],
+      _costHistory: [{ turn: attacks[0], totalCalls: attacks[1], errors: attacks[2], totalTimeMs: attacks[3], tokenUsage: { totalTokens: attacks[4] } }],
+      _lastSc28Snapshot: { turn: attacks[1] },
+      _sysCacheMode: attacks[3]
+    },
+    P: { conf: { aiCallDepth: attacks[4], dialogueRecallTurns: attacks[0], costAlertThreshold: attacks[1] }, ai: { sc2Pipeline: attacks[2] } },
+    TokenUsageTracker: {
+      getTurnUsage() { return attacks[3]; },
+      getSnapshot() {
+        return {
+          totalTokens: attacks[0], totalCalls: attacks[1], estimatedCostUSD: 0,
+          byId: { [attacks[1]]: { calls: attacks[2], promptTokens: attacks[3], completionTokens: attacks[4], estimatedCostUSD: 0 } }
+        };
+      }
+    },
+    ensureAIDiagnostics() { return { subcallErrors: [{ subcall: attacks[0], phase: attacks[1], err: attacks[2] }] }; },
+    exportAIDiagnosticsJSON() { exported++; },
+    window: null
+  };
+  costCtx.window = costCtx;
+  vm.runInNewContext(infraSource.slice(costStart, costEnd), costCtx, { filename: 'tm-ai-infra-cost-panel.js' });
+  costCtx.showAICostPanel();
+  const costRoot = costDom.byId['ai-cost-panel-backdrop'];
+  assert(costRoot && costRoot.textContent.includes(attacks[3]) && costRoot.textContent.includes(attacks[2]), 'cost panel keeps malicious textual diagnostics as literal text');
+  assert(costDom.htmlWrites() === 0, 'cost panel never writes innerHTML');
+  assert(!costDom.tags.includes('IMG') && !costDom.tags.includes('SVG') && !costDom.tags.includes('SCRIPT'), 'cost panel metadata cannot create active DOM tags');
+  const eventAttrs = collect(costRoot, (row) => row.onclick || row.onerror || row.onload || row.onfocus);
+  assert(eventAttrs.length === 0 && costCtx.__xss === undefined, 'cost panel creates no inline event attributes and executes no payload');
+  const exportButton = collect(costRoot, (row) => row.tagName === 'BUTTON' && row.textContent.includes('导出 AI 诊断'))[0];
+  exportButton.click();
+  assert(exported === 1, 'cost panel export action remains functional through addEventListener');
 
   const ceremonyStart = startSource.indexOf('function _tmShowOpeningCeremony(');
   const ceremonyEnd = startSource.indexOf('\nfunction ', ceremonyStart + 20);

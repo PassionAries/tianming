@@ -80,6 +80,27 @@ async function main() {
   assert(!result.ok && result.failures[0].attempts === 3 && ctx.ChangeQueue.length() === 0, 'temporary failure stops retrying after the configured maximum');
   assert(ctx.ChangeQueue.getDeadLetters().some((row) => row.change.id === 'transient' && row.attempts === 3), 'retry exhaustion is retained as a diagnostic dead-letter');
 
+  let thrownReads = 0;
+  const explosiveVariable = { min: 0, max: 100 };
+  Object.defineProperty(explosiveVariable, 'value', {
+    configurable: true,
+    get() {
+      thrownReads++;
+      throw new Error('injected handler exception');
+    }
+  });
+  ctx.GM.vars = { explosive: explosiveVariable };
+  ctx.ChangeQueue.enqueue({ id: 'exception-retry', type: 'variable', target: 'explosive', delta: 1, source: 'smoke' });
+  result = ctx.ChangeQueue.applyAll();
+  assert(!result.ok && result.failures[0].code === 'apply-exception' && result.failures[0].attempts === 1 && ctx.ChangeQueue.length() === 1, 'thrown handler exception consumes the first bounded retry');
+  result = ctx.ChangeQueue.applyAll();
+  assert(!result.ok && result.failures[0].attempts === 2 && ctx.ChangeQueue.length() === 1, 'thrown handler exception consumes the second bounded retry');
+  result = ctx.ChangeQueue.applyAll();
+  assert(!result.ok && result.failures[0].attempts === 3 && ctx.ChangeQueue.length() === 0, 'thrown handler exception reaches the retry ceiling');
+  assert(ctx.ChangeQueue.getDeadLetters().some((row) => row.change.id === 'exception-retry' && row.reason === 'apply-exception' && row.attempts === 3), 'thrown handler exception is retained in dead-letter diagnostics');
+  result = ctx.ChangeQueue.applyAll();
+  assert(result.ok && thrownReads === 3, 'dead-lettered exception is not executed again');
+
   ctx.GM.vars = { stability: { value: 50, min: 0, max: 100 } };
   const first = ctx.ChangeQueue.enqueue({ id: 'duplicate-id', type: 'nation', field: 'authority', delta: 1, source: 'smoke' });
   const duplicate = ctx.ChangeQueue.enqueue({ id: 'duplicate-id', type: 'nation', field: 'authority', delta: 99, source: 'smoke' });

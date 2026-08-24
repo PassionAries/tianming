@@ -398,6 +398,85 @@ async function main() {
   check(terminalRepairError && terminalRepairError.code === 'ai-writeback-preflight-failed' && terminalRepairError.repairAttempts === 2 && repairCalls === 2, 'invalid repair is bounded to two attempts and returns a retryable turn-level error');
   check(Array.isArray(terminalRepairError.writebackFailures) && terminalRepairError.writebackFailures[0].finalRollbackReason === 'preflight-failed' && JSON.stringify(ctx.GM) === beforePreflight, 'terminal repair failure preserves structured diagnostics and leaves world state untouched');
 
+  async function expectRejectedRepair(batch, response, expectedCode, message) {
+    let calls = 0;
+    const beforeBatch = JSON.stringify(batch);
+    const beforeWorld = JSON.stringify(ctx.GM);
+    ctx.callAI = async function maliciousRepair() { calls++; return JSON.stringify(response); };
+    let caught = null;
+    try { await ctx.TM.Endturn.AI.apply._validateAndRepairMainWriteback(batch, { source: 'smoke-malicious-repair' }); }
+    catch (error) { caught = error; }
+    check(caught && caught.code === 'ai-writeback-preflight-failed' && caught.lastRepairFailureCode === expectedCode && calls === 2, message);
+    check(JSON.stringify(batch) === beforeBatch && JSON.stringify(ctx.GM) === beforeWorld, message + ' leaves batch and live world unchanged');
+  }
+
+  await expectRejectedRepair(
+    { char_updates: [{ characterId: 'ghost-char', updates: { loyalty: 60 } }, { characterId: 'char-a', updates: { loyalty: 45 } }] },
+    { repairs: [{ field: 'char_updates', index: 1, item: { characterId: 'char-a', updates: { loyalty: 99 } } }], semanticUnchanged: true, narrativePatch: '' },
+    'repair-target-not-allowed',
+    'repair cannot target a successful index outside the current failure allowlist'
+  );
+  await expectRejectedRepair(
+    invalidWriteback,
+    { repairs: [{ field: 'char_updates', index: 0, item: { characterId: 'char-a', updates: { loyalty: 1000 } } }], semanticUnchanged: true, narrativePatch: '' },
+    'repair-changed-business-semantics',
+    'repair cannot change a numeric effect while claiming semantic equivalence'
+  );
+  await expectRejectedRepair(
+    { char_updates: [{ characterId: 'ghost-char', action: 'appoint', updates: { loyalty: 60 } }] },
+    { repairs: [{ field: 'char_updates', index: 0, item: { characterId: 'char-a', action: 'execute', updates: { loyalty: 60 } } }], semanticUnchanged: true, narrativePatch: '' },
+    'repair-changed-business-semantics',
+    'repair cannot replace the requested action while claiming semantic equivalence'
+  );
+  await expectRejectedRepair(
+    invalidWriteback,
+    { repairs: [
+      { field: 'char_updates', index: 0, item: { characterId: 'char-a', updates: { loyalty: 60 } } },
+      { field: 'char_updates', index: 0, item: { characterId: 'char-a', updates: { loyalty: 60 } } }
+    ], semanticUnchanged: true, narrativePatch: '' },
+    'duplicate-repair-target',
+    'repair response cannot submit the same failure slot twice'
+  );
+
+  ctx.GM = baseGM({ facs: [{ id: 'fac-existing', name: '现存势力' }] });
+  let nonRetryableCalls = 0;
+  ctx.callAI = async function shouldNotRun() { nonRetryableCalls++; return '{}'; };
+  let nonRetryableError = null;
+  try {
+    await ctx.TM.Endturn.AI.apply._validateAndRepairMainWriteback(
+      { faction_create: [{ name: '现存势力', reason: '重复创建' }] },
+      { source: 'smoke-nonretryable' }
+    );
+  } catch (error) { nonRetryableError = error; }
+  check(nonRetryableError && nonRetryableError.code === 'ai-writeback-preflight-failed' && nonRetryableError.repairAttempts === 0 && nonRetryableCalls === 0, 'non-retryable preflight failures never invoke targeted repair AI');
+
+  ctx.GM = baseGM({ facs: [{ id: 'fac-a', name: '甲势力' }, { id: 'fac-b', name: '乙势力' }] });
+  await expectRejectedRepair(
+    { battleResult: { winnerFactionId: 'ghost-faction', loserFactionId: 'fac-b', casualties: { winner: 1, loser: 2 } } },
+    { repairs: [{ field: 'battleResult', index: null, item: { winnerFactionId: 'fac-a', loserFactionId: 'fac-a', casualties: { winner: 1, loser: 2 } } }], semanticUnchanged: true, narrativePatch: '' },
+    'repair-changed-business-semantics',
+    'repair cannot alter the already valid loser while fixing only a failed winner identity'
+  );
+  const validBattleInput = { battleResult: { winnerFactionId: 'fac-a', loserFactionId: '乙势力', casualties: { winner: 1, loser: 2 } } };
+  const validBattle = ctx.validateAIWriteBackBatch(validBattleInput, { source: 'smoke-battle-id' });
+  check(validBattle.ok && validBattle.output.battleResult.winnerFactionId === 'fac-a' && validBattle.output.battleResult.loserFactionId === 'fac-b', 'battleResult resolves stable IDs and unique legacy names before application');
+  check(validBattleInput.battleResult.loserFactionId === '乙势力', 'battleResult canonicalization remains detached from caller input');
+  const ghostBattle = ctx.validateAIWriteBackBatch({ battleResult: { winnerFactionId: 'fac-a', loserFactionId: 'ghost-faction' } }, { source: 'smoke-battle-ghost' });
+  check(!ghostBattle.ok && ghostBattle.failures.some((failure) => failure.field === 'battleResult' && failure.code === 'faction-not-found'), 'battleResult rejects a faction absent from the current world during strict preflight');
+  const selfBattle = ctx.validateAIWriteBackBatch({ battleResult: { winnerFactionId: 'fac-a', loserFactionId: 'fac-a' } }, { source: 'smoke-battle-self' });
+  check(!selfBattle.ok && selfBattle.failures.some((failure) => failure.code === 'battle-factions-identical' && failure.retryable === false), 'battleResult rejects identical winner and loser identities');
+
+  const createThenUpdate = ctx.validateAIWriteBackBatch({
+    faction_create: [{ name: '新势力', reason: '立旗' }],
+    faction_updates: [{ name: '新势力', updates: { strength: 80 } }]
+  }, { source: 'smoke-create-update-order' });
+  check(!createThenUpdate.ok && createThenUpdate.failures.some((failure) => failure.code === 'batch-dependency-order-unsupported' && failure.retryable === false), 'same-batch faction update is rejected explicitly because production consumes updates before creates');
+  const createThenBattle = ctx.validateAIWriteBackBatch({
+    faction_create: [{ name: '新势力', reason: '立旗' }],
+    battleResult: { winnerFactionId: '新势力', loserFactionId: 'fac-a' }
+  }, { source: 'smoke-create-battle-order' });
+  check(!createThenBattle.ok && createThenBattle.failures.some((failure) => failure.code === 'batch-dependency-order-unsupported'), 'same-batch battle cannot reference a faction created later in the production consumer order');
+
   // faction_succession 的主链 consumer 之后，post stage 必须补齐所有领袖镜像。
   ctx.GM = baseGM({
     chars: [{ name: '韩旷', alive: true }],

@@ -15,7 +15,7 @@ const infraSrc = fs.readFileSync(path.join(ROOT, 'tm-ai-infra.js'), 'utf8');
 const patchesSrc = (fs.readFileSync(path.join(ROOT, 'tm-patches.js'), 'utf8') + '\n' + fs.readFileSync(path.join(ROOT, 'tm-patches-start.js'), 'utf8'));
 
 // ─── builder + show 函数 ───
-assert(/function\s+_buildAICostPanelHTML\s*\(/.test(infraSrc), 'cost panel·_buildAICostPanelHTML 存在');
+assert(/function\s+_buildAICostPanelElement\s*\(/.test(infraSrc), 'cost panel·DOM element builder 存在');
 assert(/function\s+showAICostPanel\s*\(/.test(infraSrc), 'cost panel·showAICostPanel 存在');
 assert(/showCostPanel:\s*typeof\s+showAICostPanel/.test(infraSrc), 'TM.ai.showCostPanel 公开 API');
 
@@ -41,11 +41,16 @@ assert(/导出 AI 诊断 JSON/.test(infraSrc), '区3·导出按钮 (面板内)')
 assert(/TM\.ai\.showCostPanel/.test(patchesSrc), '设置面板按钮接 TM.ai.showCostPanel');
 assert(/showAICostPanel/.test(patchesSrc), '按钮 fallback to showAICostPanel');
 
-// ─── HTML escape (避免 XSS) ───
-assert(/_escForCostPanel/.test(infraSrc), 'HTML escape helper 存在');
+// ─── DOM-only rendering (避免 XSS) ───
+const costBuilderStart = infraSrc.indexOf('function _buildAICostPanelElement(');
+const costBuilderEnd = infraSrc.indexOf('\nfunction showAICostPanel(', costBuilderStart);
+const costBuilder = infraSrc.slice(costBuilderStart, costBuilderEnd);
+assert(costBuilderStart >= 0 && !/\.innerHTML\s*=|insertAdjacentHTML|setAttribute\s*\(\s*['"]on/i.test(costBuilder), 'cost panel builder has no dynamic HTML or event-attribute sink');
+assert(/textContent/.test(infraSrc) && /_costPanelFinite/.test(infraSrc), 'cost panel uses text nodes and finite numeric normalization');
 
 // ─── modal 关闭机制 ───
 assert(/ai-cost-panel-backdrop/.test(infraSrc), 'modal backdrop id');
-assert(/event\.target===this/.test(infraSrc), '点击 backdrop 关闭 (event.target check)');
+assert(/event\.target\s*===\s*backdrop/.test(infraSrc), '点击 backdrop 关闭 (event.target check)');
+assert(/exportButton\.addEventListener\(['"]click/.test(infraSrc), 'export action uses addEventListener instead of inline onclick');
 
 console.log('[smoke-cost-panel-ui] pass assertions=' + passed.value);

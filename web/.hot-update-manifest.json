@@ -2,7 +2,7 @@
   "type": "tianming-hot-update",
   "version": "1.3.4.11",
   "entry": "index.html",
-  "generatedAt": "2026-08-24T16:27:04.782Z",
+  "generatedAt": "2026-08-24T18:20:42.793Z",
   "files": [
     {
       "path": "_preview_map.json",
@@ -3346,8 +3346,8 @@
     },
     {
       "path": "startup-script-phases.json",
-      "sha256": "1ddc4a7f255d511666630ad9e97c04f157b2f05792344648a64c946b4da01d5f",
-      "size": 316417
+      "sha256": "955803cae1714f70345b715539ffdcb58cb887241fb5abe432194fdfd77fb37d",
+      "size": 316687
     },
     {
       "path": "styles.css",
@@ -3371,8 +3371,8 @@
     },
     {
       "path": "tm-ai-change-applier-reconcile.js",
-      "sha256": "5b33a3323b649d0f5d94051a38ae7fc59c42f55adca44b0fc0c65ff05a04aaed",
-      "size": 86091
+      "sha256": "47cdcad17fb90accc1f7214f6bff69e781802e33a0670d4b1a9612f39e53e4c8",
+      "size": 89768
     },
     {
       "path": "tm-ai-change-applier-validators.js",
@@ -3411,8 +3411,8 @@
     },
     {
       "path": "tm-ai-infra.js",
-      "sha256": "b970b680765ca0a9165b3b6dd284a5d3800b2283283491a1cb71d1be55846de3",
-      "size": 159022
+      "sha256": "2af4819e5fe6578c0c1adc3e0b0052e9c67195f1d08e52f2eabd15cd615eb793",
+      "size": 161085
     },
     {
       "path": "tm-ai-narrative-guards.js",
@@ -3551,8 +3551,8 @@
     },
     {
       "path": "tm-change-queue.js",
-      "sha256": "c1cc8657e9eff5c38246e791d9c33eb024e2ef19e4fb63ac530f966867c7aeae",
-      "size": 32629
+      "sha256": "c5f2619a83315f7e8412f5d989ba92a084e247bad60c596262312802ce6e604a",
+      "size": 33970
     },
     {
       "path": "tm-changelog.js",
@@ -3921,8 +3921,8 @@
     },
     {
       "path": "tm-endturn-apply-stages.js",
-      "sha256": "5c5029423fbf7e2d6f7c2dbca7dc8542366dd50692c084093a258e004d525cd2",
-      "size": 81336
+      "sha256": "c96d2c60cceb5b4cdf79a109e4867249368ccdc760b658e58fec63cf2c96a94f",
+      "size": 85689
     },
     {
       "path": "tm-endturn-apply.js",
@@ -5111,8 +5111,8 @@
     },
     {
       "path": "tm-save-lifecycle.js",
-      "sha256": "3ef9be4ccbb52683a4322b6c0192454ea601e845eb3ccb5019be94380de40795",
-      "size": 165169
+      "sha256": "f742293e5122861147d93be74c03db531b54f72d80b34721df53bfb3f0fec241",
+      "size": 167824
     },
     {
       "path": "tm-save-manager.js",

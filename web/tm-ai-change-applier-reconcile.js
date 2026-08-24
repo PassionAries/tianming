@@ -691,6 +691,16 @@
     return true;
   }
 
+  function _tmReferencesPendingFaction(aiOutput, ref) {
+    var raw = String(ref == null ? '' : ref).trim();
+    if (!raw) return false;
+    return (Array.isArray(aiOutput && aiOutput.faction_create) ? aiOutput.faction_create : []).some(function(item) {
+      return item && [item.id, item.factionId, item.name].some(function(value) {
+        return value != null && String(value).trim() === raw;
+      });
+    });
+  }
+
   // ── fiscal 别名归一(preflight 白名单判定用·落库契约硬化刀②·2026-07-16·居平内帑案悬案) ──
   //   ★别名表镜像·改须与 tm-ai-change-applier.js 的 _normTarget/_normKind(_flagFiscalTransferPairs 内)
   //     与 fiscal_adjustments 容差归一段(fa.target/fa.kind 中文别名映射)同步·三处逐字一致(反之亦然)。
@@ -826,6 +836,7 @@
 
     keepArray('faction_succession', 'faction_succession', function(sc) {
       if (!sc || !sc.faction || !sc.newLeader) return _tmGateReason('faction_succession', 'missing faction/newLeader', sc);
+      if (_tmReferencesPendingFaction(aiOutput, sc.faction)) return _tmGateReason('faction_succession', 'faction succession executes before faction_create; defer it to a later turn', sc, 'batch-dependency-order-unsupported');
       // 继统会在 endturn 主链直接改 leader，必须像死亡一样只接受当前活跃对象的精确 name/id；
       // 不让模糊名、场景库幽灵人物或已死亡人物穿过后续直写 consumer。
       var rawFaction = String(sc.faction).trim();
@@ -848,6 +859,7 @@
 
     keepArray('faction_dissolve', 'faction_dissolve', function(fd) {
       if (!fd || !fd.name) return _tmGateReason('faction_dissolve', 'missing name', fd);
+      if (_tmReferencesPendingFaction(aiOutput, fd.factionId || fd.id || fd.name)) return _tmGateReason('faction_dissolve', 'faction dissolve executes before faction_create; contradictory same-batch lifecycle', fd, 'batch-dependency-order-unsupported');
       var facRes = _tmResolveFaction(G, fd.name);
       if (!facRes) return _tmWeakEntityHint('faction_dissolve', 'faction seems not in current known lists: ' + fd.name, fd, facRes);
       var fac = facRes.entity;
@@ -895,10 +907,40 @@
 
     if (aiOutput.battleResult) {
       var br = aiOutput.battleResult;
-      if (!br.winnerFactionId || !br.loserFactionId) {
-        _tmGateReason('battleResult', 'missing winnerFactionId/loserFactionId', br);
+      var winnerRef = br.winnerFactionId || br.winnerFaction || br.winner;
+      var loserRef = br.loserFactionId || br.loserFaction || br.loser;
+      if (!winnerRef || !loserRef) {
+        _tmGateReason('battleResult', 'missing winner/loser faction reference', br);
         delete aiOutput.battleResult;
         blocked++;
+      } else if (_tmReferencesPendingFaction(aiOutput, winnerRef) || _tmReferencesPendingFaction(aiOutput, loserRef)) {
+        _tmGateReason('battleResult', 'battleResult executes before faction_create; defer battles involving a newly created faction', br, 'batch-dependency-order-unsupported');
+        delete aiOutput.battleResult;
+        blocked++;
+      } else {
+        var battleFailures = Array.isArray(_tmPreflightCollector) ? _tmPreflightCollector : [];
+        var winner = _tmStrictIdentity(G.facs, winnerRef, 'faction', 'battleResult', null, battleFailures, {
+          identityFields:['winnerFactionId', 'winnerFaction', 'winner']
+        });
+        var loser = _tmStrictIdentity(G.facs, loserRef, 'faction', 'battleResult', null, battleFailures, {
+          identityFields:['loserFactionId', 'loserFaction', 'loser']
+        });
+        if (!winner || !loser || winner === loser) {
+          if (winner && loser && winner === loser) {
+            var sameFailure = { field:'battleResult', index:null, code:'battle-factions-identical', target:String(winner.id || winner.name || ''), retryable:false, reason:'battle winner and loser must be different factions', item:br };
+            if (Array.isArray(_tmPreflightCollector)) _tmPreflightCollector.push(sameFailure);
+            else _tmGateReason('battleResult', sameFailure.reason, br, sameFailure.code);
+          } else if (!Array.isArray(_tmPreflightCollector)) {
+            _tmGateReason('battleResult', 'winner/loser faction must resolve uniquely in the current world', br, 'faction-not-found');
+          }
+          delete aiOutput.battleResult;
+          blocked++;
+        } else {
+          br.winnerFactionId = String(winner.id || winner.name || winnerRef);
+          br.loserFactionId = String(loser.id || loser.name || loserRef);
+          br.winnerFaction = String(winner.name || winner.id || winnerRef);
+          br.loserFaction = String(loser.name || loser.id || loserRef);
+        }
       }
     }
 
@@ -921,24 +963,28 @@
 
   function _tmStrictIdentity(rows, ref, kind, field, index, failures, opts) {
     opts = opts || {};
+    function fail(payload) {
+      if (Array.isArray(opts.identityFields) && opts.identityFields.length) payload.identityFields = opts.identityFields.slice();
+      failures.push(payload);
+    }
     var raw = String(ref == null ? '' : ref).trim();
     if (!raw) {
-      failures.push({ field: field, index: index, code: 'missing-required-field', target: '', retryable: true, reason: kind + ' reference is missing' });
+      fail({ field: field, index: index, code: 'missing-required-field', target: '', retryable: true, reason: kind + ' reference is missing' });
       return null;
     }
     if (!Array.isArray(rows)) {
-      failures.push({ field: field, index: index, code: kind + '-collection-unavailable', target: raw, retryable: false, reason: kind + ' collection is unavailable' });
+      fail({ field: field, index: index, code: kind + '-collection-unavailable', target: raw, retryable: false, reason: kind + ' collection is unavailable' });
       return null;
     }
     var byId = rows.filter(function(row) { return row && row.id != null && String(row.id).trim() === raw; });
     if (byId.length === 1) return byId[0];
     if (byId.length > 1) {
-      failures.push({ field: field, index: index, code: 'ambiguous-reference', target: raw, retryable: true, reason: kind + ' id is not unique' });
+      fail({ field: field, index: index, code: 'ambiguous-reference', target: raw, retryable: true, reason: kind + ' id is not unique' });
       return null;
     }
     var byName = rows.filter(function(row) { return row && row.name != null && String(row.name).trim() === raw; });
     if (byName.length === 1) return byName[0];
-    failures.push({
+    fail({
       field: field,
       index: index,
       code: byName.length > 1 ? 'ambiguous-reference' : kind + '-not-found',
@@ -1054,7 +1100,17 @@
       if ((action === 'appoint' || action === 'transfer' || action === 'concurrent') && !_tmStrictOfficeExists(G, item.post)) failures.push({ field: 'office_assignments', index: index, code: 'office-not-found', target: item.post || '', retryable: true, reason: 'office position is not declared in current office tree' });
     });
     validateRefs('personnel_changes', G.chars, 'character', function(item) { return item.characterId || item.charId || item.name; });
-    validateRefs('faction_updates', G.facs, 'faction', function(item) { return item.factionId || item.id || item.name; });
+    (Array.isArray(detached.faction_updates) ? detached.faction_updates : []).forEach(function(item, index) {
+      var ref = item && (item.factionId || item.id || item.name);
+      if (_tmReferencesPendingFaction(detached, ref)) {
+        failures.push({
+          field:'faction_updates', index:index, code:'batch-dependency-order-unsupported', target:String(ref || ''), retryable:false,
+          reason:'faction_updates execute before faction_create; put initial fields in faction_create or defer the update', item:item
+        });
+        return;
+      }
+      _tmStrictIdentity(G.facs, ref, 'faction', 'faction_updates', index, failures);
+    });
     validateRefs('faction_dissolve', G.facs, 'faction', function(item) { return item.factionId || item.id || item.name; });
 
     var regionRows = _tmStrictRegionRows(G);

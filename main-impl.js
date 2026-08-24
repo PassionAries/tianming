@@ -2609,6 +2609,122 @@ function cleanupHotUpdateArtifacts() {
 let mainWindow = null;
 // 2026-08-10·display-metrics-changed 监听只注册一次（createWindow 在 macOS activate 时会重入）
 let displayFitHooked = false;
+const APP_CLOSE_FLUSH_TIMEOUT_MS = 10000;
+let _allowAppClose = false;
+let _appQuitRequestPromise = null;
+let _appCloseFlushSequence = 0;
+const _pendingAppCloseFlushes = new Map();
+
+function _finishAppCloseFlush(requestId, result) {
+  const pending = _pendingAppCloseFlushes.get(String(requestId || ''));
+  if (!pending) return false;
+  _pendingAppCloseFlushes.delete(pending.requestId);
+  clearTimeout(pending.timer);
+  if (pending.webContents && pending.onDestroyed
+      && typeof pending.webContents.removeListener === 'function') {
+    pending.webContents.removeListener('destroyed', pending.onDestroyed);
+  }
+  pending.resolve(result);
+  return true;
+}
+
+function requestRendererCloseFlush(win, reason, timeoutMs) {
+  if (!win || (typeof win.isDestroyed === 'function' && win.isDestroyed())
+      || !win.webContents
+      || (typeof win.webContents.isDestroyed === 'function' && win.webContents.isDestroyed())) {
+    return Promise.resolve({ ok: true, skipped: true, reason: 'renderer-unavailable' });
+  }
+  const waitMs = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) >= 0
+    ? Number(timeoutMs)
+    : APP_CLOSE_FLUSH_TIMEOUT_MS;
+  const requestId = 'close-flush:' + Date.now().toString(36) + ':' + (++_appCloseFlushSequence).toString(36);
+  return new Promise(resolve => {
+    const pending = {
+      requestId,
+      webContents: win.webContents,
+      resolve,
+      timer: null,
+      onDestroyed: null
+    };
+    pending.timer = setTimeout(() => {
+      _finishAppCloseFlush(requestId, {
+        ok: false,
+        code: 'background-save-flush-timeout',
+        reason: 'renderer did not acknowledge background save flush before timeout'
+      });
+    }, waitMs);
+    pending.onDestroyed = () => {
+      _finishAppCloseFlush(requestId, {
+        ok: false,
+        code: 'renderer-destroyed-before-flush',
+        reason: 'renderer closed before background saves were flushed'
+      });
+    };
+    _pendingAppCloseFlushes.set(requestId, pending);
+    if (typeof win.webContents.once === 'function') {
+      win.webContents.once('destroyed', pending.onDestroyed);
+    }
+    try {
+      win.webContents.send('app-close-flush-request', {
+        requestId,
+        reason: String(reason || 'app-quit')
+      });
+    } catch (error) {
+      _finishAppCloseFlush(requestId, {
+        ok: false,
+        code: 'background-save-flush-request-failed',
+        reason: error && error.message || String(error)
+      });
+    }
+  });
+}
+
+ipcMain.on('app-close-flush-complete', (event, payload) => {
+  const requestId = payload && String(payload.requestId || '');
+  const pending = _pendingAppCloseFlushes.get(requestId);
+  if (!pending || event.sender !== pending.webContents) return;
+  const ok = payload && payload.ok === true;
+  _finishAppCloseFlush(requestId, ok ? {
+    ok: true,
+    reason: String(payload.reason || 'background-saves-flushed')
+  } : {
+    ok: false,
+    code: String(payload && payload.code || 'background-save-flush-failed'),
+    reason: String(payload && payload.reason || 'renderer reported background save flush failure')
+  });
+});
+
+function requestApplicationQuit(reason) {
+  if (_allowAppClose) {
+    app.quit();
+    return Promise.resolve({ success: true, alreadyFlushed: true });
+  }
+  if (_appQuitRequestPromise) return _appQuitRequestPromise;
+  _appQuitRequestPromise = requestRendererCloseFlush(mainWindow, reason).then(result => {
+    if (!(result && result.ok === true)) {
+      console.warn('[app-close] 已取消退出·后台保存未安全完成·'
+        + String(result && (result.code || result.reason) || 'unknown'));
+      _appQuitRequestPromise = null;
+      return {
+        success: false,
+        code: String(result && result.code || 'background-save-flush-failed'),
+        error: String(result && result.reason || '后台保存未安全完成')
+      };
+    }
+    _allowAppClose = true;
+    setImmediate(() => app.quit());
+    return { success: true, flush: result };
+  }).catch(error => {
+    _appQuitRequestPromise = null;
+    console.warn('[app-close] 已取消退出·关闭握手异常·' + (error && error.message || error));
+    return {
+      success: false,
+      code: 'background-save-flush-exception',
+      error: error && error.message || String(error)
+    };
+  });
+  return _appQuitRequestPromise;
+}
 
 function createWindow() {
   // 尝试读取上次关闭时的窗口位置和大小
@@ -2689,12 +2805,18 @@ function createWindow() {
   });
 
   // 窗口关闭前，保存窗口的位置和大小·merge 进 CONFIG_FILE 而不是覆盖 (保 webRootOverride 等字段)
-  mainWindow.on('close', () => {
+  mainWindow.on('close', event => {
     try {
       const bounds = mainWindow.getBounds();
       const prev = readJsonSafe(CONFIG_FILE, {});
       fs.writeFileSync(CONFIG_FILE, JSON.stringify(Object.assign({}, prev, { window: bounds }), null, 2), 'utf-8');
     } catch (e) { /* 忽略 */ }
+    if (!_allowAppClose && event && typeof event.preventDefault === 'function') {
+      event.preventDefault();
+      requestApplicationQuit('window-close').catch(error => {
+        console.warn('[app-close] 窗口关闭握手失败·' + (error && error.message || error));
+      });
+    }
   });
 
   // 2026-08-10·运行中切换系统显示分辨率时重新贴合新显示边界。
@@ -2775,7 +2897,7 @@ function createMenu() {
         {
           label: '退出',
           accelerator: 'CmdOrCtrl+Q',
-          click: () => app.quit()
+          click: () => requestApplicationQuit('menu-quit')
         }
       ]
     },
@@ -3296,9 +3418,7 @@ ipcMain.handle('open-save-dir', () => {
 });
 
 // --- 退出应用 ---
-ipcMain.handle('app-quit', () => {
-  app.quit();
-});
+ipcMain.handle('app-quit', () => requestApplicationQuit('renderer-quit'));
 
 // ============================================================
 //  读 web 目录文本文件（国师源码工具·桌面端 IPC 通道）
@@ -4149,6 +4269,8 @@ if (TEST_MODE) {
     normalizeOnlineRendererRoute,
     getOnlineRendererBodyLimit,
     assertOnlineRendererBodySize,
+    requestRendererCloseFlush,
+    APP_CLOSE_FLUSH_TIMEOUT_MS,
     preflightWorkshopZip,
     extractZipToTemp,
     WORKSHOP_ZIP_LIMITS,

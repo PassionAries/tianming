@@ -30,6 +30,7 @@ async function main() {
   let sessionToken = 'session-a';
   let delayedWriteResolve = null;
   let delayNextWrite = false;
+  let closeFlushCallback = null;
   const context = {
     console,
     Date,
@@ -55,6 +56,14 @@ async function main() {
           }
           writes.push(clone(payload));
           return { success: true };
+        },
+        onAppCloseFlushRequest(callback) {
+          closeFlushCallback = callback;
+          return function dispose() {
+            if (closeFlushCallback !== callback) return false;
+            closeFlushCallback = null;
+            return true;
+          };
         }
       }
     },
@@ -125,6 +134,7 @@ async function main() {
   vm.runInContext(source.slice(start, end), context, { filename: 'tm-save-lifecycle-autosave-slice.js' });
   vm.runInContext(coreSource.slice(coreStart, coreEnd), context, { filename: 'tm-endturn-core-transaction-slice.js' });
 
+  check('桌面存档生命周期安装关闭前 flush 回调', typeof closeFlushCallback === 'function');
   check('统一世界事务判定函数可用', typeof context.isWorldTransactionActive === 'function');
   const cyclicGM = Object.assign({}, context.GM);
   cyclicGM._postTurnJobs = { pending: [{ id: 'critical', gmRef: cyclicGM }] };
@@ -279,6 +289,27 @@ async function main() {
 
   const mismatch = await context.requestBackgroundAutosave({ reason: 'wrong-turn', expectedWorldLease: retryLease, expectedTurn: retryLease.turn + 1 });
   check('后台保存拒绝与 lease 不一致的回合身份', mismatch.stale === true && mismatch.reason === 'background-turn-mismatch');
+
+  context.GM._aiMemorySummary = '退出前刚完成的后台摘要';
+  const beforeCloseFlush = backgroundTransactions.length;
+  await context.requestBackgroundAutosave({
+    reason: 'summary-complete-before-exit',
+    expectedWorldLease: retryLease,
+    expectedTurn: retryLease.turn
+  });
+  const closeFlush = await closeFlushCallback({ reason: 'renderer-quit' });
+  check('立即退出握手会实际 drain 后台保存而非只提示', closeFlush.ok === true
+    && backgroundTransactions.length === beforeCloseFlush + 1
+    && backgroundTransactions[backgroundTransactions.length - 1].states[0].GM._aiMemorySummary === '退出前刚完成的后台摘要');
+  check('关闭握手成功后不存在待保存或在途任务', !context._backgroundSavePending && !context._backgroundSaveInFlight);
+
+  context.GM.busy = true;
+  context.GM._endTurnCommitPending = true;
+  const blockedClose = await closeFlushCallback({ reason: 'window-close' });
+  check('世界事务活跃时关闭握手明确拒绝退出', blockedClose.ok === false
+    && blockedClose.code === 'world-transaction-active');
+  context.GM.busy = false;
+  context.GM._endTurnCommitPending = false;
 
   const memoryStart = coreSource.indexOf('(function _aiMemoryCompress()');
   const chronicleStart = coreSource.indexOf('(function _monthlyChronicle()');

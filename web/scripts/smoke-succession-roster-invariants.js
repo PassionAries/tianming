@@ -120,6 +120,13 @@ assert(sameA.id && sameB.id && sameA.id !== sameB.id, 'same-name runtime charact
 assert(context.findCharById(sameA.id) === sameA, 'new character must be immediately available from the ID index');
 assert(context.findCharById(sameB.id) === sameB, 'second same-name character must be immediately available from the ID index');
 assert(context.GM._indices.charByName.get('同名者') === sameB, 'name index must be synchronized after creation');
+const sameNameCount = context.GM.chars.length;
+assert(context.TM.Roster.addChar(sameA) === sameA, 're-registering the same character object must be idempotent');
+assert(context.GM.chars.length === sameNameCount && context.GM.chars.filter(ch => ch === sameA).length === 1,
+  'idempotent registration must not append the same object twice');
+assert(context.findCharById(sameA.id) === sameA, 'idempotent registration must retain the stable ID index');
+assert(context.GM._indices.charByName.get('同名者') === sameB,
+  're-registering an older same-name object must not steal the current name-index mirror');
 
 const countBeforeFailure = context.GM.chars.length;
 const counterBeforeFailure = context.GM._entityIdCounters.char;
@@ -146,6 +153,12 @@ const heir = context.TM.Roster.createChar({
   role: '太子', title: '太子', officialTitle: '吏部尚书', position: '吏部尚书',
   isCrownPrince: true, isDesignatedHeir: true, faction: '本朝', factionId: 'fac-player'
 }, { father: oldRuler });
+const heirCountAfterCreate = context.GM.chars.length;
+context.TM.Roster.addChar(heir, { father: oldRuler });
+assert(context.GM.chars.length === heirCountAfterCreate && context.GM.chars.filter(ch => ch === heir).length === 1,
+  're-registering an heir must keep one roster row');
+assert(oldRuler.childrenIds.filter(id => id === heir.id).length === 1,
+  'idempotent registration must not duplicate parent childrenIds');
 oldRuler.designatedHeirId = heir.id;
 context.GM.facs = [{ id: 'fac-player', name: '本朝', isPlayer: true, leaderId: oldRuler.id, leader: oldRuler.name }];
 context.GM.harem = {

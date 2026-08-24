@@ -1329,11 +1329,51 @@ var WorldHelper = {
     var byName = (G.chars || []).filter(function(row) { return row && row.name === key; });
     return byName.length === 1 ? byName[0] : null;
   }
+  function _repairRegisteredChar(G, ch, options) {
+    var first = G.chars.indexOf(ch);
+    if (first < 0) return null;
+    var id = ch.id === undefined || ch.id === null ? '' : String(ch.id).trim();
+    if (!id) throw new Error('已注册角色缺少稳定 ID: ' + (ch.name || '未名'));
+    if (_hasCharId(G, id, ch)) throw new Error('角色稳定 ID 冲突: ' + id);
+
+    // 旧缺陷可能已经把同一对象引用 push 多次；幂等入口顺手收敛为一行。
+    for (var i = G.chars.length - 1; i > first; i--) {
+      if (G.chars[i] === ch) G.chars.splice(i, 1);
+    }
+    if (!G._indices) G._indices = {};
+    if (!G._indices.charByName || typeof G._indices.charByName.set !== 'function') G._indices.charByName = new Map();
+    if (!G._indices.charById || typeof G._indices.charById.set !== 'function') G._indices.charById = new Map();
+    var indexedById = G._indices.charById.get(id);
+    if (indexedById && indexedById !== ch) throw new Error('角色 ID 索引冲突: ' + id);
+    G._indices.charById.set(id, ch);
+    var nameKey = typeof _tmCleanCharLookupName === 'function' ? _tmCleanCharLookupName(ch.name) : ch.name;
+    var indexedByName = G._indices.charByName.get(nameKey);
+    if (!indexedByName || G.chars.indexOf(indexedByName) < 0) G._indices.charByName.set(nameKey, ch);
+
+    var father = _resolveParent(G, (options || {}).father || ch.fatherId || ch.father);
+    var mother = _resolveParent(G, (options || {}).mother || ch.motherId || ch.mother);
+    [father, mother].forEach(function(parent) {
+      if (!parent) return;
+      if (!Array.isArray(parent.childrenIds)) parent.childrenIds = [];
+      var seen = false;
+      parent.childrenIds = parent.childrenIds.filter(function(childId) {
+        if (String(childId) !== id) return true;
+        if (seen) return false;
+        seen = true;
+        return true;
+      });
+      if (!seen) parent.childrenIds.push(id);
+    });
+    if (global.TMZhi && typeof global.TMZhi.invalidatePeople === 'function') global.TMZhi.invalidatePeople();
+    return ch;
+  }
   function createChar(data, options) {
     options = options || {};
     var G = options.world || (typeof GM !== 'undefined' ? GM : null);
     if (!G) throw new Error('角色创建缺少当前世界');
     if (!Array.isArray(G.chars)) G.chars = [];
+    var registered = _repairRegisteredChar(G, data, options);
+    if (registered) return registered;
     var ch = _normalizeChar(data, options);
     var counterBefore = G._entityIdCounters && G._entityIdCounters.char;
     var countersExisted = !!G._entityIdCounters;
@@ -1528,9 +1568,16 @@ var WorldHelper = {
       successionEvent: cloneValue(G._successionEvent), successionOwn: Object.prototype.hasOwnProperty.call(G, '_successionEvent')
     };
     try {
-      var vacated = { vacated: [] };
-      if (typeof _offVacateByCharName === 'function') {
-        vacated = _offVacateByCharName(to.name, 'succession', G.officeTree, { leaveVacancy: true });
+      var vacated = { ok: true, vacated: [] };
+      var hasOfficeTree = Array.isArray(G.officeTree) && G.officeTree.length > 0;
+      if (hasOfficeTree) {
+        if (typeof _offVacateByCharId !== 'function') {
+          throw new Error('继承事务缺少稳定 ID 官职注销入口');
+        }
+        vacated = _offVacateByCharId(to.id, 'succession', G.officeTree, { leaveVacancy: true, world: G });
+        if (!vacated || vacated.ok !== true) {
+          throw new Error('继承人原官职注销失败: ' + ((vacated && vacated.reason) || 'unknown'));
+        }
       }
       G.chars.forEach(function(ch) { if (ch) ch.isPlayer = ch === to; });
       clearHeirState(G, from, to);

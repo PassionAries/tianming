@@ -80,16 +80,24 @@ function load(file) {
   vm.runInContext(code, context, { filename: file });
 }
 
+let nextRuntimeCharId = 0;
+function runtimeChars(rows) {
+  return rows.map(function(row) {
+    nextRuntimeCharId++;
+    return Object.assign({ id: 'office-sync-char-' + nextRuntimeCharId }, row);
+  });
+}
+
 load('tm-office-system.js');
 load('tm-endturn-edict.js');
 load('tm-endturn-prep.js');
 load('editor-crud.js');
 load('tm-office-panel.js');
 
-context.GM.chars = [
+context.GM.chars = runtimeChars([
   { name: '旧臣', officialTitle: '尚书', position: '尚书', alive: true },
   { name: '新臣', officialTitle: '侍郎', position: '侍郎', alive: true, location: '京师' }
-];
+]);
 context.GM.officeTree = [
   { name: '吏部', positions: [
     { name: '尚书', holder: '旧臣', establishedCount: 1, vacancyCount: 0, actualHolders: [{ name: '旧臣', generated: true }] },
@@ -145,10 +153,10 @@ assert(context.scriptData.characters[1].officialTitle === '无', 'editor title s
 context.GM.turn = 9;
 context.GM._edictTracker = [];
 context.GM._edictSuggestions = [];
-context.GM.chars = [
+context.GM.chars = runtimeChars([
   { name: 'OldOfficer', officialTitle: '', position: '', alive: true },
   { name: 'NewOfficer', officialTitle: '', position: '', alive: true, location: 'Capital' }
-];
+]);
 context.GM.officeTree = [
   { name: 'TestDept', positions: [
     {
@@ -172,12 +180,12 @@ assert(directPanelPos.publicTreasury.currentHead === 'NewOfficer', 'direct panel
 assert(directPanelPos._pendingEdict && directPanelPos._pendingEdict.prevHolder === 'OldOfficer', 'direct panel appointment should snapshot effective previous holder');
 assert(context.GM.chars[1].officialTitle === 'TestMinister', 'direct panel appointment should update new character title');
 
-context.GM.chars = [
+context.GM.chars = runtimeChars([
   { name: '升官者', officialTitle: '侍郎', position: '侍郎', faction: '东林', party: '清流', ambition: 50, loyalty: 70, alive: true },
   { name: '中立同僚', faction: '东林', party: '清流', ambition: 90, loyalty: 60, alive: true },
   { name: '政敌同僚', faction: '东林', party: '浙党', ambition: 90, loyalty: 60, alive: true },
   { name: '善妒同僚', faction: '东林', party: '清流', ambition: 90, loyalty: 60, alive: true, traits: ['jealous'] }
-];
+]);
 context.GM.affinityMap = { '政敌同僚|升官者': -40 };
 context.AffinityMap = {
   get(a, b) { return context.GM.affinityMap[a + '|' + b] || context.GM.affinityMap[b + '|' + a] || 0; },
@@ -201,10 +209,10 @@ const parsedPromotion = context.extractEdictActions('命升官者为尚书，并
 assert(parsedPromotion.appointments.some(a => a.character === '升官者' && a.position === '尚书'), 'promotion edict should keep appointment');
 assert(!parsedPromotion.dismissals.some(d => d.character === '升官者'), 'promotion edict should not also dismiss promoted character');
 
-context.GM.chars = [
+context.GM.chars = runtimeChars([
   { name: '升官者', officialTitle: '侍郎', position: '侍郎', faction: '东林', party: '清流', ambition: 50, loyalty: 70, alive: true },
   { name: '前任尚书', officialTitle: '尚书', position: '尚书', faction: '东林', party: '清流', ambition: 50, loyalty: 60, alive: true }
-];
+]);
 context.GM.officeTree = [
   { name: '吏部', positions: [
     { name: '尚书', holder: '前任尚书', establishedCount: 1, vacancyCount: 0, actualHolders: [{ name: '前任尚书', generated: true }] },
@@ -215,12 +223,12 @@ context.applyEdictActions({ appointments: [{ character: '升官者', position: '
 assert(context.findCharByName('升官者').officialTitle === '尚书', 'same-edict promotion+dismissal should leave promoted character in new office');
 assert(context.GM.officeTree[0].positions[0].holder === '升官者', 'same-edict promotion+dismissal should not vacate new office');
 
-context.GM.chars = [
+context.GM.chars = runtimeChars([
   { name: '升官者', officialTitle: '侍郎', position: '侍郎', faction: '东林', party: '清流', ambition: 50, loyalty: 70, alive: true },
   { name: '中立同僚', faction: '东林', party: '清流', ambition: 90, loyalty: 60, alive: true },
   { name: '政敌同僚', faction: '东林', party: '浙党', ambition: 90, loyalty: 60, alive: true },
   { name: '善妒同僚', faction: '东林', party: '清流', ambition: 90, loyalty: 60, alive: true, traits: ['jealous'] }
-];
+]);
 context.GM.affinityMap = { '政敌同僚|升官者': -40 };
 context._reactToEdicts({ appointments: [{ character: '升官者', position: '尚书' }], dismissals: [], deaths: [] });
 assert(context.findCharByName('中立同僚').loyalty === 60, 'neutral same-faction ambitious colleague should not lose loyalty for promotion');
@@ -239,7 +247,7 @@ context.GM._capital = '京师';
 context.GM.turn = 12;
 context.GM._chronicle = [];
 context.GM.qijuHistory = [];
-context.GM.chars = [{ name: '远officer', officialTitle: '', position: '', alive: true, location: '辽东' }];
+context.GM.chars = runtimeChars([{ name: '远officer', officialTitle: '', position: '', alive: true, location: '辽东' }]);
 context.GM.officeTree = [{ name: 'CentralDept', positions: [{ name: 'CentralPost', holder: '', establishedCount: 1, vacancyCount: 0, actualHolders: [] }], subs: [] }];
 context._offPickerConfirm('远officer', 'CentralDept', 'CentralPost', '', 'resign');
 var _remoteCh = context.findCharByName('远officer');
@@ -249,7 +257,7 @@ assert(context.GM.officeTree[0].positions[0].holder === '远officer', '即抵任
 
 // ── 对照:无即时规则→走多回合行程(_travelTo 在途·不即抵·保留原默认) ──
 context._hasInstantArrivalRule = function () { return false; };
-context.GM.chars = [{ name: '慢officer', officialTitle: '', position: '', alive: true, location: '辽东' }];
+context.GM.chars = runtimeChars([{ name: '慢officer', officialTitle: '', position: '', alive: true, location: '辽东' }]);
 context.GM.officeTree = [{ name: 'CentralDept2', positions: [{ name: 'CentralPost2', holder: '', establishedCount: 1, vacancyCount: 0, actualHolders: [] }], subs: [] }];
 context._offPickerConfirm('慢officer', 'CentralDept2', 'CentralPost2', '', 'resign');
 var _slowCh = context.findCharByName('慢officer');
@@ -257,7 +265,7 @@ assert(_slowCh._travelTo === '京师' && _slowCh.location === '辽东', '无即�
 
 // ── 地方任命目的地正确性(贪婪正则修复:部名不得污染地名·都察院+陕西巡抚→陕西·非"察院陕西"赴错地) ──
 context._hasInstantArrivalRule = function () { return false; };
-context.GM.chars = [{ name: '巡抚者', officialTitle: '', position: '', alive: true, location: '辽东' }];
+context.GM.chars = runtimeChars([{ name: '巡抚者', officialTitle: '', position: '', alive: true, location: '辽东' }]);
 context.GM.officeTree = [{ name: '都察院', positions: [{ name: '陕西巡抚', holder: '', establishedCount: 1, vacancyCount: 0, actualHolders: [] }], subs: [] }];
 context._offPickerConfirm('巡抚者', '都察院', '陕西巡抚', '', 'resign');
 var _xfCh = context.findCharByName('巡抚者');

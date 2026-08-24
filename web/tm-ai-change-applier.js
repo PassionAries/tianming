@@ -2044,7 +2044,7 @@
               applied.failed.push({ faction_update: fu.name, reason: 'faction leader must be an existing living character: ' + leader });
             } else if (typeof _setFactionLeader !== 'function') {
               applied.failed.push({ faction_update: fu.name, reason: 'faction leader sink unavailable' });
-            } else if (_setFactionLeader(fac, livingLeader ? livingLeader.name : '', G, fu.reason || 'AI势力首领变更')) {
+            } else if (_setFactionLeader(fac, livingLeader ? (livingLeader.id || livingLeader.name) : '', G, fu.reason || 'AI势力首领变更')) {
               facCount++;
             }
           }

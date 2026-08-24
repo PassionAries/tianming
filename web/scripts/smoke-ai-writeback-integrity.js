@@ -244,7 +244,10 @@ async function main() {
 
   // C. faction leader 与 army commander 的最终 sink 只接受真实活人，并同步所有镜像。
   ctx.GM = baseGM({
-    chars: [{ name: '韩旷', id: 'char_hankuang', alive: true }, { name: '亡将', alive: false, dead: true }],
+    chars: [
+      { name: '韩旷', id: 'char_hankuang', alive: true },
+      { name: '亡将', id: 'char_dead', alive: false, dead: true }
+    ],
     facs: [{ name: '东林', leader: '旧首', leaderName: '旧首', ruler: '旧首', leaderInfo: { name: '旧首' } }],
     armies: [{ name: '京营', commander: '旧将', commanderName: '旧将', general: '旧将', leader: '旧将', soldiers: 1000 }]
   });
@@ -295,7 +298,10 @@ async function main() {
 
   // C2. party leader/head 同样只走真实活人 sink，合法 ID 归一并同步镜像。
   ctx.GM = baseGM({
-    chars: [{ name: '韩旷', id: 'char_hankuang', alive: true }, { name: '亡将', alive: false, dead: true }],
+    chars: [
+      { name: '韩旷', id: 'char_hankuang', alive: true },
+      { name: '亡将', id: 'char_dead', alive: false, dead: true }
+    ],
     parties: [{ name: '清议党', leader: '旧首', head: '旧首', cohesion: 50 }]
   });
   const validParty = ctx.applyAITurnChanges({ party_updates: [{ name: '清议党', updates: { leader: 'char_hankuang', head: 'char_hankuang', cohesion: 75 } }] });
@@ -312,18 +318,42 @@ async function main() {
   const partyPath = ctx.TM.AIChange.PathUtils.applyPathSet(ctx.GM, 'parties.0.head', '亡将', 'direct bypass probe');
   check(!partyPath.ok && ctx.GM.parties[0].head === '韩旷', 'direct anyPath party leader/head bypass must be blocked at PathUtils sink');
 
-  ctx.GM.facs = [{ name: '东林', leader: '韩旷' }];
+  ctx.GM.chars.push({ name: '韩旷', id: 'char_hankuang_second', alive: true });
+  ctx.GM.facs = [
+    { id: 'fac_donglin_first', name: '东林', leader: '旧首甲' },
+    { id: 'fac_donglin_second', name: '东林', leader: '旧首乙' }
+  ];
   const succession = {
     faction_succession: [
-      { faction: '东林', newLeader: 'char_hankuang', reason: '合法继统' },
-      { faction: '东林', newLeader: '王二麻子', reason: '幽灵不得继统' },
-      { faction: '东林', newLeader: '亡将', reason: '亡者不得继统' },
-      { faction: '不存在势力', newLeader: '韩旷', reason: '幽灵势力不得继统' }
+      { factionId: 'fac_donglin_second', faction: '东林', newLeaderId: 'char_hankuang_second', newLeader: '韩旷', reason: '合法继统' },
+      { factionId: 'fac_donglin_second', newLeaderId: 'ghost-char', reason: '幽灵不得继统' },
+      { factionId: 'fac_donglin_second', newLeaderId: 'char_dead', reason: '亡者不得继统' },
+      { faction: '不存在势力', newLeader: '韩旷', reason: '幽灵势力不得继统' },
+      { faction: '东林', newLeaderId: 'char_hankuang_second', reason: '同名势力不得首项命中' },
+      { factionId: 'fac_donglin_second', newLeader: '韩旷', reason: '同名人物不得首项命中' }
     ]
   };
   ctx.preflightAIWriteBack(succession);
-  check(succession.faction_succession.length === 1, 'succession preflight must reject ghost faction and ghost/dead leaders');
-  check(succession.faction_succession[0].faction === '东林' && succession.faction_succession[0].newLeader === '韩旷', 'succession preflight must canonicalize exact ids to active names');
+  check(succession.faction_succession.length === 1, 'succession preflight must reject ghost/dead and ambiguous duplicate-name identities');
+  check(succession.faction_succession[0].factionId === 'fac_donglin_second'
+    && succession.faction_succession[0].newLeaderId === 'char_hankuang_second'
+    && succession.faction_succession[0].faction === '东林'
+    && succession.faction_succession[0].newLeader === '韩旷',
+  'succession preflight must preserve stable ids while retaining display-name snapshots');
+
+  ctx.GM.facs = [{ id: 'fac_unique', name: '清流' }];
+  ctx.GM.chars = [{ id: 'char_unique', name: '顾命臣', alive: true }];
+  const legacySuccession = { faction_succession: [{ faction: '清流', newLeader: '顾命臣' }] };
+  ctx.preflightAIWriteBack(legacySuccession);
+  check(legacySuccession.faction_succession.length === 1
+    && legacySuccession.faction_succession[0].factionId === 'fac_unique'
+    && legacySuccession.faction_succession[0].newLeaderId === 'char_unique',
+  'unique legacy succession names migrate once to stable faction and character ids');
+  ctx.GM.chars = [
+    { name: '韩旷', id: 'char_hankuang', alive: true },
+    { name: '韩旷', id: 'char_hankuang_second', alive: true },
+    { name: '亡将', id: 'char_dead', alive: false, dead: true }
+  ];
 
   const leaderPreflight = {
     faction_events: [{ actor: '东林', action: '政变成功', newLeader: 'char_hankuang' }, { actor: '东林', action: '政变成功', newLeader: '亡将' }],
@@ -348,7 +378,7 @@ async function main() {
   check(/he\.type === 'death'[\s\S]{0,500}_tmApplyCanonicalDeath\(he\.character/.test(endturnApplySource) && !/he\.type === 'death'[\s\S]{0,500}\.alive\s*=\s*false/.test(endturnApplySource), 'harem death consumer must route the raw character reference to the canonical death sink without bare writes');
   check(!/\.alive\s*=\s*false|\.dead\s*=\s*true/.test(endturnApplySource + '\n' + endturnStagesSource), 'endturn writeback consumers must not contain direct character death writes');
   check(endturnApplySource.includes("_tmSetFactionLeaderCanonical(_coupFac, fe.newLeader") &&
-    endturnApplySource.includes("_tmSetFactionLeaderCanonical(fObj, sc.newLeader") &&
+    endturnApplySource.includes("_tmSetFactionLeaderCanonical(fObj, sc.newLeaderId || sc.newLeader") &&
     endturnApplySource.includes("_tmSetPartyLeaderCanonical(party, pc.new_leader"), 'faction coup/succession and party change leaders must use canonical living-entity sinks');
   check(endturnApplySource.includes("_tmSetPartyLeaderCanonical(newParty, sp.newLeader") &&
     endturnApplySource.includes("_tmSetPartyLeaderCanonical(newP, pc.leader") &&
@@ -479,14 +509,26 @@ async function main() {
 
   // faction_succession 的主链 consumer 之后，post stage 必须补齐所有领袖镜像。
   ctx.GM = baseGM({
-    chars: [{ name: '韩旷', alive: true }],
-    facs: [{ name: '东林', leader: '韩旷', ruler: '旧首', leadership: { ruler: '旧首' }, leaderInfo: { name: '韩旷' } }]
+    chars: [
+      { id: 'char_same_first', name: '韩旷', alive: true },
+      { id: 'char_same_second', name: '韩旷', alive: true }
+    ],
+    facs: [
+      { id: 'fac_same_first', name: '东林', leader: '旧首甲', ruler: '旧首甲', leadership: { ruler: '旧首甲' }, leaderInfo: { name: '旧首甲' } },
+      { id: 'fac_same_second', name: '东林', leader: '旧首乙', ruler: '旧首乙', leadership: { ruler: '旧首乙' }, leaderInfo: { name: '旧首乙' } }
+    ]
   });
   ctx.TM.Endturn.AI.apply.stages._applyPostValidateAssemble(
     { results: {}, meta: { timing: {} }, record: {} },
-    { p1: { faction_succession: [{ faction: '东林', newLeader: '韩旷' }] }, _applied: {}, _applyStart: Date.now() }
+    { p1: { faction_succession: [{ factionId: 'fac_same_second', faction: '东林', newLeaderId: 'char_same_second', newLeader: '韩旷' }] }, _applied: {}, _applyStart: Date.now() }
   );
-  check(ctx.GM.facs[0].leaderName === '韩旷' && ctx.GM.facs[0].ruler === '韩旷' && ctx.GM.facs[0].leadership.ruler === '韩旷' && ctx.GM.facs[0].leaderInfo.name === '韩旷', 'succession post stage must synchronize all leader mirrors');
+  check(ctx.GM.facs[0].leader === '旧首甲'
+    && ctx.GM.facs[1].leaderId === 'char_same_second'
+    && ctx.GM.facs[1].leaderName === '韩旷'
+    && ctx.GM.facs[1].ruler === '韩旷'
+    && ctx.GM.facs[1].leadership.ruler === '韩旷'
+    && ctx.GM.facs[1].leaderInfo.id === 'char_same_second',
+  'succession post stage targets only the requested duplicate-name faction and synchronizes its stable leader id');
 
   const captured = [];
   ctx.applyAITurnChanges = function capture(input) {

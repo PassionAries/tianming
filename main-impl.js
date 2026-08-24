@@ -2612,6 +2612,7 @@ let displayFitHooked = false;
 const APP_CLOSE_FLUSH_TIMEOUT_MS = 10000;
 let _allowAppClose = false;
 let _appQuitRequestPromise = null;
+let _appQuitRequestKind = '';
 let _appCloseFlushSequence = 0;
 const _pendingAppCloseFlushes = new Map();
 
@@ -2694,28 +2695,57 @@ ipcMain.on('app-close-flush-complete', (event, payload) => {
   });
 });
 
-function requestApplicationQuit(reason) {
+function _resetApplicationExitRequest() {
+  _appQuitRequestPromise = null;
+  _appQuitRequestKind = '';
+}
+
+function _requestApplicationExit(kind, reason, exitAction, winOverride) {
+  const targetWindow = arguments.length >= 4 ? winOverride : mainWindow;
   if (_allowAppClose) {
-    app.quit();
-    return Promise.resolve({ success: true, alreadyFlushed: true });
+    try {
+      exitAction();
+      return Promise.resolve({ success: true, alreadyFlushed: true, kind });
+    } catch (error) {
+      return Promise.resolve({ success: false, code: 'application-exit-action-failed', error: error && error.message || String(error) });
+    }
   }
-  if (_appQuitRequestPromise) return _appQuitRequestPromise;
-  _appQuitRequestPromise = requestRendererCloseFlush(mainWindow, reason).then(result => {
+  if (_appQuitRequestPromise) {
+    if (_appQuitRequestKind === kind) return _appQuitRequestPromise;
+    return Promise.resolve({
+      success: false,
+      code: 'application-exit-request-in-flight',
+      error: '已有另一种应用退出请求正在等待保存握手'
+    });
+  }
+  _appQuitRequestKind = kind;
+  _appQuitRequestPromise = requestRendererCloseFlush(targetWindow, reason).then(result => {
     if (!(result && result.ok === true)) {
       console.warn('[app-close] 已取消退出·后台保存未安全完成·'
         + String(result && (result.code || result.reason) || 'unknown'));
-      _appQuitRequestPromise = null;
+      _resetApplicationExitRequest();
       return {
         success: false,
         code: String(result && result.code || 'background-save-flush-failed'),
         error: String(result && result.reason || '后台保存未安全完成')
       };
     }
-    _allowAppClose = true;
-    setImmediate(() => app.quit());
-    return { success: true, flush: result };
+    try {
+      _allowAppClose = true;
+      exitAction();
+      return { success: true, kind, flush: result };
+    } catch (error) {
+      _allowAppClose = false;
+      _resetApplicationExitRequest();
+      console.warn('[app-close] 已取消退出·退出动作失败·' + (error && error.message || error));
+      return {
+        success: false,
+        code: 'application-exit-action-failed',
+        error: error && error.message || String(error)
+      };
+    }
   }).catch(error => {
-    _appQuitRequestPromise = null;
+    _resetApplicationExitRequest();
     console.warn('[app-close] 已取消退出·关闭握手异常·' + (error && error.message || error));
     return {
       success: false,
@@ -2724,6 +2754,26 @@ function requestApplicationQuit(reason) {
     };
   });
   return _appQuitRequestPromise;
+}
+
+function requestApplicationQuit(reason, winOverride) {
+  return _requestApplicationExit('quit', reason, () => {
+    setImmediate(() => app.quit());
+  }, arguments.length >= 2 ? winOverride : mainWindow);
+}
+
+function requestApplicationRelaunch(reason, winOverride) {
+  return _requestApplicationExit('relaunch', reason, () => {
+    app.relaunch();
+    // 保留旧路径的短暂 ack 窗口；真正退出仍走 app.quit()，不再以强制 exit 绕过生命周期。
+    setTimeout(() => app.quit(), 100);
+  }, arguments.length >= 2 ? winOverride : mainWindow);
+}
+
+function requestApplicationUpdateInstall(reason, winOverride) {
+  return _requestApplicationExit('update-install', reason, () => {
+    autoUpdater.quitAndInstall(false, true);
+  }, arguments.length >= 2 ? winOverride : mainWindow);
 }
 
 function createWindow() {
@@ -3737,8 +3787,7 @@ ipcMain.handle('update-download', async () => {
 ipcMain.handle('update-install', async () => {
   try {
     if (!lastUpdateInfo || !isStrictUpgrade(lastUpdateInfo.version)) return { success: false, error: '没有可安装的高版本更新。' };
-    autoUpdater.quitAndInstall(false, true);
-    return { success: true };
+    return await requestApplicationUpdateInstall('installer-update');
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -3847,11 +3896,11 @@ ipcMain.handle('hot-update-rollback', async () => {
 ipcMain.handle('hot-update-reload', async () => {
   // 重新启动确保 renderer 从刚安装的已验签内容目录加载；main/preload 始终使用安装包版本。
   try {
-    setTimeout(() => {  // 让 IPC return 先发回去·renderer 拿到 ack 再被关
-      try { app.relaunch(); app.exit(0); }
-      catch (e) { console.warn('[hot-update-reload] relaunch failed:', e && e.message || e); }
-    }, 100);
-    return { success: true, status: getHotUpdatePublicStatus(), relaunch: true };
+    const result = await requestApplicationRelaunch('hot-update-reload');
+    return Object.assign({}, result, {
+      status: getHotUpdatePublicStatus(),
+      relaunch: !!(result && result.success)
+    });
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -4270,6 +4319,9 @@ if (TEST_MODE) {
     getOnlineRendererBodyLimit,
     assertOnlineRendererBodySize,
     requestRendererCloseFlush,
+    requestApplicationQuit,
+    requestApplicationRelaunch,
+    requestApplicationUpdateInstall,
     APP_CLOSE_FLUSH_TIMEOUT_MS,
     preflightWorkshopZip,
     extractZipToTemp,

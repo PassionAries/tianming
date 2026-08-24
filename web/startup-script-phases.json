@@ -2,11 +2,11 @@
   "version": 1,
   "source": "index.html",
   "generatedBy": "web/scripts/build-startup-phase-manifest.js",
-  "scriptCount": 415,
+  "scriptCount": 416,
   "phaseCounts": {
     "menu": 13,
     "core": 80,
-    "world": 295,
+    "world": 296,
     "optional": 27
   },
   "deferredChangesApproved": 0,
@@ -8083,6 +8083,7 @@
         "_autoSaveFlushTimer",
         "_autoSaveIdleSkipStreak",
         "_autoSaveInFlight",
+        "_autoSaveInFlightPromise",
         "_autoSaveLastDoneMs",
         "_autoSaveLastInputMs",
         "_autoSaveLastSavedTurn",
@@ -8118,7 +8119,6 @@
         "_tmCaptureCommittedWorldSnapshotFromLive",
         "_tmCaptureLoadStepError",
         "_tmCaptureLoadTransaction",
-        "_tmCloseFlushBridgeDisposer",
         "_tmCollectAdminDivisionEntries",
         "_tmCommitBackgroundWorld",
         "_tmCommittedSnapshotIdentityFor",
@@ -8133,13 +8133,11 @@
         "_tmEnsureCampaignId",
         "_tmEnsureTimelineIdentity",
         "_tmEntityIdSet",
-        "_tmFlushBackgroundAutosavesForClose",
         "_tmFlushDeferredDesktopAutoSave",
         "_tmForkLoadedTimeline",
         "_tmGetDesktopAutoSaveSessionToken",
         "_tmHasNativeFs",
         "_tmHasOwn",
-        "_tmInstallDesktopCloseFlushBridge",
         "_tmInvalidateCommittedWorldSnapshot",
         "_tmLoadBarrier",
         "_tmLoadGen",
@@ -8185,7 +8183,7 @@
       ],
       "consumes": [],
       "mustLoadBefore": [
-        "tm-office-editor.js"
+        "tm-save-close-flush.js"
       ],
       "mustLoadAfter": [
         "tm-audio-theme.js"
@@ -8194,8 +8192,27 @@
       "reason": "Round 20 dependency audit retained the current classic-script order; no startup side-effect-free lazy boundary was proven for this provider."
     },
     {
-      "script": "tm-office-editor.js",
+      "script": "tm-save-close-flush.js",
       "order": 287,
+      "phase": "world",
+      "provides": [
+        "_tmAwaitDesktopAutoSaveForClose",
+        "_tmFlushBackgroundAutosavesForClose",
+        "_tmInstallDesktopCloseFlushBridge"
+      ],
+      "consumes": [],
+      "mustLoadBefore": [
+        "tm-office-editor.js"
+      ],
+      "mustLoadAfter": [
+        "tm-save-lifecycle.js"
+      ],
+      "lazySafe": false,
+      "reason": "Round 20 dependency audit retained the current classic-script order; no startup side-effect-free lazy boundary was proven for this provider."
+    },
+    {
+      "script": "tm-office-editor.js",
+      "order": 288,
       "phase": "world",
       "provides": [
         "SCENARIO_RESET_EDITOR_DRAFT_KEY",
@@ -8270,14 +8287,14 @@
         "tm-topbar-vars.js"
       ],
       "mustLoadAfter": [
-        "tm-save-lifecycle.js"
+        "tm-save-close-flush.js"
       ],
       "lazySafe": false,
       "reason": "Round 20 dependency audit retained the current classic-script order; no startup side-effect-free lazy boundary was proven for this provider."
     },
     {
       "script": "tm-topbar-vars.js",
-      "order": 288,
+      "order": 289,
       "phase": "world",
       "provides": [
         "TOP_BAR_VARS",
@@ -8348,7 +8365,7 @@
     },
     {
       "script": "tm-shell-extras.js",
-      "order": 289,
+      "order": 290,
       "phase": "world",
       "provides": [
         "_renderShellExtrasLeft",
@@ -8371,7 +8388,7 @@
     },
     {
       "script": "tm-houguong.js",
-      "order": 290,
+      "order": 291,
       "phase": "world",
       "provides": [
         "TM",
@@ -8389,7 +8406,7 @@
     },
     {
       "script": "tm-shizheng-panel.js",
-      "order": 291,
+      "order": 292,
       "phase": "world",
       "provides": [
         "_mzAddSystemLine",
@@ -8434,7 +8451,7 @@
     },
     {
       "script": "tm-corruption-engine.js",
-      "order": 292,
+      "order": 293,
       "phase": "world",
       "provides": [
         "CorruptionEngine"
@@ -8451,7 +8468,7 @@
     },
     {
       "script": "tm-corruption-cases.js",
-      "order": 293,
+      "order": 294,
       "phase": "world",
       "provides": [],
       "consumes": [],
@@ -8466,7 +8483,7 @@
     },
     {
       "script": "tm-corruption-extras.js",
-      "order": 294,
+      "order": 295,
       "phase": "world",
       "provides": [
         "_corrEditorSave",
@@ -8484,7 +8501,7 @@
     },
     {
       "script": "tm-lizhi-panel.js",
-      "order": 295,
+      "order": 296,
       "phase": "world",
       "provides": [
         "TM",
@@ -8535,7 +8552,7 @@
     },
     {
       "script": "tm-guoku-engine.js",
-      "order": 296,
+      "order": 297,
       "phase": "world",
       "provides": [
         "GuokuEngine"
@@ -8552,7 +8569,7 @@
     },
     {
       "script": "tm-guoku-panel.js",
-      "order": 297,
+      "order": 298,
       "phase": "world",
       "provides": [
         "_guokuActionBtn",
@@ -8598,7 +8615,7 @@
     },
     {
       "script": "tm-neitang-engine.js",
-      "order": 298,
+      "order": 299,
       "phase": "world",
       "provides": [
         "NeitangEngine"
@@ -8615,7 +8632,7 @@
     },
     {
       "script": "tm-neitang-panel.js",
-      "order": 299,
+      "order": 300,
       "phase": "world",
       "provides": [
         "_neitangActionBtn",
@@ -8643,7 +8660,7 @@
     },
     {
       "script": "tm-char-economy-engine.js",
-      "order": 300,
+      "order": 301,
       "phase": "world",
       "provides": [
         "CharEconEngine"
@@ -8660,7 +8677,7 @@
     },
     {
       "script": "tm-char-historical-profiles.js",
-      "order": 301,
+      "order": 302,
       "phase": "world",
       "provides": [
         "HISTORICAL_CHAR_PROFILES",
@@ -8681,7 +8698,7 @@
     },
     {
       "script": "tm-char-historical-wave-01.js",
-      "order": 302,
+      "order": 303,
       "phase": "world",
       "provides": [
         "HISTORICAL_CHAR_PROFILES"
@@ -8698,7 +8715,7 @@
     },
     {
       "script": "tm-char-historical-wave-02.js",
-      "order": 303,
+      "order": 304,
       "phase": "world",
       "provides": [
         "HISTORICAL_CHAR_PROFILES"
@@ -8715,7 +8732,7 @@
     },
     {
       "script": "tm-char-historical-wave-03.js",
-      "order": 304,
+      "order": 305,
       "phase": "world",
       "provides": [
         "HISTORICAL_CHAR_PROFILES"
@@ -8732,7 +8749,7 @@
     },
     {
       "script": "tm-char-historical-wave-04.js",
-      "order": 305,
+      "order": 306,
       "phase": "world",
       "provides": [
         "HISTORICAL_CHAR_PROFILES"
@@ -8749,7 +8766,7 @@
     },
     {
       "script": "tm-char-historical-wave-05.js",
-      "order": 306,
+      "order": 307,
       "phase": "world",
       "provides": [
         "HISTORICAL_CHAR_PROFILES"
@@ -8766,7 +8783,7 @@
     },
     {
       "script": "tm-char-historical-wave-06.js",
-      "order": 307,
+      "order": 308,
       "phase": "world",
       "provides": [
         "HISTORICAL_CHAR_PROFILES"
@@ -8783,7 +8800,7 @@
     },
     {
       "script": "tm-char-historical-wave-07.js",
-      "order": 308,
+      "order": 309,
       "phase": "world",
       "provides": [
         "HISTORICAL_CHAR_PROFILES"
@@ -8800,7 +8817,7 @@
     },
     {
       "script": "tm-char-historical-wave-08.js",
-      "order": 309,
+      "order": 310,
       "phase": "world",
       "provides": [
         "HISTORICAL_CHAR_PROFILES"
@@ -8817,7 +8834,7 @@
     },
     {
       "script": "tm-char-historical-wave-09.js",
-      "order": 310,
+      "order": 311,
       "phase": "world",
       "provides": [
         "HISTORICAL_CHAR_PROFILES"
@@ -8834,7 +8851,7 @@
     },
     {
       "script": "tm-char-historical-wave-10.js",
-      "order": 311,
+      "order": 312,
       "phase": "world",
       "provides": [
         "HISTORICAL_CHAR_PROFILES"
@@ -8851,7 +8868,7 @@
     },
     {
       "script": "tm-char-historical-wave-11.js",
-      "order": 312,
+      "order": 313,
       "phase": "world",
       "provides": [
         "HISTORICAL_CHAR_PROFILES"
@@ -8868,7 +8885,7 @@
     },
     {
       "script": "tm-char-historical-wave-12.js",
-      "order": 313,
+      "order": 314,
       "phase": "world",
       "provides": [
         "HISTORICAL_CHAR_PROFILES"
@@ -8885,7 +8902,7 @@
     },
     {
       "script": "tm-ceming.js",
-      "order": 314,
+      "order": 315,
       "phase": "world",
       "provides": [
         "TM"
@@ -8902,7 +8919,7 @@
     },
     {
       "script": "tm-char-economy-ui.js",
-      "order": 315,
+      "order": 316,
       "phase": "world",
       "provides": [
         "_charConfiscate",
@@ -8921,7 +8938,7 @@
     },
     {
       "script": "tm-char-full-schema.js",
-      "order": 316,
+      "order": 317,
       "phase": "world",
       "provides": [
         "CharFullSchema"
@@ -8938,7 +8955,7 @@
     },
     {
       "script": "tm-economy-engine-currency.js",
-      "order": 317,
+      "order": 318,
       "phase": "world",
       "provides": [
         "CurrencyEngine",
@@ -8956,7 +8973,7 @@
     },
     {
       "script": "tm-economy-engine.js",
-      "order": 318,
+      "order": 319,
       "phase": "world",
       "provides": [
         "EconomyCore",
@@ -8977,7 +8994,7 @@
     },
     {
       "script": "tm-central-local-engine.js",
-      "order": 319,
+      "order": 320,
       "phase": "world",
       "provides": [
         "CentralLocalEngine"
@@ -8994,7 +9011,7 @@
     },
     {
       "script": "tm-huji-engine.js",
-      "order": 320,
+      "order": 321,
       "phase": "world",
       "provides": [
         "HujiEngine"
@@ -9011,7 +9028,7 @@
     },
     {
       "script": "tm-edict-parser.js",
-      "order": 321,
+      "order": 322,
       "phase": "world",
       "provides": [
         "EdictComplete",
@@ -9030,7 +9047,7 @@
     },
     {
       "script": "tm-huji-deep-fill.js",
-      "order": 322,
+      "order": 323,
       "phase": "world",
       "provides": [
         "HujiDeepFill"
@@ -9047,7 +9064,7 @@
     },
     {
       "script": "tm-huji-runtime-bridge.js",
-      "order": 323,
+      "order": 324,
       "phase": "world",
       "provides": [
         "HujiRuntimeBridge",
@@ -9065,7 +9082,7 @@
     },
     {
       "script": "tm-huji-governance-loop.js",
-      "order": 324,
+      "order": 325,
       "phase": "world",
       "provides": [
         "HujiGovernanceLoop",
@@ -9083,7 +9100,7 @@
     },
     {
       "script": "tm-edict-complete.js",
-      "order": 325,
+      "order": 326,
       "phase": "world",
       "provides": [
         "EdictComplete",
@@ -9103,7 +9120,7 @@
     },
     {
       "script": "tm-env-recovery-fill.js",
-      "order": 326,
+      "order": 327,
       "phase": "world",
       "provides": [
         "EnvRecoveryFill"
@@ -9120,7 +9137,7 @@
     },
     {
       "script": "tm-authority-engines.js",
-      "order": 327,
+      "order": 328,
       "phase": "world",
       "provides": [
         "AuthorityEngines",
@@ -9142,7 +9159,7 @@
     },
     {
       "script": "tm-building-works.js",
-      "order": 328,
+      "order": 329,
       "phase": "world",
       "provides": [
         "TM"
@@ -9159,7 +9176,7 @@
     },
     {
       "script": "tm-talent-cohorts.js",
-      "order": 329,
+      "order": 330,
       "phase": "world",
       "provides": [
         "TM"
@@ -9176,7 +9193,7 @@
     },
     {
       "script": "tm-talent-bottlenecks.js",
-      "order": 330,
+      "order": 331,
       "phase": "world",
       "provides": [
         "TM"
@@ -9193,7 +9210,7 @@
     },
     {
       "script": "tm-talent-building-bridge.js",
-      "order": 331,
+      "order": 332,
       "phase": "world",
       "provides": [
         "TM"
@@ -9210,7 +9227,7 @@
     },
     {
       "script": "tm-talent-backlash.js",
-      "order": 332,
+      "order": 333,
       "phase": "world",
       "provides": [
         "TM"
@@ -9227,7 +9244,7 @@
     },
     {
       "script": "tm-field-pipelines.js",
-      "order": 333,
+      "order": 334,
       "phase": "world",
       "provides": [
         "TM"
@@ -9244,7 +9261,7 @@
     },
     {
       "script": "tm-region-status.js",
-      "order": 334,
+      "order": 335,
       "phase": "world",
       "provides": [
         "TM"
@@ -9261,7 +9278,7 @@
     },
     {
       "script": "tm-renli.js",
-      "order": 335,
+      "order": 336,
       "phase": "world",
       "provides": [
         "TM"
@@ -9278,7 +9295,7 @@
     },
     {
       "script": "tm-reported-view.js",
-      "order": 336,
+      "order": 337,
       "phase": "world",
       "provides": [
         "TM"
@@ -9295,7 +9312,7 @@
     },
     {
       "script": "tm-social-foundation.js",
-      "order": 337,
+      "order": 338,
       "phase": "world",
       "provides": [
         "TM"
@@ -9312,7 +9329,7 @@
     },
     {
       "script": "tm-authority-complete.js",
-      "order": 338,
+      "order": 339,
       "phase": "world",
       "provides": [
         "AuthorityComplete"
@@ -9329,7 +9346,7 @@
     },
     {
       "script": "tm-revolt-entity.js",
-      "order": 339,
+      "order": 340,
       "phase": "world",
       "provides": [
         "TM"
@@ -9346,7 +9363,7 @@
     },
     {
       "script": "tm-revolt-inference.js",
-      "order": 340,
+      "order": 341,
       "phase": "world",
       "provides": [
         "TM"
@@ -9363,7 +9380,7 @@
     },
     {
       "script": "tm-party-inference.js",
-      "order": 341,
+      "order": 342,
       "phase": "world",
       "provides": [
         "TM"
@@ -9380,7 +9397,7 @@
     },
     {
       "script": "tm-captive-court.js",
-      "order": 342,
+      "order": 343,
       "phase": "world",
       "provides": [
         "TM"
@@ -9397,7 +9414,7 @@
     },
     {
       "script": "tm-historical-presets.js",
-      "order": 343,
+      "order": 344,
       "phase": "world",
       "provides": [
         "HistoricalPresets"
@@ -9414,7 +9431,7 @@
     },
     {
       "script": "tm-prophecy.js",
-      "order": 344,
+      "order": 345,
       "phase": "world",
       "provides": [
         "PhaseD"
@@ -9431,7 +9448,7 @@
     },
     {
       "script": "tm-region-enrich.js",
-      "order": 345,
+      "order": 346,
       "phase": "world",
       "provides": [
         "PhaseB"
@@ -9448,7 +9465,7 @@
     },
     {
       "script": "tm-audit.js",
-      "order": 346,
+      "order": 347,
       "phase": "world",
       "provides": [
         "PhaseA"
@@ -9465,7 +9482,7 @@
     },
     {
       "script": "tm-feedback-loops.js",
-      "order": 347,
+      "order": 348,
       "phase": "world",
       "provides": [
         "PhaseE",
@@ -9483,7 +9500,7 @@
     },
     {
       "script": "tm-event-bus.js",
-      "order": 348,
+      "order": 349,
       "phase": "world",
       "provides": [
         "EventBus",
@@ -9502,7 +9519,7 @@
     },
     {
       "script": "tm-class-mobility.js",
-      "order": 349,
+      "order": 350,
       "phase": "world",
       "provides": [
         "PhaseF3"
@@ -9519,7 +9536,7 @@
     },
     {
       "script": "tm-authority-deep.js",
-      "order": 350,
+      "order": 351,
       "phase": "world",
       "provides": [
         "PhaseF4"
@@ -9536,7 +9553,7 @@
     },
     {
       "script": "tm-player-tools.js",
-      "order": 351,
+      "order": 352,
       "phase": "world",
       "provides": [
         "PhaseF5",
@@ -9557,7 +9574,7 @@
     },
     {
       "script": "tm-ledger-paper.js",
-      "order": 352,
+      "order": 353,
       "phase": "world",
       "provides": [
         "PhaseF6"
@@ -9574,7 +9591,7 @@
     },
     {
       "script": "tm-authority-ui.js",
-      "order": 353,
+      "order": 354,
       "phase": "world",
       "provides": [
         "PhaseG1",
@@ -9596,7 +9613,7 @@
     },
     {
       "script": "tm-ethnic-religion.js",
-      "order": 354,
+      "order": 355,
       "phase": "world",
       "provides": [
         "PhaseG2"
@@ -9613,7 +9630,7 @@
     },
     {
       "script": "tm-edict-thresholds.js",
-      "order": 355,
+      "order": 356,
       "phase": "world",
       "provides": [
         "PhaseG3",
@@ -9632,7 +9649,7 @@
     },
     {
       "script": "tm-fiscal-ui.js",
-      "order": 356,
+      "order": 357,
       "phase": "world",
       "provides": [
         "PhaseG4",
@@ -9651,7 +9668,7 @@
     },
     {
       "script": "tm-integration-bridge.js",
-      "order": 357,
+      "order": 358,
       "phase": "world",
       "provides": [
         "IntegrationBridge",
@@ -9669,7 +9686,7 @@
     },
     {
       "script": "tm-fiscal-engine.js",
-      "order": 358,
+      "order": 359,
       "phase": "world",
       "provides": [
         "CascadeTax",
@@ -9689,7 +9706,7 @@
     },
     {
       "script": "tm-invariants.js",
-      "order": 359,
+      "order": 360,
       "phase": "world",
       "provides": [
         "TM"
@@ -9706,7 +9723,7 @@
     },
     {
       "script": "tm-namespaces.js",
-      "order": 360,
+      "order": 361,
       "phase": "world",
       "provides": [
         "TM"
@@ -9723,7 +9740,7 @@
     },
     {
       "script": "tm-state.js",
-      "order": 361,
+      "order": 362,
       "phase": "world",
       "provides": [
         "TM"
@@ -9740,7 +9757,7 @@
     },
     {
       "script": "tm-diff.js",
-      "order": 362,
+      "order": 363,
       "phase": "world",
       "provides": [
         "TM"
@@ -9757,7 +9774,7 @@
     },
     {
       "script": "tm-hooks-tracker.js",
-      "order": 363,
+      "order": 364,
       "phase": "world",
       "provides": [
         "TM"
@@ -9774,7 +9791,7 @@
     },
     {
       "script": "tm-diagnostics-panel.js",
-      "order": 364,
+      "order": 365,
       "phase": "world",
       "provides": [
         "TM",
@@ -9792,7 +9809,7 @@
     },
     {
       "script": "tm-checklist.js",
-      "order": 365,
+      "order": 366,
       "phase": "world",
       "provides": [
         "TM"
@@ -9809,7 +9826,7 @@
     },
     {
       "script": "tm-onboard-tools.js",
-      "order": 366,
+      "order": 367,
       "phase": "world",
       "provides": [
         "TM"
@@ -9826,7 +9843,7 @@
     },
     {
       "script": "tm-ai-schema.js",
-      "order": 367,
+      "order": 368,
       "phase": "world",
       "provides": [
         "TM_AI_SCHEMA"
@@ -9843,7 +9860,7 @@
     },
     {
       "script": "tm-ai-output-validator.js",
-      "order": 368,
+      "order": 369,
       "phase": "world",
       "provides": [
         "TM"
@@ -9860,7 +9877,7 @@
     },
     {
       "script": "tm-data-access.js",
-      "order": 369,
+      "order": 370,
       "phase": "world",
       "provides": [
         "DA"
@@ -9877,7 +9894,7 @@
     },
     {
       "script": "tm-ai-change-pathutils.js",
-      "order": 370,
+      "order": 371,
       "phase": "world",
       "provides": [
         "TM"
@@ -9894,7 +9911,7 @@
     },
     {
       "script": "tm-ai-change-army.js",
-      "order": 371,
+      "order": 372,
       "phase": "world",
       "provides": [
         "TM"
@@ -9911,7 +9928,7 @@
     },
     {
       "script": "tm-ai-change-narrative.js",
-      "order": 372,
+      "order": 373,
       "phase": "world",
       "provides": [
         "TM"
@@ -9928,7 +9945,7 @@
     },
     {
       "script": "tm-ai-change-applier.js",
-      "order": 373,
+      "order": 374,
       "phase": "world",
       "provides": [
         "AIChangeApplier",
@@ -9960,7 +9977,7 @@
     },
     {
       "script": "tm-ai-change-applier-validators.js",
-      "order": 374,
+      "order": 375,
       "phase": "world",
       "provides": [],
       "consumes": [],
@@ -9975,7 +9992,7 @@
     },
     {
       "script": "tm-ai-change-applier-reconcile.js",
-      "order": 375,
+      "order": 376,
       "phase": "world",
       "provides": [
         "_applyBattleResult",
@@ -10005,7 +10022,7 @@
     },
     {
       "script": "tm-ai-npc-memorials.js",
-      "order": 376,
+      "order": 377,
       "phase": "world",
       "provides": [
         "NpcMemorials",
@@ -10024,7 +10041,7 @@
     },
     {
       "script": "tm-var-drawers.js",
-      "order": 377,
+      "order": 378,
       "phase": "world",
       "provides": [
         "VarDrawersExt",
@@ -10054,7 +10071,7 @@
     },
     {
       "script": "editor-division-deep.js",
-      "order": 378,
+      "order": 379,
       "phase": "world",
       "provides": [
         "_dd_addDisasterRow",
@@ -10075,7 +10092,7 @@
     },
     {
       "script": "editor-office-deep.js",
-      "order": 379,
+      "order": 380,
       "phase": "world",
       "provides": [
         "TM_OfficeDeep"
@@ -10092,7 +10109,7 @@
     },
     {
       "script": "editor-presets.js",
-      "order": 380,
+      "order": 381,
       "phase": "world",
       "provides": [
         "TM_CustomPresets",
@@ -10112,7 +10129,7 @@
     },
     {
       "script": "bundled-scenarios/manifest.js",
-      "order": 381,
+      "order": 382,
       "phase": "world",
       "provides": [],
       "consumes": [],
@@ -10127,7 +10144,7 @@
     },
     {
       "script": "tm-official-scenario-loader.js",
-      "order": 382,
+      "order": 383,
       "phase": "world",
       "provides": [
         "TMOfficialScenarioLoader"
@@ -10144,7 +10161,7 @@
     },
     {
       "script": "tm-test-harness.js",
-      "order": 383,
+      "order": 384,
       "phase": "world",
       "provides": [
         "P",
@@ -10164,7 +10181,7 @@
     },
     {
       "script": "tm-changelog.js",
-      "order": 384,
+      "order": 385,
       "phase": "world",
       "provides": [
         "TM_Changelog"
@@ -10181,7 +10198,7 @@
     },
     {
       "script": "tm-online-client.js",
-      "order": 385,
+      "order": 386,
       "phase": "world",
       "provides": [
         "TM"
@@ -10198,7 +10215,7 @@
     },
     {
       "script": "tm-workshop-covers.js",
-      "order": 386,
+      "order": 387,
       "phase": "world",
       "provides": [
         "TMWorkshopCovers"
@@ -10215,7 +10232,7 @@
     },
     {
       "script": "tm-zip-store.js",
-      "order": 387,
+      "order": 388,
       "phase": "world",
       "provides": [
         "TMZipStore"
@@ -10232,7 +10249,7 @@
     },
     {
       "script": "tm-content-manager.js",
-      "order": 388,
+      "order": 389,
       "phase": "optional",
       "provides": [
         "P",
@@ -10253,7 +10270,7 @@
     },
     {
       "script": "tm-content-manager-community.js",
-      "order": 389,
+      "order": 390,
       "phase": "optional",
       "provides": [
         "TM"
@@ -10270,7 +10287,7 @@
     },
     {
       "script": "preview/img/east-asia-basemap-data.js",
-      "order": 390,
+      "order": 391,
       "phase": "optional",
       "provides": [
         "EAST_ASIA_BASEMAP"
@@ -10287,7 +10304,7 @@
     },
     {
       "script": "phase8-formal-bridge-styles.js",
-      "order": 391,
+      "order": 392,
       "phase": "optional",
       "provides": [
         "TM"
@@ -10304,7 +10321,7 @@
     },
     {
       "script": "phase8-formal-bridge.js",
-      "order": 392,
+      "order": 393,
       "phase": "optional",
       "provides": [
         "TMPhase8FormalBridge",
@@ -10332,7 +10349,7 @@
     },
     {
       "script": "phase8-formal-topbar.js",
-      "order": 393,
+      "order": 394,
       "phase": "optional",
       "provides": [],
       "consumes": [],
@@ -10347,7 +10364,7 @@
     },
     {
       "script": "tm-map-label-geo.js",
-      "order": 394,
+      "order": 395,
       "phase": "optional",
       "provides": [
         "TMMapLabelGeo"
@@ -10364,7 +10381,7 @@
     },
     {
       "script": "tm-map-label-collide.js",
-      "order": 395,
+      "order": 396,
       "phase": "optional",
       "provides": [
         "TMMapLabelCollide"
@@ -10381,7 +10398,7 @@
     },
     {
       "script": "phase8-formal-map.js",
-      "order": 396,
+      "order": 397,
       "phase": "optional",
       "provides": [],
       "consumes": [],
@@ -10396,7 +10413,7 @@
     },
     {
       "script": "phase8-formal-map-dossier.js",
-      "order": 397,
+      "order": 398,
       "phase": "optional",
       "provides": [],
       "consumes": [],
@@ -10411,7 +10428,7 @@
     },
     {
       "script": "phase8-formal-modules.js",
-      "order": 398,
+      "order": 399,
       "phase": "optional",
       "provides": [
         "renderRenwuModule"
@@ -10428,7 +10445,7 @@
     },
     {
       "script": "phase8-formal-drafts.js",
-      "order": 399,
+      "order": 400,
       "phase": "optional",
       "provides": [
         "GM",
@@ -10454,7 +10471,7 @@
     },
     {
       "script": "phase8-formal-drafts-message-panels.js",
-      "order": 400,
+      "order": 401,
       "phase": "optional",
       "provides": [
         "_tmLetterReadGo",
@@ -10472,7 +10489,7 @@
     },
     {
       "script": "phase8-formal-records.js",
-      "order": 401,
+      "order": 402,
       "phase": "optional",
       "provides": [],
       "consumes": [],
@@ -10487,7 +10504,7 @@
     },
     {
       "script": "tm-renwu-tuzhi.js",
-      "order": 402,
+      "order": 403,
       "phase": "optional",
       "provides": [
         "TMZhi",
@@ -10508,7 +10525,7 @@
     },
     {
       "script": "phase8-formal-rightrail.js",
-      "order": 403,
+      "order": 404,
       "phase": "optional",
       "provides": [
         "TM"
@@ -10525,7 +10542,7 @@
     },
     {
       "script": "phase8-formal-rightrail-social.js",
-      "order": 404,
+      "order": 405,
       "phase": "optional",
       "provides": [
         "TM",
@@ -10543,7 +10560,7 @@
     },
     {
       "script": "preview/scenario-editor-sandbox-bridge.js",
-      "order": 405,
+      "order": 406,
       "phase": "optional",
       "provides": [
         "TM_SCENARIO_QUICKTEST"
@@ -10560,7 +10577,7 @@
     },
     {
       "script": "tm-pause-fab.js",
-      "order": 406,
+      "order": 407,
       "phase": "optional",
       "provides": [
         "TM",
@@ -10578,7 +10595,7 @@
     },
     {
       "script": "tm-capacitor-boot.js",
-      "order": 407,
+      "order": 408,
       "phase": "optional",
       "provides": [
         "TM"
@@ -10595,7 +10612,7 @@
     },
     {
       "script": "tm-update-card.js",
-      "order": 408,
+      "order": 409,
       "phase": "optional",
       "provides": [
         "TMUpdateCard"
@@ -10612,7 +10629,7 @@
     },
     {
       "script": "tm-desktop-update.js",
-      "order": 409,
+      "order": 410,
       "phase": "optional",
       "provides": [
         "TMDesktopUpdate"
@@ -10629,7 +10646,7 @@
     },
     {
       "script": "tm-online-update.js",
-      "order": 410,
+      "order": 411,
       "phase": "optional",
       "provides": [
         "TM_OnlineUpdate"
@@ -10646,7 +10663,7 @@
     },
     {
       "script": "tm-touch-gestures.js",
-      "order": 411,
+      "order": 412,
       "phase": "optional",
       "provides": [],
       "consumes": [],
@@ -10661,7 +10678,7 @@
     },
     {
       "script": "tm-pinch-pan.js",
-      "order": 412,
+      "order": 413,
       "phase": "optional",
       "provides": [
         "TM",
@@ -10679,7 +10696,7 @@
     },
     {
       "script": "tm-hover-fulltext.js",
-      "order": 413,
+      "order": 414,
       "phase": "optional",
       "provides": [
         "__tmFulltipInstalled",
@@ -10697,7 +10714,7 @@
     },
     {
       "script": "tm-startup-contract.js",
-      "order": 414,
+      "order": 415,
       "phase": "optional",
       "provides": [
         "TMStartupContract",

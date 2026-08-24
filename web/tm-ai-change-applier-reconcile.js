@@ -28,6 +28,30 @@
     return ch && ch.alive !== false && ch.dead !== true ? ch : null;
   }
 
+  function _tmResolveStableOrUniqueIdentity(list, stableRef, legacyRef) {
+    if (!Array.isArray(list)) return { entity:null, code:'identity-roster-missing' };
+    var stable = String(stableRef == null ? '' : stableRef).trim();
+    var legacy = String(legacyRef == null ? '' : legacyRef).trim();
+    if (stable) {
+      var stableMatches = list.filter(function(entity) {
+        return entity && entity.id != null && String(entity.id).trim() === stable;
+      });
+      if (stableMatches.length === 1) return { entity:stableMatches[0], via:'id' };
+      return { entity:null, code:stableMatches.length > 1 ? 'ambiguous-reference' : 'identity-not-found', ref:stable };
+    }
+    if (!legacy) return { entity:null, code:'missing-required-field', ref:'' };
+    var idMatches = list.filter(function(entity) {
+      return entity && entity.id != null && String(entity.id).trim() === legacy;
+    });
+    if (idMatches.length === 1) return { entity:idMatches[0], via:'id' };
+    if (idMatches.length > 1) return { entity:null, code:'ambiguous-reference', ref:legacy };
+    var nameMatches = list.filter(function(entity) {
+      return entity && entity.name != null && String(entity.name).trim() === legacy;
+    });
+    if (nameMatches.length === 1) return { entity:nameMatches[0], via:'unique-name' };
+    return { entity:null, code:nameMatches.length > 1 ? 'ambiguous-reference' : 'identity-not-found', ref:legacy };
+  }
+
   function normalizeAIWriteBackDeaths(aiOutput, opts) {
     opts = opts || {};
     var G = global.GM;
@@ -531,7 +555,7 @@
       item.name || item.charName || item.character || item.faction || item.target || item.post || '';
   }
 
-  function _tmGateReason(label, reason, item, overrideCode) {
+  function _tmGateReason(label, reason, item, overrideCode, identityFields) {
     var context = _tmPreflightContext || {};
     var payload = {
       label: label || '',
@@ -543,6 +567,7 @@
       retryable: /not-found|ambiguous-reference|missing-required-field|invalid-target/.test(overrideCode || _tmGateCode(label, reason)),
       item: item || null
     };
+    if (Array.isArray(identityFields) && identityFields.length) payload.identityFields=identityFields.slice();
     if (Array.isArray(_tmPreflightCollector)) _tmPreflightCollector.push(payload);
     if (!_tmPreflightSideEffects) return false;
     try { if (typeof global.recordAIDiagnostic === 'function') global.recordAIDiagnostic('write_gate', payload); } catch(_) {}
@@ -835,25 +860,32 @@
     });
 
     keepArray('faction_succession', 'faction_succession', function(sc) {
-      if (!sc || !sc.faction || !sc.newLeader) return _tmGateReason('faction_succession', 'missing faction/newLeader', sc);
-      if (_tmReferencesPendingFaction(aiOutput, sc.faction)) return _tmGateReason('faction_succession', 'faction succession executes before faction_create; defer it to a later turn', sc, 'batch-dependency-order-unsupported');
-      // 继统会在 endturn 主链直接改 leader，必须像死亡一样只接受当前活跃对象的精确 name/id；
-      // 不让模糊名、场景库幽灵人物或已死亡人物穿过后续直写 consumer。
-      var rawFaction = String(sc.faction).trim();
-      var fac = (G.facs || []).find(function(f) {
-        return f && ((f.name != null && String(f.name).trim() === rawFaction) || (f.id != null && String(f.id).trim() === rawFaction));
-      });
-      if (!fac) return _tmGateReason('faction_succession', 'faction not in active roster: ' + sc.faction, sc);
-      var rawLeader = String(sc.newLeader).trim();
-      var leader = (G.chars || []).find(function(c) {
-        return c && ((c.name != null && String(c.name).trim() === rawLeader) || (c.id != null && String(c.id).trim() === rawLeader));
-      });
-      if (!leader) return _tmGateReason('faction_succession', 'newLeader not in active roster: ' + sc.newLeader, sc);
-      if (leader.alive === false || leader.dead === true) return _tmGateReason('faction_succession', 'newLeader is dead: ' + sc.newLeader, sc);
+      var factionRef = sc && (sc.factionId || sc.faction);
+      var leaderRef = sc && (sc.newLeaderId || sc.newLeader);
+      if (!sc || !factionRef || !leaderRef) return _tmGateReason('faction_succession', 'missing factionId/faction or newLeaderId/newLeader', sc,
+        'missing-required-field', ['factionId','faction','newLeaderId','newLeader']);
+      if (_tmReferencesPendingFaction(aiOutput, factionRef)) return _tmGateReason('faction_succession', 'faction succession executes before faction_create; defer it to a later turn', sc, 'batch-dependency-order-unsupported');
+      // 稳定 ID 是权威；旧档只有姓名时仅允许唯一命中一次并立即迁移回 ID。
+      // 显式 *Id 字段绝不降级为姓名匹配，避免同名势力/人物误中数组首项。
+      var facResult = _tmResolveStableOrUniqueIdentity(G.facs || [], sc.factionId, sc.faction);
+      if (!facResult.entity) return _tmGateReason('faction_succession', 'faction identity rejected: ' + factionRef, sc,
+        facResult.code === 'ambiguous-reference' ? 'ambiguous-reference' : 'faction-not-found', ['factionId','faction']);
+      var fac = facResult.entity;
+      if (fac.id == null || !String(fac.id).trim()) return _tmGateReason('faction_succession', 'faction has no stable id: ' + factionRef, sc, 'stable-id-missing', ['factionId','faction']);
+      var leaderResult = _tmResolveStableOrUniqueIdentity(G.chars || [], sc.newLeaderId, sc.newLeader);
+      if (!leaderResult.entity) return _tmGateReason('faction_succession', 'newLeader identity rejected: ' + leaderRef, sc,
+        leaderResult.code === 'ambiguous-reference' ? 'ambiguous-reference' : 'character-not-found', ['newLeaderId','newLeader']);
+      var leader = leaderResult.entity;
+      if (leader.id == null || !String(leader.id).trim()) return _tmGateReason('faction_succession', 'newLeader has no stable id: ' + leaderRef, sc, 'stable-id-missing', ['newLeaderId','newLeader']);
+      if (leader.alive === false || leader.dead === true) return _tmGateReason('faction_succession', 'newLeader is dead: ' + leaderRef, sc);
       // sc 是 AI 的继统事件载荷，不是人物/军队成员关系对象；这里只归一化引用，
       // 不触碰任何运行态 entity.faction（后者必须走 FactionMembership API）。
-      Object.assign(sc, { faction: fac.name || rawFaction });
-      sc.newLeader = leader.name || rawLeader;
+      Object.assign(sc, {
+        factionId:String(fac.id),
+        faction:String(fac.name || fac.id),
+        newLeaderId:String(leader.id),
+        newLeader:String(leader.name || leader.id)
+      });
       return true;
     });
 

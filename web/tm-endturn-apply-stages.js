@@ -132,6 +132,7 @@
     if (/^(faction_updates|faction_dissolve|faction_succession|battleResult)$/.test(field)) {
       return [
         'factionId', 'faction', 'id', 'name',
+        'newLeaderId', 'newLeader',
         'winnerFactionId', 'winnerFaction', 'winner',
         'loserFactionId', 'loserFaction', 'loser',
         'targetFactionId', 'targetFaction', 'newFactionId', 'newFaction', 'toFactionId', 'toFaction'
@@ -960,9 +961,16 @@ inst._imprisonedTurn = GM.turn||0;
       // 前置 preflight 已将 faction/newLeader 收紧为当前活跃势力与存活人物的精确对象。
       if (p1 && Array.isArray(p1.faction_succession) && global.TM && global.TM.AIChange && global.TM.AIChange.Narrative && typeof global.TM.AIChange.Narrative.setFactionLeader === 'function') {
         p1.faction_succession.forEach(function(sc) {
-          if (!sc || !sc.faction || !sc.newLeader) return;
-          var fac = (GM.facs || []).find(function(f) { return f && f.name === sc.faction; });
-          if (fac) global.TM.AIChange.Narrative.setFactionLeader(fac, sc.newLeader, GM, '势力继统');
+          if (!sc || !(sc.factionId || sc.faction) || !(sc.newLeaderId || sc.newLeader)) return;
+          var factionRef=String(sc.factionId || sc.faction).trim();
+          var fac=(GM.facs || []).find(function(f) {
+            return f && f.id != null && String(f.id).trim()===factionRef;
+          });
+          if (!fac && !sc.factionId) {
+            var matches=(GM.facs || []).filter(function(f) { return f && f.name===sc.faction; });
+            if (matches.length===1) fac=matches[0];
+          }
+          if (fac) global.TM.AIChange.Narrative.setFactionLeader(fac, sc.newLeaderId || sc.newLeader, GM, '势力继统');
         });
       }
       // 1.4: 幻觉防火墙——后验校验（检查AI返回的人名/地名是否在白名单内）

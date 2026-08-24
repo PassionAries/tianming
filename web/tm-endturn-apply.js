@@ -68,14 +68,15 @@
     try { if (typeof global.recordAIDiagnostic === 'function') global.recordAIDiagnostic('write_gate', { label:kind, ref:ref, reason:reason }); } catch (_) {}
     return false;
   }
-  function _tmExactChar(ref) {
-    var G = global.GM;
-    var raw = String(ref == null ? '' : ref).trim();
-    if (!raw || !G || !Array.isArray(G.chars)) return null;
-    return G.chars.find(function(ch) {
-      return ch && ((ch.name != null && String(ch.name).trim() === raw) || (ch.id != null && String(ch.id).trim() === raw));
-    }) || null;
+  function _tmExactEntity(rows, ref) {
+    var raw = String(ref == null ? '' : ref).trim(); if (!raw || !Array.isArray(rows)) return null;
+    var matches=rows.filter(function(entity) { return entity && entity.id != null && String(entity.id).trim()===raw; });
+    if (matches.length) return matches.length===1 ? matches[0] : null;
+    matches=rows.filter(function(entity) { return entity && entity.name != null && String(entity.name).trim()===raw; });
+    return matches.length===1 ? matches[0] : null;
   }
+  function _tmExactChar(ref) { var G=global.GM; return G ? _tmExactEntity(G.chars,ref) : null; }
+  function _tmExactFaction(ref) { var G=global.GM; return G ? _tmExactEntity(G.facs,ref) : null; }
   function _tmExactLivingChar(ref) {
     var ch = _tmExactChar(ref);
     return ch && ch.alive !== false && ch.dead !== true ? ch : null;
@@ -99,15 +100,15 @@
     if (!living) return _tmRecordSemanticFailure(kind || 'faction_leader', ref, 'leader must be an existing living character');
     var sink = global.TM && global.TM.AIChange && global.TM.AIChange.Narrative && global.TM.AIChange.Narrative.setFactionLeader;
     if (typeof sink !== 'function') return _tmRecordSemanticFailure(kind || 'faction_leader', ref, 'faction leader sink unavailable');
-    sink(fac, living.name, global.GM, reason || '势力首领变更');
-    return fac && fac.leader === living.name ? true : _tmRecordSemanticFailure(kind || 'faction_leader', ref, 'faction leader sink rejected write');
+    sink(fac, living.id || living.name, global.GM, reason || '势力首领变更');
+    return fac && fac.leader === living.name && (!living.id || String(fac.leaderId || '')===String(living.id)) ? true : _tmRecordSemanticFailure(kind || 'faction_leader', ref, 'faction leader sink rejected write');
   }
   function _tmSetPartyLeaderCanonical(party, ref, reason, kind) {
     var living = _tmExactLivingChar(ref);
     if (!living) return _tmRecordSemanticFailure(kind || 'party_leader', ref, 'leader must be an existing living character');
     var sink = global.TM && global.TM.AIChange && global.TM.AIChange.Narrative && global.TM.AIChange.Narrative.setPartyLeader;
     if (typeof sink !== 'function') return _tmRecordSemanticFailure(kind || 'party_leader', ref, 'party leader sink unavailable');
-    sink(party, living.name, global.GM, reason || '党派首领变更');
+    sink(party, living.id || living.name, global.GM, reason || '党派首领变更');
     return party && party.leader === living.name && party.head === living.name ? true : _tmRecordSemanticFailure(kind || 'party_leader', ref, 'party leader sink rejected write');
   }
   function _tmApplyLoyaltyDelta(ch, delta, reason, source, opts) {
@@ -1664,18 +1665,18 @@
         // ── 势力继承事件 ──
         if (p1.faction_succession && Array.isArray(p1.faction_succession) && GM.facs) {
           p1.faction_succession.forEach(function(sc) {
-            if (!sc || !sc.faction || !sc.newLeader) return;
-            var fObj = GM.facs.find(function(f){return f.name === sc.faction;});
+            if (!sc || !(sc.factionId || sc.faction) || !(sc.newLeaderId || sc.newLeader)) return;
+            var fObj = _tmExactFaction(sc.factionId || sc.faction);
             if (!fObj) return;
             var oldLeader = fObj.leader;
-            if (!_tmSetFactionLeaderCanonical(fObj, sc.newLeader, sc.narrative || '势力继统', 'faction_succession.newLeader')) return;
+            if (!_tmSetFactionLeaderCanonical(fObj, sc.newLeaderId || sc.newLeader, sc.narrative || '势力继统', 'faction_succession.newLeader')) return;
             if (!fObj.succession) fObj.succession = { rule: 'primogeniture', designatedHeir: '', stability: 60 };
             fObj.succession.stability = Math.max(0, Math.min(100, (fObj.succession.stability||60) + (parseInt(sc.stability_delta)||0)));
             if (!Array.isArray(fObj.historicalEvents)) fObj.historicalEvents = [];
-            fObj.historicalEvents.push({ turn: GM.turn, event: sc.disputeType || '继承', impact: oldLeader + '→' + sc.newLeader });
-            addEB('\u7EE7\u627F', '\u3010' + sc.faction + '\u3011' + (oldLeader||'?') + '\u2192' + sc.newLeader + '(' + ({forced_abdication:'逼宫禅位',contested_succession:'争立',usurpation:'篡位',coup:'政变夺位',regency:'摄政',peaceful:'平稳承袭'}[sc.disputeType]||sc.disputeType||'\u6B63\u5E38\u7EE7\u627F') + ')' + (sc.narrative ? '\uFF1A' + sc.narrative.slice(0,80) : ''));
+            fObj.historicalEvents.push({ turn: GM.turn, event: sc.disputeType || '继承', impact: oldLeader + '→' + fObj.leader });
+            addEB('\u7EE7\u627F', '\u3010' + (fObj.name || sc.faction) + '\u3011' + (oldLeader||'?') + '\u2192' + fObj.leader + '(' + ({forced_abdication:'逼宫禅位',contested_succession:'争立',usurpation:'篡位',coup:'政变夺位',regency:'摄政',peaceful:'平稳承袭'}[sc.disputeType]||sc.disputeType||'\u6B63\u5E38\u7EE7\u627F') + ')' + (sc.narrative ? '\uFF1A' + sc.narrative.slice(0,80) : ''));
             if (GM.qijuHistory) {
-              if (typeof TM !== 'undefined' && TM.Qiju) TM.Qiju.recordEntry({ turn: GM.turn, date: typeof getTSText==='function'?getTSText(GM.turn):'', content: '\u3010\u7EE7\u627F\u4E8B\u3011' + sc.faction + '\uFF1A' + sc.narrative, category: '\u52BF\u529B' });
+              if (typeof TM !== 'undefined' && TM.Qiju) TM.Qiju.recordEntry({ turn: GM.turn, date: typeof getTSText==='function'?getTSText(GM.turn):'', content: '\u3010\u7EE7\u627F\u4E8B\u3011' + (fObj.name || sc.faction) + '\uFF1A' + sc.narrative, category: '\u52BF\u529B' });
             }
           });
         }

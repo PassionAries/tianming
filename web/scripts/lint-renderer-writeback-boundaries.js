@@ -199,6 +199,9 @@ const rootDir = path.resolve(WEB, '..');
 const mainSource = fs.readFileSync(path.join(rootDir, 'main-impl.js'), 'utf8');
 const preloadSource = fs.readFileSync(path.join(rootDir, 'preload-impl.js'), 'utf8');
 const saveLifecycleSource = read('tm-save-lifecycle.js');
+const saveCloseFlushSource = read('tm-save-close-flush.js');
+const reconcileSource = read('tm-ai-change-applier-reconcile.js');
+const endturnApplySource = read('tm-endturn-apply.js');
 check(/ipcMain\.handle\('app-quit',\s*\(\)\s*=>\s*requestApplicationQuit\(/.test(mainSource),
   'renderer quit requests must pass through the background-save close handshake');
 check(/mainWindow\.on\('close',\s*event\s*=>[\s\S]*?event\.preventDefault\(\)[\s\S]*?requestApplicationQuit\('window-close'\)/.test(mainSource),
@@ -208,9 +211,22 @@ check(/app-close-flush-request/.test(mainSource) && /app-close-flush-complete/.t
 check(/onAppCloseFlushRequest[\s\S]*?_subscribeAppCloseFlush/.test(preloadSource)
   && /app-close-flush-complete/.test(preloadSource),
   'preload must expose only the bounded close-flush bridge and acknowledgement');
-check(/_tmInstallDesktopCloseFlushBridge\(\)/.test(saveLifecycleSource)
-  && /_tmFlushBackgroundAutosavesForClose/.test(saveLifecycleSource),
+check(/_tmInstallDesktopCloseFlushBridge/.test(saveCloseFlushSource)
+  && /_tmFlushBackgroundAutosavesForClose/.test(saveCloseFlushSource),
   'desktop save lifecycle must install the close-time background queue drain');
+check(/ipcMain\.handle\('hot-update-reload',[\s\S]{0,800}requestApplicationRelaunch\('hot-update-reload'\)/.test(mainSource)
+  && !/app\.exit\s*\(/.test(mainSource),
+  'hot-update relaunch must use the save-aware lifecycle coordinator and never bypass it with app.exit');
+check(/ipcMain\.handle\('update-install',[\s\S]{0,500}requestApplicationUpdateInstall\('installer-update'\)/.test(mainSource),
+  'installer update must use the same renderer save handshake before quitAndInstall');
+check(/_autoSaveInFlightPromise/.test(saveLifecycleSource)
+  && /flushForClose[\s\S]{0,1200}awaitDesktopAutoSave\('application-close'\)/.test(saveCloseFlushSource),
+  'close acknowledgement must await the tracked desktop autosave mirror after canonical saves drain');
+check(/factionId:String\(fac\.id\)/.test(reconcileSource)
+  && /newLeaderId:String\(leader\.id\)/.test(reconcileSource)
+  && /_tmExactFaction\(sc\.factionId \|\| sc\.faction\)/.test(endturnApplySource)
+  && /sc\.newLeaderId \|\| sc\.newLeader/.test(endturnApplySource),
+  'faction succession must preserve stable faction and leader identities through the production consumer');
 
 if (failures.length) {
   console.error('[lint-renderer-writeback-boundaries] FAIL ' + failures.length + '/' + checks);

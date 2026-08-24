@@ -21,12 +21,16 @@ const verifyAll = read(path.join('scripts', 'verify-all.js'));
 
 const electronScript = index.indexOf('tm-electron.js');
 const saveLifecycleScript = index.indexOf('tm-save-lifecycle.js');
+const closeFlushScript = index.indexOf('tm-save-close-flush.js');
+const officeEditorScript = index.indexOf('tm-office-editor.js');
 assert(electronScript !== -1, 'index.html must load tm-electron.js');
 assert(saveLifecycleScript !== -1, 'index.html must load tm-save-lifecycle.js');
 assert(
   electronScript < saveLifecycleScript,
   'tm-save-lifecycle.js must load after tm-electron.js so it owns final save/load globals'
 );
+assert(closeFlushScript > saveLifecycleScript && closeFlushScript < officeEditorScript,
+  'tm-save-close-flush.js must load immediately after its save-lifecycle state provider');
 
 [
   /\bdoSaveGame\s*=\s*async\s+function\s*\(/,

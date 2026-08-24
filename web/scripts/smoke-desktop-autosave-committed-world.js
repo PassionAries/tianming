@@ -6,6 +6,7 @@ const path = require('path');
 const vm = require('vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'tm-save-lifecycle.js'), 'utf8');
+const closeSource = fs.readFileSync(path.join(__dirname, '..', 'tm-save-close-flush.js'), 'utf8');
 const coreSource = fs.readFileSync(path.join(__dirname, '..', 'tm-endturn-core.js'), 'utf8');
 const start = source.indexOf('var _autoSaveInFlight=false;');
 const end = source.indexOf('if(_tmHasNativeFs()){', start);
@@ -132,6 +133,7 @@ async function main() {
   };
   vm.createContext(context);
   vm.runInContext(source.slice(start, end), context, { filename: 'tm-save-lifecycle-autosave-slice.js' });
+  vm.runInContext(closeSource, context, { filename: 'tm-save-close-flush.js' });
   vm.runInContext(coreSource.slice(coreStart, coreEnd), context, { filename: 'tm-endturn-core-transaction-slice.js' });
 
   check('桌面存档生命周期安装关闭前 flush 回调', typeof closeFlushCallback === 'function');
@@ -292,16 +294,34 @@ async function main() {
 
   context.GM._aiMemorySummary = '退出前刚完成的后台摘要';
   const beforeCloseFlush = backgroundTransactions.length;
+  const beforeCloseMirrorWrites = writes.length;
+  delayedWriteResolve = null;
+  delayNextWrite = true;
   await context.requestBackgroundAutosave({
     reason: 'summary-complete-before-exit',
     expectedWorldLease: retryLease,
     expectedTurn: retryLease.turn
   });
-  const closeFlush = await closeFlushCallback({ reason: 'renderer-quit' });
+  let closeFlushSettled = false;
+  const closeFlushPromise = Promise.resolve(closeFlushCallback({ reason: 'renderer-quit' })).then((result) => {
+    closeFlushSettled = true;
+    return result;
+  });
+  for (let spin = 0; !delayedWriteResolve && spin < 20; spin++) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  check('关闭握手会等待桌面自动档 IPC 而非仅等待 canonical 双槽', typeof delayedWriteResolve === 'function' && closeFlushSettled === false);
+  delayedWriteResolve();
+  const closeFlush = await closeFlushPromise;
   check('立即退出握手会实际 drain 后台保存而非只提示', closeFlush.ok === true
     && backgroundTransactions.length === beforeCloseFlush + 1
     && backgroundTransactions[backgroundTransactions.length - 1].states[0].GM._aiMemorySummary === '退出前刚完成的后台摘要');
-  check('关闭握手成功后不存在待保存或在途任务', !context._backgroundSavePending && !context._backgroundSaveInFlight);
+  check('关闭握手把最新后台摘要同步到桌面恢复镜像', writes.length === beforeCloseMirrorWrites + 1
+    && writes[writes.length - 1].gameState._aiMemorySummary === '退出前刚完成的后台摘要');
+  check('关闭握手成功后 canonical 与桌面镜像都不存在待保存或在途任务',
+    !context._backgroundSavePending && !context._backgroundSaveInFlight
+    && !context._autoSaveDeferred && !context._autoSaveFlushTimer
+    && !context._autoSaveInFlight && !context._autoSaveInFlightPromise);
 
   context.GM.busy = true;
   context.GM._endTurnCommitPending = true;

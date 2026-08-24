@@ -10,6 +10,7 @@ const { pathToFileURL } = require('url');
 const ROOT = path.resolve(__dirname, '..', '..');
 const eventHandlers = new Map();
 let assertions = 0;
+const lifecycle = { quit: 0, relaunch: 0, exit: 0, updateInstall: 0 };
 
 function check(value, message) {
   assertions += 1;
@@ -26,9 +27,9 @@ const electronStub = {
     whenReady: () => new Promise(() => {}),
     on() {},
     once() {},
-    quit() {},
-    relaunch() {},
-    exit() {}
+    quit() { lifecycle.quit += 1; },
+    relaunch() { lifecycle.relaunch += 1; },
+    exit() { lifecycle.exit += 1; }
   },
   BrowserWindow: function BrowserWindow() {},
   ipcMain: {
@@ -48,7 +49,7 @@ const originalLoad = Module._load;
 Module._load = function (request) {
   if (request === 'electron') return electronStub;
   if (request === 'electron-updater') {
-    return { autoUpdater: { on() {}, setFeedURL() {}, checkForUpdates: async () => null, downloadUpdate: async () => [], quitAndInstall() {} } };
+    return { autoUpdater: { on() {}, setFeedURL() {}, checkForUpdates: async () => null, downloadUpdate: async () => [], quitAndInstall() { lifecycle.updateInstall += 1; } } };
   }
   return originalLoad.apply(this, arguments);
 };
@@ -114,6 +115,33 @@ async function main() {
 
   const unavailable = await T.requestRendererCloseFlush(null, 'window-close', 10);
   check(unavailable.ok === true && unavailable.skipped === true, 'already unavailable renderer has no pending queue to flush');
+
+  check(typeof T.requestApplicationRelaunch === 'function' && typeof T.requestApplicationUpdateInstall === 'function',
+    'test exports expose the production relaunch and installer lifecycle coordinators');
+  const blockedInstall = makeWindow();
+  const blockedInstallPromise = T.requestApplicationUpdateInstall('installer-update-test', blockedInstall.win);
+  check(lifecycle.updateInstall === 0, 'installer update cannot quit before renderer save acknowledgement');
+  acknowledge({ sender: blockedInstall.webContents, senderFrame: blockedInstall.frame }, {
+    requestId: blockedInstall.sent[0].payload.requestId,
+    ok: false,
+    code: 'desktop-autosave-flush-failed',
+    reason: 'injected mirror failure'
+  });
+  const blockedInstallResult = await blockedInstallPromise;
+  check(blockedInstallResult.success === false && lifecycle.updateInstall === 0, 'failed save handshake cancels installer quitAndInstall');
+
+  const relaunch = makeWindow();
+  const relaunchPromise = T.requestApplicationRelaunch('hot-update-reload-test', relaunch.win);
+  check(lifecycle.relaunch === 0 && lifecycle.exit === 0 && lifecycle.quit === 0, 'hot reload cannot relaunch or force-exit before save acknowledgement');
+  acknowledge({ sender: relaunch.webContents, senderFrame: relaunch.frame }, {
+    requestId: relaunch.sent[0].payload.requestId,
+    ok: true,
+    reason: 'canonical-and-desktop-mirror-flushed'
+  });
+  const relaunchResult = await relaunchPromise;
+  check(relaunchResult.success === true && lifecycle.relaunch === 1 && lifecycle.exit === 0, 'successful hot reload schedules relaunch without app.exit bypass');
+  await new Promise((resolve) => setTimeout(resolve, 130));
+  check(lifecycle.quit === 1 && lifecycle.exit === 0, 'hot reload exits through normal app.quit lifecycle after relaunch scheduling');
 
   console.log('[smoke-app-close-background-flush] PASS assertions=' + assertions);
 }

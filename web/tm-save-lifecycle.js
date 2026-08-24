@@ -2231,6 +2231,7 @@ if(_tmHasNativeFs()){
 // C (2026-05-23)·叠在 A-1 之上·5s 内有用户输入则 defer 整个 60s tick·避开打字 / 点击窗口
 //   兜底·距上次成功保存超 3 分钟·强制保存 (避免连续打字 5 分钟没存档)
 var _autoSaveInFlight=false;
+var _autoSaveInFlightPromise=null;
 var _autoSaveSkipCount=0;
 var _autoSaveLiteTick=0;
 var _autoSaveLastInputMs=0;   // C·最后一次用户输入时间
@@ -2493,47 +2494,6 @@ async function _tmAwaitBackgroundAutosaves(){
   return result;
 }
 
-async function _tmFlushBackgroundAutosavesForClose(){
-  if (isWorldTransactionActive()) {
-    return {ok:false,code:'world-transaction-active',reason:'回合、读档或回滚事务仍在进行'};
-  }
-  try {
-    var result=await _tmAwaitBackgroundAutosaves();
-    if (_backgroundSavePending||_backgroundSaveInFlight) {
-      return {ok:false,code:'background-save-still-pending',reason:'后台保存队列尚未清空'};
-    }
-    if (result&&result.error) {
-      return {
-        ok:false,
-        code:'background-save-flush-failed',
-        reason:result.error&&result.error.message||String(result.error)
-      };
-    }
-    return {ok:true,reason:result&&result.reason||'background-saves-flushed'};
-  } catch(error) {
-    try {
-      if (window.TM&&TM.errors&&typeof TM.errors.captureSilent==='function') {
-        TM.errors.captureSilent(error,'background-save-close-flush');
-      }
-    } catch(reportError) {
-      console.warn('[background-save] 关闭握手错误记录失败:',reportError&&reportError.message||reportError);
-    }
-    return {ok:false,code:'background-save-flush-exception',reason:error&&error.message||String(error)};
-  }
-}
-
-function _tmInstallDesktopCloseFlushBridge(){
-  if (!_tmHasNativeFs()||!window.tianming
-      ||typeof window.tianming.onAppCloseFlushRequest!=='function') return false;
-  if (typeof window._tmCloseFlushBridgeDisposer==='function') return true;
-  var disposer=window.tianming.onAppCloseFlushRequest(function(){
-    return _tmFlushBackgroundAutosavesForClose();
-  });
-  if (typeof disposer!=='function') throw new Error('desktop close flush bridge did not return a disposer');
-  window._tmCloseFlushBridgeDisposer=disposer;
-  return true;
-}
-
 function _tmNewDesktopAutoSaveSessionToken(){
   try {
     if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
@@ -2789,7 +2749,7 @@ async function _tmRunDesktopAutoSaveTick(options){
     _autoSaveDeferred = true;
     return { ok: false, deferred: true, reason: 'world-transaction-active' };
   }
-  if (_autoSaveInFlight) {
+  if (_autoSaveInFlightPromise||_autoSaveInFlight) {
     _autoSaveSkipCount++;
     if (_autoSaveSkipCount === 5) console.warn('[autoSave] 连续 5 次被跳·上一次 IPC 尚未完成');
     return { ok: false, skipped: true, reason: 'in-flight' };
@@ -2819,40 +2779,45 @@ async function _tmRunDesktopAutoSaveTick(options){
   var saveData = _tmCommittedSnapshotProjectEnvelope();
   if (!saveData) return { ok: false, skipped: true, reason: 'snapshot-unavailable' };
   _autoSaveInFlight = true;
-  try {
-    _autoSaveSkipCount = 0;
-    var result = await window.tianming.autoSave(saveData);
-    if (!_tmDesktopAutoSaveResultOk(result)) throw _tmDesktopAutoSaveFailure(result);
-    if (lastCommittedSnapshot !== sourceSnapshot || _lastCommittedSnapshotIdentity !== sourceIdentity
-        || !_tmCommittedSnapshotMatchesLive()) {
-      console.warn('[autoSave] 已提交快照在 IPC 期间推进或跨档·本次落盘有效但不推进当前局闲置基线');
-      return { ok: true, stale: true, turn: Number(saveData._saveMeta.turn) };
-    }
-    _autoSaveLastDoneMs = Date.now();
-    _autoSaveLastSavedTurn = Number(saveData._saveMeta.turn);
-    _autoSaveLiteTick++;
-    if (_autoSaveLiteTick >= 5) {
-      _autoSaveLiteTick = 0;
-      try {
-        var committedP = lastCommittedSnapshot.P || {};
-        localStorage.removeItem('tm_P');
-        localStorage.setItem('tm_P_lite', JSON.stringify(_tmStripAiKeyView({
-          scenarios: (committedP.scenarios || []).map(function(s){ return {id:s.id,name:s.name,era:s.era,role:s.role}; }),
-          ai: committedP.ai,
-          conf: _tmLiteSafeConf(committedP.conf),
-          _hasFullData: true
-        })));
-      } catch (liteError) {
-        _tmReportDesktopAutoSaveBoundaryError(liteError, 'desktop autosave lite');
+  var operation=Promise.resolve().then(async function(){
+    try {
+      _autoSaveSkipCount = 0;
+      var result = await window.tianming.autoSave(saveData);
+      if (!_tmDesktopAutoSaveResultOk(result)) throw _tmDesktopAutoSaveFailure(result);
+      if (lastCommittedSnapshot !== sourceSnapshot || _lastCommittedSnapshotIdentity !== sourceIdentity
+          || !_tmCommittedSnapshotMatchesLive()) {
+        console.warn('[autoSave] 已提交快照在 IPC 期间推进或跨档·本次落盘有效但不推进当前局闲置基线');
+        return { ok: true, stale: true, turn: Number(saveData._saveMeta.turn) };
       }
+      _autoSaveLastDoneMs = Date.now();
+      _autoSaveLastSavedTurn = Number(saveData._saveMeta.turn);
+      _autoSaveLiteTick++;
+      if (_autoSaveLiteTick >= 5) {
+        _autoSaveLiteTick = 0;
+        try {
+          var committedP = lastCommittedSnapshot.P || {};
+          localStorage.removeItem('tm_P');
+          localStorage.setItem('tm_P_lite', JSON.stringify(_tmStripAiKeyView({
+            scenarios: (committedP.scenarios || []).map(function(s){ return {id:s.id,name:s.name,era:s.era,role:s.role}; }),
+            ai: committedP.ai,
+            conf: _tmLiteSafeConf(committedP.conf),
+            _hasFullData: true
+          })));
+        } catch (liteError) {
+          _tmReportDesktopAutoSaveBoundaryError(liteError, 'desktop autosave lite');
+        }
+      }
+      return { ok: true, turn: _autoSaveLastSavedTurn, transactionId: lastCommittedTransactionId };
+    } catch (error) {
+      console.warn('[autoSave] 桌面自动存档失败:', error && (error.message || error));
+      return { ok: false, error: error };
+    } finally {
+      _autoSaveInFlight = false;
+      if (_autoSaveInFlightPromise===operation) _autoSaveInFlightPromise=null;
     }
-    return { ok: true, turn: _autoSaveLastSavedTurn, transactionId: lastCommittedTransactionId };
-  } catch (error) {
-    console.warn('[autoSave] 桌面自动存档失败:', error && (error.message || error));
-    return { ok: false, error: error };
-  } finally {
-    _autoSaveInFlight = false;
-  }
+  });
+  _autoSaveInFlightPromise=operation;
+  return operation;
 }
 
 function _tmFlushDeferredDesktopAutoSave(reason, options){
@@ -2903,13 +2868,6 @@ if (typeof window !== 'undefined') {
   window.requestBackgroundAutosave = requestBackgroundAutosave;
   window._tmDrainBackgroundAutosaves = _tmDrainBackgroundAutosaves;
   window._tmAwaitBackgroundAutosaves = _tmAwaitBackgroundAutosaves;
-  window._tmFlushBackgroundAutosavesForClose = _tmFlushBackgroundAutosavesForClose;
-  window._tmInstallDesktopCloseFlushBridge = _tmInstallDesktopCloseFlushBridge;
-  try {
-    _tmInstallDesktopCloseFlushBridge();
-  } catch(error) {
-    console.warn('[background-save] 桌面关闭握手安装失败:',error&&error.message||error);
-  }
 }
 if(_tmHasNativeFs()){
   // 每60秒自动存档（仅完整运行局；纯 P 由 project IDB + lite 保存） (timer-leak-ok·文件顶层一次性·桌面端生命周期)

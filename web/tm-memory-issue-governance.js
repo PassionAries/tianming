@@ -6,6 +6,11 @@
 
   var ns = root.TM.MemoryIssueGovernance = root.TM.MemoryIssueGovernance || {};
 
+  function bumpEdgeRevision(GM) {
+    var retrieval = root.TM && root.TM.MemoryRetrieval;
+    if (retrieval && typeof retrieval.bumpRevision === 'function') retrieval.bumpRevision(GM, 'edges');
+  }
+
   function arr(value) {
     return Array.isArray(value) ? value : [];
   }
@@ -110,6 +115,7 @@
       if (old && edgeKey(old) === key) return old;
     }
     GM._memEdges.push(candidate);
+    bumpEdgeRevision(GM);
     return candidate;
   }
 
@@ -137,6 +143,7 @@
       if (old && edgeKey(old) === key) return old;
     }
     GM._memEdges.push(candidate);
+    bumpEdgeRevision(GM);
     return candidate;
   }
 

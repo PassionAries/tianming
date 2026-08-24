@@ -1,0 +1,784 @@
+{
+  "version": 1,
+  "overrides": {
+    "_cy_pickMode": {
+      "owner": "tm-chaoyi.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-chaoyi.js",
+        "tm-tinyi-v3.js"
+      ]
+    },
+    "_eraAdd": {
+      "owner": "tm-ai-infra.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-ai-infra.js",
+        "tm-launch.js"
+      ]
+    },
+    "_eraDel": {
+      "owner": "tm-ai-infra.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-ai-infra.js",
+        "tm-launch.js"
+      ]
+    },
+    "_eraUpd": {
+      "owner": "tm-ai-infra.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-ai-infra.js",
+        "tm-launch.js"
+      ]
+    },
+    "_getDaysPerTurn": {
+      "owner": "tm-utils.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-utils.js",
+        "tm-edict-lifecycle.js"
+      ]
+    },
+    "_kjpCurrentCeduiArchetype": {
+      "owner": "tm-keju-paradigm-panel-render.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-keju-paradigm-panel-render.js",
+        "tm-keju-paradigm-panel.js"
+      ]
+    },
+    "_kjpCurrentCeduiDiff": {
+      "owner": "tm-keju-paradigm-panel-render.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-keju-paradigm-panel-render.js",
+        "tm-keju-paradigm-panel.js"
+      ]
+    },
+    "_kjpCurrentCeduiDigest": {
+      "owner": "tm-keju-paradigm-panel-render.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-keju-paradigm-panel-render.js",
+        "tm-keju-paradigm-panel.js"
+      ]
+    },
+    "_kjpCurrentCeduiDraft": {
+      "owner": "tm-keju-paradigm-panel-render.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-keju-paradigm-panel-render.js",
+        "tm-keju-paradigm-panel.js"
+      ]
+    },
+    "_kjpHSchoolWenduiContext": {
+      "owner": "tm-keju-event-hooks.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-keju-event-hooks.js",
+        "tm-keju-school-network.js"
+      ]
+    },
+    "_launchPostTurnJobs": {
+      "owner": "tm-post-turn-jobs.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-post-turn-jobs.js",
+        "tm-houguong.js"
+      ]
+    },
+    "_loadingMaxPct": {
+      "owner": "tm-utils.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-utils.js",
+        "tm-endturn-progress.js"
+      ]
+    },
+    "_setAiSubcallConcurrency": {
+      "owner": "tm-player-settings.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-player-settings.js",
+        "tm-patches.js"
+      ]
+    },
+    "_syncFiscalScalars": {
+      "owner": "tm-ai-change-applier.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-ai-change-applier.js",
+        "tm-ai-change-applier-reconcile.js"
+      ]
+    },
+    "_tmActivePreEndturnSnapshotId": {
+      "owner": "tm-endturn-core.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-endturn-core.js",
+        "tm-endturn-render.js"
+      ]
+    },
+    "_tmApplyBodyFont": {
+      "owner": "tm-theme-font.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-theme-font.js",
+        "tm-shell-extras.js"
+      ]
+    },
+    "_tmApplySize": {
+      "owner": "tm-theme-font.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-theme-font.js",
+        "tm-shell-extras.js"
+      ]
+    },
+    "_tmApplyTheme": {
+      "owner": "tm-theme-font.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-theme-font.js",
+        "tm-shell-extras.js"
+      ]
+    },
+    "_tmApplyTitleFont": {
+      "owner": "tm-theme-font.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-theme-font.js",
+        "tm-shell-extras.js"
+      ]
+    },
+    "_tmLoadGen": {
+      "owner": "tm-save-manager.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-save-manager.js",
+        "tm-endturn-core.js",
+        "tm-save-lifecycle.js"
+      ]
+    },
+    "_tmWorldRollbackActive": {
+      "owner": "tm-endturn-core.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-endturn-core.js",
+        "tm-save-lifecycle.js"
+      ]
+    },
+    "_togglePConf": {
+      "owner": "tm-player-settings.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-player-settings.js",
+        "tm-patches.js"
+      ]
+    },
+    "_ty2_decide": {
+      "owner": "tm-chaoyi-tinyi.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-chaoyi-tinyi.js",
+        "tm-tinyi-v3.js"
+      ]
+    },
+    "_ty3_applyAIReissueTopics": {
+      "owner": "tm-tinyi-v3.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_buildAccusationMemorialStructured": {
+      "owner": "tm-tinyi-v3.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_collectOfficeHolderNames": {
+      "owner": "tm-tinyi-v3-edict-personnel.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3-edict-personnel.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_continueDebate": {
+      "owner": "tm-tinyi-v3.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3.js",
+        "tm-tinyi-v3-edict-personnel.js"
+      ]
+    },
+    "_ty3_dgPick": {
+      "owner": "tm-tinyi-v3.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3.js",
+        "tm-tinyi-v3-edict-personnel.js"
+      ]
+    },
+    "_ty3_enqueueTinyiFollowUp": {
+      "owner": "tm-tinyi-v3-edict-personnel.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3-edict-personnel.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_getTinyiFollowUpDelay": {
+      "owner": "tm-tinyi-v3-edict-personnel.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3-edict-personnel.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_isControversial": {
+      "owner": "tm-tinyi-v3.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3.js",
+        "tm-tinyi-v3-edict-personnel.js"
+      ]
+    },
+    "_ty3_isHaremTitle": {
+      "owner": "tm-tinyi-v3.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3.js",
+        "tm-tinyi-v3-edict-personnel.js"
+      ]
+    },
+    "_ty3_phase1_cancel": {
+      "owner": "tm-tinyi-v3.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3.js",
+        "tm-tinyi-v3-edict-personnel.js"
+      ]
+    },
+    "_ty3_phase1_openSeating": {
+      "owner": "tm-tinyi-v3.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3.js",
+        "tm-tinyi-v3-edict-personnel.js"
+      ]
+    },
+    "_ty3_phase1_startDebate": {
+      "owner": "tm-tinyi-v3.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3.js",
+        "tm-tinyi-v3-edict-personnel.js"
+      ]
+    },
+    "_ty3_phase2_run": {
+      "owner": "tm-tinyi-v3.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3.js",
+        "tm-tinyi-v3-edict-personnel.js"
+      ]
+    },
+    "_ty3_phase3_buildCandidates": {
+      "owner": "tm-tinyi-v3-edict-personnel.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3-edict-personnel.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_phase3_doPublicVote": {
+      "owner": "tm-tinyi-v3-edict-personnel.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3-edict-personnel.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_phase3_isPersonnelTopic": {
+      "owner": "tm-tinyi-v3-edict-personnel.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3-edict-personnel.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_phase3_open": {
+      "owner": "tm-tinyi-v3-edict-personnel.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3-edict-personnel.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_phase3_qinDing": {
+      "owner": "tm-tinyi-v3-edict-personnel.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3-edict-personnel.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_phase3_skip": {
+      "owner": "tm-tinyi-v3-edict-personnel.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3-edict-personnel.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_phase6_doSeal": {
+      "owner": "tm-tinyi-v3-edict-personnel.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3-edict-personnel.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_phase6_offerVerdictNote": {
+      "owner": "tm-tinyi-v3-edict-personnel.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3-edict-personnel.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_phase6_open": {
+      "owner": "tm-tinyi-v3-edict-personnel.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3-edict-personnel.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_phase6_recordSeal": {
+      "owner": "tm-tinyi-v3-persona.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3-persona.js",
+        "tm-tinyi-v3-edict-personnel.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_phase6_resolveSeal": {
+      "owner": "tm-tinyi-v3-edict-personnel.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3-edict-personnel.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_phase6_saveVerdictNote": {
+      "owner": "tm-tinyi-v3-edict-personnel.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3-edict-personnel.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_phase6_skipVerdictNote": {
+      "owner": "tm-tinyi-v3-edict-personnel.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3-edict-personnel.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_pickFallbackSpeakers": {
+      "owner": "tm-tinyi-v3.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3.js",
+        "tm-tinyi-v3-edict-personnel.js"
+      ]
+    },
+    "_ty3_policySanctionByGrade": {
+      "owner": "tm-tinyi-v3.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_progClear": {
+      "owner": "tm-tinyi-v3.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3.js",
+        "tm-tinyi-v3-edict-personnel.js"
+      ]
+    },
+    "_ty3_progRender": {
+      "owner": "tm-tinyi-v3.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3.js",
+        "tm-tinyi-v3-edict-personnel.js"
+      ]
+    },
+    "_ty3_recordTinyiDraft": {
+      "owner": "tm-tinyi-v3-edict-personnel.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3-edict-personnel.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_reissueTopic": {
+      "owner": "tm-tinyi-v3.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "_ty3_settleArchonGrade": {
+      "owner": "tm-tinyi-v3.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-tinyi-v3.js",
+        "tm-tinyi-v3-edict-personnel.js"
+      ]
+    },
+    "addEB": {
+      "owner": "tm-player-core.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-player-core.js",
+        "phase8-formal-bridge.js"
+      ]
+    },
+    "aiGenChr": {
+      "owner": "tm-launch.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-launch.js",
+        "tm-office-editor.js"
+      ]
+    },
+    "aiGenCivic": {
+      "owner": "tm-launch.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-launch.js",
+        "tm-office-editor.js"
+      ]
+    },
+    "aiGenFac": {
+      "owner": "tm-launch.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-launch.js",
+        "tm-office-editor.js"
+      ]
+    },
+    "aiGenFullScenario": {
+      "owner": "tm-launch.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-launch.js",
+        "tm-office-editor.js"
+      ]
+    },
+    "aiGenItems": {
+      "owner": "tm-office-editor.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-office-editor.js",
+        "editor-details.js"
+      ]
+    },
+    "aiGenTech": {
+      "owner": "tm-office-editor.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-office-editor.js",
+        "editor-details.js"
+      ]
+    },
+    "aiGenVar": {
+      "owner": "tm-launch.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-launch.js",
+        "tm-office-editor.js"
+      ]
+    },
+    "closeWenduiModal": {
+      "owner": "tm-wendui.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-wendui.js",
+        "phase8-formal-bridge.js"
+      ]
+    },
+    "editChr": {
+      "owner": "tm-launch.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-launch.js",
+        "editor-details.js"
+      ]
+    },
+    "escHtml": {
+      "owner": "tm-utils.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-utils.js",
+        "tm-chaoyi-changchao.js"
+      ]
+    },
+    "execFullGen": {
+      "owner": "tm-launch.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-launch.js",
+        "tm-office-editor.js"
+      ]
+    },
+    "getPhase8FormalEdictDraftSnapshot": {
+      "owner": "phase8-formal-bridge.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "phase8-formal-bridge.js",
+        "phase8-formal-drafts.js"
+      ]
+    },
+    "getTributeRatio": {
+      "owner": "tm-economy.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-economy.js",
+        "tm-test-harness.js"
+      ]
+    },
+    "GM": {
+      "owner": "tm-data-model.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-data-model.js",
+        "tm-save-lifecycle.js",
+        "phase8-formal-drafts.js"
+      ]
+    },
+    "hideLoading": {
+      "owner": "tm-utils.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-utils.js",
+        "tm-endturn-progress.js"
+      ]
+    },
+    "HISTORICAL_CHAR_PROFILES": {
+      "owner": "tm-char-historical-profiles.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-char-historical-profiles.js",
+        "tm-char-historical-wave-01.js",
+        "tm-char-historical-wave-02.js",
+        "tm-char-historical-wave-03.js",
+        "tm-char-historical-wave-04.js",
+        "tm-char-historical-wave-05.js",
+        "tm-char-historical-wave-06.js",
+        "tm-char-historical-wave-07.js",
+        "tm-char-historical-wave-08.js",
+        "tm-char-historical-wave-09.js",
+        "tm-char-historical-wave-10.js",
+        "tm-char-historical-wave-11.js",
+        "tm-char-historical-wave-12.js"
+      ]
+    },
+    "listTerminableTracks": {
+      "owner": "tm-chronicle-effects.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-chronicle-effects.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "openCharRenwuPage": {
+      "owner": "tm-player-core.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-player-core.js",
+        "tm-renwu-tuzhi.js"
+      ]
+    },
+    "openMilitaryDetailPanel": {
+      "owner": "tm-sidebar-ui.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-sidebar-ui.js",
+        "tm-three-systems-ui.js"
+      ]
+    },
+    "openPartyDetailPanel": {
+      "owner": "tm-sidebar-ui.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-sidebar-ui.js",
+        "tm-three-systems-ui.js"
+      ]
+    },
+    "P": {
+      "owner": "tm-data-model.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-data-model.js",
+        "tm-save-lifecycle.js",
+        "tm-content-manager.js",
+        "tm-test-harness.js"
+      ]
+    },
+    "renderEvtTab": {
+      "owner": "tm-office-editor.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-office-editor.js",
+        "editor-details.js"
+      ]
+    },
+    "renderFacTab": {
+      "owner": "tm-office-editor.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-office-editor.js",
+        "editor-details.js"
+      ]
+    },
+    "renderGameState": {
+      "owner": "tm-game-ui-shell.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-game-ui-shell.js",
+        "phase8-formal-bridge.js",
+        "tm-pause-fab.js"
+      ]
+    },
+    "renderPolygons": {
+      "owner": "tm-map-system.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-map-system.js",
+        "tm-corruption-extras.js"
+      ]
+    },
+    "renderRenwu": {
+      "owner": "tm-renwu-ui.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-renwu-ui.js",
+        "phase8-formal-bridge.js"
+      ]
+    },
+    "renderRulTab": {
+      "owner": "tm-office-editor.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-office-editor.js",
+        "editor-details.js"
+      ]
+    },
+    "renderTechTab": {
+      "owner": "tm-office-editor.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-office-editor.js",
+        "editor-details.js"
+      ]
+    },
+    "robustParseJSON": {
+      "owner": "tm-utils.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-utils.js",
+        "tm-ai-infra-json.js"
+      ]
+    },
+    "showLoading": {
+      "owner": "tm-utils.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-utils.js",
+        "tm-endturn-progress.js"
+      ]
+    },
+    "showScnSelect": {
+      "owner": "tm-launch.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-launch.js",
+        "tm-content-manager.js"
+      ]
+    },
+    "syncPhase8FormalEdictDrafts": {
+      "owner": "phase8-formal-bridge.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "phase8-formal-bridge.js",
+        "phase8-formal-drafts.js"
+      ]
+    },
+    "terminateChronicleTrack": {
+      "owner": "tm-chronicle-effects.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-chronicle-effects.js",
+        "tm-tinyi-v3-parties.js"
+      ]
+    },
+    "TM": {
+      "owner": "tm-utils.js",
+      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
+      "expectedOrder": [
+        "tm-utils.js",
+        "tm-agent-kernel.js",
+        "tm-office-recall-agent.js",
+        "tm-military.js",
+        "tm-custom-build-agent.js",
+        "tm-benji.js",
+        "tm-endturn-prompt.js",
+        "tm-endturn-ai.js",
+        "tm-endturn-apply.js",
+        "tm-endturn-apply-stages.js",
+        "tm-endturn-followup-helpers.js",
+        "tm-endturn-followup.js",
+        "tm-endturn-record.js",
+        "tm-endturn-mode-contract.js",
+        "tm-endturn-agent-mode.js",
+        "tm-endturn-agent-read-tools.js",
+        "tm-endturn-agent-write-tools.js",
+        "tm-endturn-agent-depth-tools.js",
+        "tm-endturn-agent-intent-plan.js",
+        "tm-faction-decision-tools.js",
+        "tm-keju-paradigm-presets.js",
+        "tm-keju-paradigm.js",
+        "tm-keju-reform-llm.js",
+        "tm-keju-paradigm-panel-render.js",
+        "tm-keju-paradigm-panel.js",
+        "tm-houguong.js",
+        "tm-talent-cohorts.js",
+        "tm-talent-bottlenecks.js",
+        "tm-talent-building-bridge.js",
+        "tm-talent-backlash.js"
+      ]
+    }
+  },
+  "earlyReads": {
+    "TM_SaveDB@tm-utils.js": {
+      "owner": "tm-utils.js",
+      "reason": "Legacy project restoration polls with a typeof guard and returns until tm-storage provides TM_SaveDB; the later calls are control-flow dominated by that retry guard."
+    }
+  }
+}

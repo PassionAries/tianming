@@ -78,6 +78,7 @@ sandbox.window = sandbox;
 sandbox.global = sandbox;
 
 vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-indices.js'), 'utf8'), sandbox, { filename: 'tm-indices.js' });
 vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-char-autogen.js'), 'utf8'), sandbox, { filename: 'tm-char-autogen.js' });
 
 let pass = 0;

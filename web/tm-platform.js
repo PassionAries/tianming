@@ -57,15 +57,16 @@
       turnData:  { write: f('回合数据写入'), read: f('回合数据读取'), list: f('回合数据列表'), summary: f('回合摘要') },
       account:   { session: f('账号会话'), register: f('注册'), login: f('登录'), me: f('账号信息'), logout: f('登出') },
       workshop:  { list: f('工坊列表'), catalog: f('工坊目录'), installFromUrl: f('工坊在线安装'), import: f('工坊导入'), publish: f('工坊发布'), setEnabled: f('工坊启停'), uninstall: f('工坊卸载'), loadEnabledScenarios: f('加载工坊剧本') },
-      hot:       { status: f('热更状态'), check: f('热更检查'), install: f('热更安装'), setEnabled: f('热更开关'), rollback: f('热更回退'), reload: f('热更重载'), onStatus: noop },
-      installer: { check: f('安装包更新检查'), download: f('安装包下载'), install: f('安装包安装'), onStatus: noop },
+      hot:       { status: f('热更状态'), check: f('热更检查'), install: f('热更安装'), setEnabled: f('热更开关'), rollback: f('热更回退'), reload: f('热更重载'), onStatus: noSubscription },
+      installer: { check: f('安装包更新检查'), download: f('安装包下载'), install: f('安装包安装'), onStatus: noSubscription },
       files:     { exportSave: f('导出存档'), importSave: f('导入存档'), pickImage: f('选择图片'), pickGeoJSON: f('选择地理数据') },
       info:      { getAppInfo: f('应用信息'), contentStatus: f('内容状态') },
       tools:     { openDir: f('打开目录'), quit: noop, debugLog: noop, debugLogInfo: f('日志信息') },
-      events:    { onMenuAction: noop, onImportData: noop }
+      events:    { onMenuAction: noSubscription, onImportData: noSubscription }
     };
     function f(name) { return function () { return notAvail(name); }; }
     function noop() {}
+    function noSubscription() { return function dispose() {}; }
   }
 
   // ── electron 后端：等价转发到 window.tianming.*（保持现有签名）──
@@ -119,13 +120,13 @@
       setEnabled: function (enabled) { return call('setHotUpdateEnabled', [enabled]); },
       rollback:   function ()        { return call('rollbackHotUpdate', []); },
       reload:     function ()        { return call('reloadAfterHotUpdate', []); },
-      onStatus:   function (cb)      { if (wt && wt.onHotUpdateStatus) wt.onHotUpdateStatus(cb); }
+      onStatus:   function (cb)      { return (wt && wt.onHotUpdateStatus) ? wt.onHotUpdateStatus(cb) : function dispose() {}; }
     },
     installer: {
       check:    function ()        { return call('checkForUpdate', []); },
       download: function ()        { return call('downloadUpdate', []); },
       install:  function ()        { return call('installUpdate', []); },
-      onStatus: function (cb)      { if (wt && wt.onUpdateStatus) wt.onUpdateStatus(cb); }
+      onStatus: function (cb)      { return (wt && wt.onUpdateStatus) ? wt.onUpdateStatus(cb) : function dispose() {}; }
     },
     files: {
       exportSave:  function (data) { return call('dialogExport', [data]); },
@@ -149,8 +150,8 @@
       debugLogInfo: function ()        { return call('debugLogInfo', []); }
     },
     events: {
-      onMenuAction: function (cb) { if (wt && wt.onMenuAction) wt.onMenuAction(cb); },
-      onImportData: function (cb) { if (wt && wt.onImportData) wt.onImportData(cb); }
+      onMenuAction: function (cb) { return (wt && wt.onMenuAction) ? wt.onMenuAction(cb) : function dispose() {}; },
+      onImportData: function (cb) { return (wt && wt.onImportData) ? wt.onImportData(cb) : function dispose() {}; }
     }
   };
 

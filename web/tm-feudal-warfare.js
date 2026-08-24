@@ -5,16 +5,17 @@
 
 // 更新军事单位
 function updateMilitary(timeRatio) {
-  var sc = findScenarioById(GM.sid);
-  if (!sc || !sc.military || !sc.military.initialTroops) return;
+  var ratio = Number(timeRatio);
+  if (!Number.isFinite(ratio) || ratio < 0) throw new Error('军事更新 timeRatio 非法');
+  var armies = GM && Array.isArray(GM.armies) ? GM.armies : [];
 
-  sc.military.initialTroops.forEach(function(troop) {
+  armies.forEach(function(troop) {
     if (!troop || !troop.name) return;
 
     // 士气变化
     if (troop.morale !== undefined) {
       var oldMorale = troop.morale;
-      var change = Math.floor((random() - 0.5) * 6 * timeRatio); // 年度±3
+      var change = Math.floor((random() - 0.5) * 6 * ratio); // 年度±3
       troop.morale = Math.max(0, Math.min(100, troop.morale + change));
 
       if (Math.abs(change) > 1) {
@@ -25,7 +26,7 @@ function updateMilitary(timeRatio) {
     // 训练度提升
     if (troop.training !== undefined && troop.training < 100) {
       var oldTraining = troop.training;
-      var inc = Math.floor(random() * 3 * timeRatio); // 年度+0-2
+      var inc = Math.floor(random() * 3 * ratio); // 年度+0-2
       troop.training = Math.min(100, troop.training + inc);
 
       if (inc > 0) {
@@ -36,7 +37,7 @@ function updateMilitary(timeRatio) {
     // 忠诚度微调
     if (troop.loyalty !== undefined) {
       var oldLoyalty = troop.loyalty;
-      var change = Math.floor((random() - 0.5) * 4 * timeRatio); // 年度±2
+      var change = Math.floor((random() - 0.5) * 4 * ratio); // 年度±2
       troop.loyalty = Math.max(0, Math.min(100, troop.loyalty + change));
 
       if (Math.abs(change) > 1) {
@@ -48,24 +49,29 @@ function updateMilitary(timeRatio) {
 
 // 更新地图数据
 function updateMap(timeRatio) {
-  // 支持新的地图数据结构 (P.map.regions)
-  if (P.map && P.map.regions && P.map.regions.length > 0) {
-    P.map.regions.forEach(function(region) {
+  var ratio = Number(timeRatio);
+  if (!Number.isFinite(ratio) || ratio < 0) throw new Error('地图更新 timeRatio 非法');
+  var liveMap = typeof ensureWritableRuntimeMap === 'function'
+    ? ensureWritableRuntimeMap()
+    : (GM && GM.mapData);
+  if (liveMap && Array.isArray(liveMap.regions)) {
+    liveMap.regions.forEach(function(region) {
       if (!region) return;
 
       // 1. 发展度自然变化
-      var oldDev = region.development || 50;
+      var oldDev = Number(region.development);
+      if (!Number.isFinite(oldDev)) oldDev = 50;
       var newDev = oldDev;
 
       // 和平时期缓慢增长
       if (region.owner && random() < 0.3) {
-        var growth = (1 + random() * 2) * timeRatio; // 1-3点/年
+        var growth = (1 + random() * 2) * ratio; // 1-3点/年
         newDev = Math.min(100, oldDev + growth);
       }
 
       // 战争或无主降低发展度
       if (!region.owner && random() < 0.2) {
-        var decline = (1 + random() * 3) * timeRatio;
+        var decline = (1 + random() * 3) * ratio;
         newDev = Math.max(0, oldDev - decline);
       }
 
@@ -76,36 +82,17 @@ function updateMap(timeRatio) {
       }
 
       // 2. 驻军自然消耗
-      if (region.troops > 0 && random() < 0.1) {
-        var oldTroops = region.troops;
-        var attrition = Math.floor(region.troops * 0.01 * timeRatio); // 1%损耗/年
-        region.troops = Math.max(0, region.troops - attrition);
+      var troopCount = Number(region.troops);
+      if (Number.isFinite(troopCount) && troopCount > 0 && random() < 0.1) {
+        var oldTroops = troopCount;
+        var attrition = Math.floor(troopCount * 0.01 * ratio); // 1%损耗/年
+        region.troops = Math.max(0, troopCount - attrition);
         if (attrition > 0) {
           recordChange('map', region.name, 'troops', oldTroops, region.troops, '自然损耗');
         }
       }
     });
   }
-
-  // 兼容旧的地图数据结构
-  var sc = findScenarioById(GM.sid);
-  if (!sc || !sc.map || !sc.map.items) return;
-
-  sc.map.items.forEach(function(item) {
-    if (!item || !item.name) return;
-
-    if (item.type === 'city' && item.population) {
-      // 城市人口缓慢增长
-      var oldPop = item.population;
-      // 简化：人口年增长1-3%
-      if (random() < 0.5) {
-        var growthRate = 0.01 + random() * 0.02; // 1-3%
-        var change = growthRate * timeRatio;
-        // 这里需要解析人口字符串，简化处理
-        recordChange('map', item.name, 'population', oldPop, item.population, '自然增长');
-      }
-    }
-  });
 }
 
 // ============================================================
@@ -122,6 +109,123 @@ function updateMap(timeRatio) {
  * @property {function(Object):void} deserialize
  */
 var WarWeightSystem = {
+  TRUCE_DURATION: 24, // 24回合 ≈ 2年
+
+  _perfProvider: function() {
+    var host = typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : null);
+    return host && host['TM'] && host['TM']['perf'];
+  },
+
+  _perfCount: function(name, delta) {
+    var perf = WarWeightSystem._perfProvider();
+    if (perf && typeof perf.count === 'function') perf.count(name, delta == null ? 1 : delta);
+  },
+
+  _markNormalized: function(state) {
+    if (!state || typeof state !== 'object') return state;
+    try {
+      Object.defineProperty(state, '__tmWarTrucesNormalized', {
+        value: true,
+        enumerable: false,
+        configurable: true
+      });
+    } catch (error) {
+      _dbg('[War] 无法标记停战状态规范化', error);
+    }
+    return state;
+  },
+
+  _emptyState: function() {
+    return WarWeightSystem._markNormalized({ version: 1, truces: Object.create(null) });
+  },
+
+  _world: function(world) {
+    if (world && typeof world === 'object') return world;
+    return (typeof GM !== 'undefined' && GM && typeof GM === 'object') ? GM : null;
+  },
+
+  _normalizeState: function(input) {
+    var perf = WarWeightSystem._perfProvider();
+    var span = perf && typeof perf.beginSpan === 'function'
+      ? perf.beginSpan('truce.normalize', { hasInput: !!input }) : null;
+    WarWeightSystem._perfCount('truce.normalizeCount', 1);
+    try {
+      var normalized = WarWeightSystem._emptyState();
+      if (!input || typeof input !== 'object' || Array.isArray(input)) return normalized;
+      var raw = input;
+      if (Object.prototype.hasOwnProperty.call(input, 'truces')) {
+        raw = input.truces;
+      } else if (Object.prototype.hasOwnProperty.call(input, 'version')) {
+        raw = null;
+      }
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return normalized;
+      Object.keys(raw).forEach(function(key) {
+        WarWeightSystem._perfCount('truce.keyChecks', 1);
+        var parties = String(key).split('|');
+        var unsafeKey = parties.some(function(part) {
+          var name = String(part || '').trim();
+          return !name || name === '__proto__' || name === 'prototype' || name === 'constructor';
+        });
+        var expiry = Number(raw[key]);
+        if (unsafeKey || !Number.isFinite(expiry) || expiry < 0) return;
+        normalized.truces[String(key)] = Math.floor(expiry);
+      });
+      return normalized;
+    } finally {
+      if (span && perf && typeof perf.endSpan === 'function') perf.endSpan(span);
+    }
+  },
+
+  _state: function(world) {
+    var target = WarWeightSystem._world(world);
+    if (!target) return WarWeightSystem._emptyState();
+    var state = target._warTruces;
+    if (!state || state.version !== 1 || !state.truces || typeof state.truces !== 'object' || Array.isArray(state.truces) || state.__tmWarTrucesNormalized !== true) {
+      target._warTruces = WarWeightSystem._normalizeState(state);
+    }
+    return target._warTruces;
+  },
+
+  _partyDescriptor: function(party, world) {
+    var target = WarWeightSystem._world(world);
+    if (party && typeof party === 'object') {
+      var objectId = party.id || party.factionId || party.sid;
+      var objectName = String(party.name || party.factionName || '').trim();
+      return {
+        stable: objectId != null && String(objectId).trim() ? 'id:' + String(objectId).trim() : '',
+        legacy: objectName
+      };
+    }
+    if (typeof party !== 'string') return { stable: '', legacy: '' };
+    var name = party.trim();
+    if (!name) return { stable: '', legacy: '' };
+    var factions = [];
+    if (target) factions = Array.isArray(target.facs) ? target.facs : (Array.isArray(target.factions) ? target.factions : []);
+    var matches = factions.filter(function(faction) {
+      return faction && String(faction.name || faction.factionName || '').trim() === name;
+    });
+    var stable = matches.length === 1 && matches[0] && matches[0].id != null && String(matches[0].id).trim()
+      ? 'id:' + String(matches[0].id).trim()
+      : '';
+    return { stable: stable, legacy: name };
+  },
+
+  _pairKeys: function(partyA, partyB, world) {
+    var a = WarWeightSystem._partyDescriptor(partyA, world);
+    var b = WarWeightSystem._partyDescriptor(partyB, world);
+    var legacy = a.legacy && b.legacy ? [a.legacy, b.legacy].sort().join('|') : '';
+    var stable = a.stable && b.stable ? [a.stable, b.stable].sort().join('|') : '';
+    return { primary: stable || legacy, stable: stable, legacy: legacy };
+  },
+
+  _pairKey: function(partyA, partyB) {
+    if (typeof partyA !== 'string' || typeof partyB !== 'string') return '';
+    var a = partyA.trim();
+    var b = partyB.trim();
+    if (!a || !b) return '';
+    return [a, b].sort().join('|');
+  },
+
   /** 评估 NPC 宣战意愿权重（0=绝不，100=必战） */
   evaluateWarWeight: function(attacker, defender, context) {
     if (!attacker || !defender) return 0;
@@ -158,44 +262,91 @@ var WarWeightSystem = {
     }
 
     // 停战惩罚
-    if (WarWeightSystem.hasTruce(attacker.name, defender.name)) {
+    if (WarWeightSystem.hasTruce(attacker, defender)) {
       weight -= 40;
     }
 
     return clamp(Math.round(weight), 0, 100);
   },
 
-  // 停战记录 {key: expiryTurn}
-  _truces: {},
-  TRUCE_DURATION: 24, // 24回合 ≈ 2年
-
   /** 添加停战 */
-  addTruce: function(partyA, partyB, duration) {
-    var key = [partyA, partyB].sort().join('|');
-    WarWeightSystem._truces[key] = GM.turn + (duration || WarWeightSystem.TRUCE_DURATION);
-    _dbg('[War] 停战协议:', partyA, '↔', partyB, '至回合', WarWeightSystem._truces[key]);
+  addTruce: function(partyA, partyB, duration, world) {
+    var target = WarWeightSystem._world(world);
+    var key = WarWeightSystem._pairKeys(partyA, partyB, target).primary;
+    var turns = duration === undefined || duration === null
+      ? WarWeightSystem.TRUCE_DURATION : Number(duration);
+    if (!target || !key || !Number.isFinite(turns) || turns <= 0) return false;
+    var turn = Number(target.turn);
+    if (!Number.isFinite(turn) || turn < 0) turn = 0;
+    var state = WarWeightSystem._state(target);
+    state.truces[key] = Math.floor(turn + turns);
+    _dbg('[War] 停战协议:', partyA, '↔', partyB, '至回合', state.truces[key]);
+    return true;
   },
 
   /** 检查停战 */
-  hasTruce: function(partyA, partyB) {
-    var key = [partyA, partyB].sort().join('|');
-    var expiry = WarWeightSystem._truces[key];
+  hasTruce: function(partyA, partyB, world) {
+    var target = WarWeightSystem._world(world);
+    var keys = WarWeightSystem._pairKeys(partyA, partyB, target);
+    var key = keys.primary;
+    if (!target || !key) return false;
+    var state = WarWeightSystem._state(target);
+    WarWeightSystem._perfCount('truce.keyChecks', 1);
+    var expiry = state.truces[key];
+    if (!expiry && keys.stable && keys.legacy && state.truces[keys.legacy]) {
+      expiry = state.truces[keys.legacy];
+      state.truces[keys.stable] = expiry;
+      delete state.truces[keys.legacy];
+      key = keys.stable;
+    }
     if (!expiry) return false;
-    if (GM.turn >= expiry) { delete WarWeightSystem._truces[key]; return false; }
+    var turn = Number(target.turn);
+    if (!Number.isFinite(turn) || turn < 0) turn = 0;
+    if (turn >= expiry) { delete state.truces[key]; return false; }
     return true;
   },
 
   /** 清理过期停战 */
-  cleanTruces: function() {
-    var keys = Object.keys(WarWeightSystem._truces);
+  cleanTruces: function(world) {
+    var target = WarWeightSystem._world(world);
+    if (!target) return 0;
+    var state = WarWeightSystem._state(target);
+    var turn = Number(target.turn);
+    if (!Number.isFinite(turn) || turn < 0) turn = 0;
+    var removed = 0;
+    var keys = Object.keys(state.truces);
     keys.forEach(function(k) {
-      if (GM.turn >= WarWeightSystem._truces[k]) delete WarWeightSystem._truces[k];
+      if (turn >= state.truces[k]) {
+        delete state.truces[k];
+        removed++;
+      }
     });
+    return removed;
   },
 
   /** 序列化 */
-  serialize: function() { return { truces: WarWeightSystem._truces }; },
-  deserialize: function(d) { if (d && d.truces) WarWeightSystem._truces = d.truces; }
+  serialize: function(world) {
+    var state = WarWeightSystem._state(world);
+    var detached = WarWeightSystem._emptyState();
+    Object.keys(state.truces).forEach(function(key) {
+      detached.truces[key] = state.truces[key];
+    });
+    return detached;
+  },
+
+  deserialize: function(data, world) {
+    var target = WarWeightSystem._world(world);
+    var normalized = WarWeightSystem._normalizeState(data);
+    if (target) target._warTruces = normalized;
+    return WarWeightSystem.serialize(target || { _warTruces: normalized });
+  },
+
+  reset: function(world) {
+    var target = WarWeightSystem._world(world);
+    var empty = WarWeightSystem._emptyState();
+    if (target) target._warTruces = empty;
+    return WarWeightSystem.serialize(target || { _warTruces: empty });
+  }
 };
 
 // ============================================================

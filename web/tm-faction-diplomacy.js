@@ -57,6 +57,33 @@
   }
   function _strat(fac) { if (!fac.aiStrategy || typeof fac.aiStrategy !== 'object') fac.aiStrategy = {}; var s = fac.aiStrategy; if (!Array.isArray(s.alliances)) s.alliances = []; if (!Array.isArray(s.grudges)) s.grudges = []; if (!Array.isArray(s.allianceIds)) s.allianceIds = []; if (!Array.isArray(s.grudgeIds)) s.grudgeIds = []; return s; }
   function _pushUniq(arr, v) { if (v && arr.indexOf(v) < 0) arr.push(v); }
+  function _clearOneGrudge(owner, counterpart) {
+    if (!owner || !counterpart) return;
+    var strategy = _strat(owner);
+    var counterpartId = _facId(counterpart);
+    var counterpartName = _norm(_facName(counterpart));
+    if (counterpartId) {
+      strategy.grudgeIds = strategy.grudgeIds.filter(function(grudgeId) {
+        return String(grudgeId || '') !== counterpartId;
+      });
+    }
+    if (!counterpartName) return;
+    // 名称数组是旧档兼容面。若另一个稳定 ID 仍指向同名势力，必须保留
+    // 名称宿怨，避免缔结甲的盟约时误删对同名乙的宿怨。
+    var sameNameStillReferenced = strategy.grudgeIds.some(function(grudgeId) {
+      var fac = _facByRef({ id: String(grudgeId || '') });
+      return fac && _norm(_facName(fac)) === counterpartName;
+    });
+    if (!sameNameStillReferenced) {
+      strategy.grudges = strategy.grudges.filter(function(grudgeName) {
+        return _norm(grudgeName) !== counterpartName;
+      });
+    }
+  }
+  function _clearMutualGrudge(a, b) {
+    _clearOneGrudge(a, b);
+    _clearOneGrudge(b, a);
+  }
   function _log(entry) { try { var G = global.GM; if (!G) return; if (!Array.isArray(G._factionDiplomacyLog)) G._factionDiplomacyLog = []; G._factionDiplomacyLog.push(entry); if (G._factionDiplomacyLog.length > 40) G._factionDiplomacyLog = G._factionDiplomacyLog.slice(-40); } catch (e) {} }
 
   // 【S2·玩家通道】势力对玩家的提议 → 复用现有「势力使节」求见结构(tm-endturn-apply.js envoy audience)·surface 到问对·玩家在对话中回应·进 jishiRecords→sc1q/PLAYER_RECENT 反馈回势力
@@ -224,13 +251,11 @@
       _pushUniq(ps.alliances, target.name); _pushUniq(ts.alliances, proposer.name);
       _pushUniq(ps.allianceIds, _facId(target)); _pushUniq(ts.allianceIds, _facId(proposer));
       // 结盟→消解彼此宿怨
-      ps.grudges = ps.grudges.filter(function (g) { return _norm(g) !== _norm(target.name); });
-      ts.grudges = ts.grudges.filter(function (g) { return _norm(g) !== _norm(proposer.name); });
+      _clearMutualGrudge(proposer, target);
       _lodgeTreaty(proposer, target, prop.type, prop.turn);   // B3·落 GM.treaties·让战争盟友参战真读到
     } else if (prop.type === 'peace') {
       // 媾和必须走唯一战争终结入口；只消宿怨不等于结束战争。
-      ps.grudges = ps.grudges.filter(function (g) { return _norm(g) !== _norm(target.name); });
-      ts.grudges = ts.grudges.filter(function (g) { return _norm(g) !== _norm(proposer.name); });
+      _clearMutualGrudge(proposer, target);
       var G = global.GM || {};
       var wars = Array.isArray(G.activeWars) ? G.activeWars.slice() : [];
       wars.forEach(function (war) {

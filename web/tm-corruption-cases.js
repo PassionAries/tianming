@@ -626,13 +626,33 @@
   // 新官 isRecentAppointment 标记
   // ═════════════════════════════════════════════════════════════
 
-  function markAsRecentAppointment(charOrId) {
-    var ch = typeof charOrId === 'string'
-      ? (GM.chars || []).find(function(c) { return c.id === charOrId; })
-      : charOrId;
-    if (!ch) return;
+  function _appointmentFailure(reason, value) {
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn('[corruption-p2] 新官保护期参数无效:', reason, value);
+    }
+    return { ok: false, reason: reason };
+  }
+
+  function markCharAsRecentAppointment(ch) {
+    if (!ch || typeof ch !== 'object') return _appointmentFailure('character-object-required', ch);
+    if (!ch.id || typeof ch.id !== 'string') return _appointmentFailure('stable-id-required', ch);
+    var roster = (GM && Array.isArray(GM.chars)) ? GM.chars : [];
+    if (roster.indexOf(ch) < 0) return _appointmentFailure('character-not-in-world', ch.id);
     ch.isRecentAppointment = true;
     ch.appointedTurn = GM.turn;
+    return { ok: true, charId: ch.id, appointedTurn: ch.appointedTurn };
+  }
+
+  function markAsRecentAppointmentById(charId) {
+    if (typeof charId !== 'string' || !charId.trim()) return _appointmentFailure('stable-id-required', charId);
+    var ch = (GM.chars || []).find(function(c) { return c && c.id === charId; });
+    if (!ch) return _appointmentFailure('character-not-found', charId);
+    return markCharAsRecentAppointment(ch);
+  }
+
+  function markAsRecentAppointment(charOrId) {
+    if (typeof charOrId === 'string') return markAsRecentAppointmentById(charOrId);
+    return markCharAsRecentAppointment(charOrId);
   }
 
   function decayRecentAppointments() {
@@ -725,6 +745,8 @@
   CorruptionEngine.applyCaseHandling = applyCaseHandling;
   CorruptionEngine.pushLumpSumIncident = pushLumpSumIncident;
   CorruptionEngine.markAsRecentAppointment = markAsRecentAppointment;
+  CorruptionEngine.markAsRecentAppointmentById = markAsRecentAppointmentById;
+  CorruptionEngine.markCharAsRecentAppointment = markCharAsRecentAppointment;
   CorruptionEngine.snapshotHistory = snapshotCorruptionHistory;
 
   console.log('[corruption-p2] 已加载：' + EXPOSURE_CASES.length + ' 条案件库 + lumpSum API + 风闻四类 + 新官标记');

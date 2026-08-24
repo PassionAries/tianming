@@ -25,7 +25,17 @@
     modelLoading: false,   // 加载中（防止重复加载）
     pipeline: null,        // transformers.js feature-extraction pipeline
     index: [],             // [{ id, source, turn, text, vec }]
+    existingIds: new Set(),// source|sourceId; load once, append only after durable commit
     lastIndexedTurn: 0,    // 上次索引到的 turn
+    cursors: Object.create(null),
+    worldKey: '',
+    worldRef: null,
+    pRef: null,
+    worldGeneration: 0,
+    loadGeneration: 0,
+    sessionToken: '',
+    _idxLoadTried: false,
+    modelVersion: 'bge-small-zh-v1.5:index-v2',
     modelName: 'Xenova/bge-small-zh-v1.5',
     threshold: 0.45, // S1(2026-06-03): 0.55->0.45 放松(bge-small-zh 0.55 偏严·ST 建议 0.3-0.5)·call-site 可经 P.conf.semanticRecallThreshold 覆盖
 
@@ -45,6 +55,8 @@
   // 下方原主线程路径·行为与旧版完全一致。
   var _rpcSeq = 0;
   var _rpcPending = {};
+  var _buildFlights = Object.create(null);
+  var _loadFlights = Object.create(null);
 
   function _workerOnMessage(ev) {
     var m = ev.data || {};
@@ -307,6 +319,7 @@
     }
   }
   function status() {
+    if (typeof GM !== 'undefined' && GM) _ensureWorldState();
     return {
       enabled: STATE.enabled,
       modelReady: STATE.modelReady,
@@ -321,20 +334,185 @@
     };
   }
 
-  // ────── 嵌入计算 ──────
-  async function _embed(text) {
-    if (!STATE.modelReady) return null;
-    if (!text || typeof text !== 'string') return null;
-    text = text.slice(0, 512); // bge-small 最大 512 tokens
-    // perf round5: worker 路径·推理在独立线程·主线程只等消息
-    if (STATE.workerReady) {
-      var r = await _workerRpc({ cmd: 'embedBatch', texts: [text] }, 120000);
-      return (r && r.ok && r.vecs && r.vecs[0]) ? r.vecs[0] : null;
+  function _perfCount(name, delta) {
+    if (global.TM && global.TM.perf && typeof global.TM.perf.count === 'function') global.TM.perf.count(name, delta);
+  }
+
+  function _perfWithSpan(name, fn, metadata) {
+    if (global.TM && global.TM.perf && typeof global.TM.perf.withSpan === 'function') {
+      return global.TM.perf.withSpan(name, fn, metadata);
     }
-    if (!STATE.pipeline) return null;
-    var out = await STATE.pipeline(text, { pooling: 'mean', normalize: true });
-    // 转成 Float32Array 存储
-    return Array.from(out.data);
+    return fn();
+  }
+
+  function _loadGeneration() {
+    var value = Number(global && global._tmLoadGen);
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+  }
+
+  function _sessionToken() {
+    try {
+      if (global && typeof global._tmGetDesktopAutoSaveSessionToken === 'function') {
+        return String(global._tmGetDesktopAutoSaveSessionToken() || '');
+      }
+    } catch (error) {
+      if (global.TM && global.TM.errors && typeof global.TM.errors.capture === 'function') {
+        global.TM.errors.capture(error, 'SemanticRecall.sessionToken');
+      }
+    }
+    return '';
+  }
+
+  function _worldIdentity(gm) {
+    gm = gm || (typeof GM !== 'undefined' && GM ? GM : null);
+    var campaignId = String(gm && (gm._campaignId || gm._runId) || '');
+    var timelineId = String(gm && gm._timelineId || '');
+    return {
+      campaignId: campaignId,
+      timelineId: timelineId,
+      modelVersion: STATE.modelVersion,
+      key: campaignId + '|' + timelineId + '|' + STATE.modelVersion
+    };
+  }
+
+  function _ensureWorldState() {
+    var gm = typeof GM !== 'undefined' && GM ? GM : null;
+    var p = typeof P !== 'undefined' && P ? P : null;
+    var identity = _worldIdentity(gm);
+    var loadGeneration = _loadGeneration();
+    var sessionToken = _sessionToken();
+    if (STATE.worldKey !== identity.key || STATE.worldRef !== gm || STATE.pRef !== p
+        || STATE.loadGeneration !== loadGeneration || STATE.sessionToken !== sessionToken) {
+      STATE.worldKey = identity.key;
+      STATE.worldRef = gm;
+      STATE.pRef = p;
+      STATE.worldGeneration += 1;
+      STATE.loadGeneration = loadGeneration;
+      STATE.sessionToken = sessionToken;
+      STATE.index = [];
+      STATE.existingIds = new Set();
+      STATE.cursors = Object.create(null);
+      STATE.lastIndexedTurn = 0;
+      STATE._idxLoadTried = false;
+    }
+    return identity;
+  }
+
+  function _emptyCursor(source) {
+    return {
+      source: source,
+      lastStableId: '',
+      lastSeq: 0,
+      lastArrayOffset: 0,
+      lastTurn: 0,
+      revision: 0
+    };
+  }
+
+  function _cloneCursors(cursors) {
+    var out = Object.create(null);
+    Object.keys(cursors && typeof cursors === 'object' ? cursors : {}).forEach(function(source) {
+      if (!source || source === '__proto__' || source === 'prototype' || source === 'constructor') return;
+      var cursor = cursors[source] || {};
+      out[source] = {
+        source: source,
+        lastStableId: String(cursor.lastStableId || ''),
+        lastSeq: Number.isFinite(Number(cursor.lastSeq)) && Number(cursor.lastSeq) >= 0 ? Math.floor(Number(cursor.lastSeq)) : 0,
+        lastArrayOffset: Number.isFinite(Number(cursor.lastArrayOffset)) && Number(cursor.lastArrayOffset) >= 0 ? Math.floor(Number(cursor.lastArrayOffset)) : 0,
+        lastTurn: Number.isFinite(Number(cursor.lastTurn)) && Number(cursor.lastTurn) >= 0 ? Number(cursor.lastTurn) : 0,
+        revision: Number.isFinite(Number(cursor.revision)) && Number(cursor.revision) >= 0 ? Math.floor(Number(cursor.revision)) : 0
+      };
+    });
+    return out;
+  }
+
+  function _cursorIn(cursors, source) {
+    if (!cursors[source]) cursors[source] = _emptyCursor(source);
+    return cursors[source];
+  }
+
+  function _captureWorldLease(identity) {
+    return {
+      campaignId: identity.campaignId,
+      timelineId: identity.timelineId,
+      modelVersion: identity.modelVersion,
+      worldKey: identity.key,
+      worldGeneration: STATE.worldGeneration,
+      loadGeneration: STATE.loadGeneration,
+      sessionToken: STATE.sessionToken,
+      gmRef: STATE.worldRef,
+      pRef: STATE.pRef,
+      token: identity.key + '#g' + STATE.worldGeneration
+    };
+  }
+
+  function _isLeaseCurrent(lease) {
+    if (!lease) return false;
+    var gm = typeof GM !== 'undefined' && GM ? GM : null;
+    var p = typeof P !== 'undefined' && P ? P : null;
+    return gm === lease.gmRef && p === lease.pRef
+      && _worldIdentity(gm).key === lease.worldKey
+      && _loadGeneration() === lease.loadGeneration
+      && _sessionToken() === lease.sessionToken
+      && STATE.worldKey === lease.worldKey
+      && STATE.worldGeneration === lease.worldGeneration
+      && STATE.worldRef === lease.gmRef;
+  }
+
+  function _assertLeaseCurrent(lease, stage) {
+    if (_isLeaseCurrent(lease)) return;
+    var error = new Error('semantic index world lease expired at ' + String(stage || 'async boundary'));
+    error.code = 'semantic_world_changed';
+    throw error;
+  }
+
+  function _stableFingerprint(value) {
+    var text;
+    try { text = typeof value === 'string' ? value : JSON.stringify(value); }
+    catch (error) { text = String(value == null ? '' : value); }
+    if (text == null) text = '';
+    var first = 2166136261;
+    var second = 2246822519;
+    for (var index = 0; index < text.length; index++) {
+      var code = text.charCodeAt(index);
+      first ^= code;
+      first = Math.imul(first, 16777619);
+      second ^= code + index;
+      second = Math.imul(second, 3266489917);
+    }
+    return 'h' + (first >>> 0).toString(36) + (second >>> 0).toString(36) + 'l' + text.length.toString(36);
+  }
+
+  // ────── 嵌入计算 ──────
+  async function _embedBatch(texts) {
+    if (!STATE.modelReady || !Array.isArray(texts) || !texts.length) return [];
+    texts = texts.map(function(text) { return String(text || '').slice(0, 512); });
+    _perfCount('semantic.embedRpcCount', 1);
+    _perfCount('semantic.embedTextCount', texts.length);
+    return _perfWithSpan('semantic.embed', async function() {
+      if (STATE.workerReady) {
+        var response = await _workerRpc({ cmd: 'embedBatch', texts: texts }, 120000);
+        return (response && response.ok && Array.isArray(response.vecs)) ? response.vecs : [];
+      }
+      if (!STATE.pipeline) return [];
+      var input = texts.length === 1 ? texts[0] : texts;
+      var out = await STATE.pipeline(input, { pooling: 'mean', normalize: true });
+      if (!out || !out.data) return [];
+      if (texts.length === 1) return [Array.from(out.data)];
+      var width = Math.floor(out.data.length / texts.length);
+      if (!width || width * texts.length !== out.data.length) throw new Error('semantic batch embedding shape mismatch');
+      var vectors = [];
+      for (var i = 0; i < texts.length; i++) {
+        vectors.push(Array.from(out.data.slice(i * width, (i + 1) * width)));
+      }
+      return vectors;
+    }, { texts: texts.length });
+  }
+
+  async function _embed(text) {
+    if (!text || typeof text !== 'string') return null;
+    var vectors = await _embedBatch([text]);
+    return vectors[0] || null;
   }
 
   function _cosineSim(a, b) {
@@ -346,116 +524,211 @@
   }
 
   // ────── 增量索引 ──────
-  // 收集本回合新增 + 历史未索引内容
+  // 收集本回合新增 + 历史未索引内容。所有 cursor/index 修改先进入局部 staged
+  // 状态，只有 embedding 完整且 IndexedDB 事务提交后才发布到 STATE。
+  function _rowScanStart(rows, cursor, identify) {
+    if (!rows.length || !cursor.lastStableId) return 0;
+    var offset = Number(cursor.lastArrayOffset);
+    if (Number.isSafeInteger(offset) && offset > 0 && offset <= rows.length
+        && identify(rows[offset - 1]) === cursor.lastStableId) return offset;
+    for (var index = rows.length - 1; index >= 0; index--) {
+      if (identify(rows[index]) === cursor.lastStableId) return index + 1;
+    }
+    // 源被裁剪、迁移或重排；有界重扫当前窗口，existingIds 会过滤已提交项。
+    return 0;
+  }
+
+  function _validateEmbeddingBatch(vectors, batchLength, expectedDimension) {
+    if (!Array.isArray(vectors) || vectors.length !== batchLength) {
+      throw new Error('semantic embedding batch returned ' + (Array.isArray(vectors) ? vectors.length : 0)
+        + ' vectors for ' + batchLength + ' texts');
+    }
+    var dimension = expectedDimension || 0;
+    vectors.forEach(function(vector) {
+      if (!Array.isArray(vector) || !vector.length) throw new Error('semantic embedding vector is missing or empty');
+      if (!dimension) dimension = vector.length;
+      if (vector.length !== dimension) throw new Error('semantic embedding vector dimension mismatch');
+      for (var component = 0; component < vector.length; component++) {
+        if (!Number.isFinite(Number(vector[component]))) throw new Error('semantic embedding vector contains non-finite values');
+      }
+    });
+    return dimension;
+  }
+
+  async function _buildIndexForLease(opts, identity, lease) {
+    _assertLeaseCurrent(lease, 'build-start');
+    if (!STATE._idxLoadTried) {
+      try {
+        await loadIndex(identity, lease);
+        _assertLeaseCurrent(lease, 'load-index');
+      } catch (loadError) {
+        if (loadError && loadError.code === 'semantic_world_changed') throw loadError;
+        if (!_isLeaseCurrent(lease)) throw loadError;
+        STATE.error = 'semantic index load failed: ' + (loadError.message || String(loadError));
+        if (global.TM && global.TM.errors && typeof global.TM.errors.capture === 'function') {
+          global.TM.errors.capture(loadError, 'SemanticRecall.loadIndex');
+        } else if (global.console && console.warn) console.warn('[SemanticRecall] index load failed:', loadError);
+        throw loadError;
+      }
+    }
+
+    var gm = lease.gmRef;
+    var turn = Number(gm.turn) || 0;
+    var pending = [];
+    var pendingIds = new Set();
+    var nextCursors = _cloneCursors(STATE.cursors);
+    var cursorChanged = false;
+    var sourceRowsVisited = 0;
+
+    function visitRows(source, rows, identify, project) {
+      rows = Array.isArray(rows) ? rows : [];
+      var cursor = _cursorIn(nextCursors, source);
+      var start = _rowScanStart(rows, cursor, identify);
+      var newestTurn = cursor.lastTurn || 0;
+      for (var offset = start; offset < rows.length; offset++) {
+        sourceRowsVisited += 1;
+        _perfCount('semantic.sourceRowsVisited', 1);
+        var rowStableId = identify(rows[offset]);
+        var projected = project(rows[offset], rowStableId) || [];
+        if (!Array.isArray(projected)) projected = [projected];
+        projected.forEach(function(item) {
+          if (!item || !item.sourceId || !item.text) return;
+          var dedupeKey = source + '|' + item.sourceId;
+          if (STATE.existingIds.has(dedupeKey) || pendingIds.has(dedupeKey)) return;
+          pendingIds.add(dedupeKey);
+          pending.push({
+            source: source,
+            sourceId: String(item.sourceId),
+            turn: Number(item.turn) || 0,
+            text: String(item.text).slice(0, 200)
+          });
+          newestTurn = Math.max(newestTurn, Number(item.turn) || 0);
+        });
+      }
+      var nextStableId = rows.length ? identify(rows[rows.length - 1]) : '';
+      if (cursor.lastArrayOffset !== rows.length || cursor.lastStableId !== nextStableId || start < rows.length) {
+        cursorChanged = true;
+      }
+      cursor.lastArrayOffset = rows.length;
+      cursor.lastSeq = (cursor.lastSeq || 0) + Math.max(0, rows.length - start);
+      cursor.lastStableId = nextStableId;
+      cursor.lastTurn = newestTurn;
+      cursor.revision = (cursor.revision || 0) + Math.max(0, rows.length - start);
+    }
+
+    await _perfWithSpan('semantic.scan', function() {
+      visitRows('shiji', gm.shijiHistory, function(sh) {
+        if (!sh) return '';
+        return String(sh.id || ('fp:' + _stableFingerprint([
+          Number(sh.turn) || 0, sh.shilu || '', sh.shizhengji || '', sh.zhengwen || '', sh.shilu_text || ''
+        ])));
+      }, function(sh, stable) {
+        if (!sh) return [];
+        var combined = sh.shilu || sh.shizhengji || sh.zhengwen || sh.shilu_text || '';
+        var sentences = String(combined).split(/[。！？\n]/).filter(function(sentence) { return sentence && sentence.length > 8; });
+        return sentences.slice(0, 30).map(function(sentence, sentenceIndex) {
+          return { sourceId: stable + ':s' + sentenceIndex, turn: sh.turn, text: sentence };
+        });
+      });
+
+      if (typeof ChronicleTracker !== 'undefined' && ChronicleTracker.getAll) {
+        var allChron = Array.isArray(gm._chronicleTracks) ? gm._chronicleTracks : (ChronicleTracker.getAll({}) || []);
+        visitRows('chronicle', allChron, function(entry) {
+          if (!entry) return '';
+          return String(entry.id || ('fp:' + _stableFingerprint([
+            Number(entry.startTurn) || 0, entry.title || '', entry.description || '', entry.summary || ''
+          ])));
+        }, function(entry, stable) {
+          if (!entry) return null;
+          return { sourceId: stable, turn: entry.startTurn, text: (entry.title || '') + '·' + (entry.description || entry.summary || '') };
+        });
+      }
+
+      visitRows('foreshadow', gm._foreshadows, function(entry) {
+        if (!entry) return '';
+        return String(entry.id || ('fp:' + _stableFingerprint([
+          Number(entry.turn) || 0, entry.content || '', entry.text || '', entry.type || ''
+        ])));
+      }, function(entry, stable) {
+        if (!entry) return null;
+        return { sourceId: stable, turn: entry.turn, text: entry.content || entry.text || '' };
+      });
+
+      var eventRows = gm._memTables && gm._memTables.eventHistory && gm._memTables.eventHistory.rows;
+      visitRows('eventHistory', eventRows, function(row) {
+        if (!row) return '';
+        return String(row[0] || ('fp:' + _stableFingerprint(row)));
+      }, function(row, stable) {
+        if (!row) return null;
+        var rowTurn = Number.parseInt(row[1], 10);
+        if (!Number.isFinite(rowTurn)) rowTurn = 0;
+        return { sourceId: stable, turn: rowTurn, text: String(row[2] || '') + ' ' + String(row[5] || '') };
+      });
+    }, { world: identity.key });
+
+    _assertLeaseCurrent(lease, 'scan');
+    _perfCount('semantic.newRows', pending.length);
+    if (!pending.length && !cursorChanged) {
+      return { ok: true, added: 0, total: STATE.index.length, visited: sourceRowsVisited, reused: true };
+    }
+
+    var addedItems = [];
+    var batchSize = Number(opts.batchSize);
+    if (!Number.isSafeInteger(batchSize) || batchSize < 16 || batchSize > 64) batchSize = 32;
+    var expectedDimension = STATE.index.length && Array.isArray(STATE.index[0].vec) ? STATE.index[0].vec.length : 0;
+    for (var batchAt = 0; batchAt < pending.length; batchAt += batchSize) {
+      var batch = pending.slice(batchAt, batchAt + batchSize);
+      var vectors = await _embedBatch(batch.map(function(item) { return item.text; }));
+      _assertLeaseCurrent(lease, 'embedding-batch');
+      expectedDimension = _validateEmbeddingBatch(vectors, batch.length, expectedDimension);
+      for (var vectorIndex = 0; vectorIndex < batch.length; vectorIndex++) {
+        var pendingItem = batch[vectorIndex];
+        addedItems.push({
+          id: identity.campaignId + ':' + identity.timelineId + ':' + pendingItem.source + ':' + pendingItem.sourceId,
+          sourceId: pendingItem.sourceId,
+          campaignId: identity.campaignId,
+          timelineId: identity.timelineId,
+          modelVersion: identity.modelVersion,
+          source: pendingItem.source,
+          turn: pendingItem.turn,
+          text: pendingItem.text,
+          vec: vectors[vectorIndex]
+        });
+      }
+    }
+
+    var staged = {
+      cursors: nextCursors,
+      newItems: addedItems,
+      count: STATE.index.length + addedItems.length,
+      lastIndexedTurn: (pending.length || cursorChanged) ? turn : STATE.lastIndexedTurn
+    };
+    await _persistStagedIndex(identity, staged, lease);
+    _assertLeaseCurrent(lease, 'persist-complete');
+    addedItems.forEach(function(item) {
+      STATE.index.push(item);
+      STATE.existingIds.add(item.source + '|' + (item.sourceId || item.id));
+    });
+    STATE.cursors = nextCursors;
+    STATE.lastIndexedTurn = staged.lastIndexedTurn;
+    return { ok: true, added: addedItems.length, total: STATE.index.length, visited: sourceRowsVisited };
+  }
+
   async function buildIndex(opts) {
     opts = opts || {};
+    _perfCount('semantic.idbClearCount', 0);
     if (!STATE.enabled) return { ok: false, reason: 'disabled' };
     if (!await ensureModel()) return { ok: false, reason: 'model not ready: ' + STATE.error };
     if (typeof GM === 'undefined' || !GM) return { ok: false, reason: 'no GM' };
-    // perf round5: 本会话首次索引前·先尝试吃上一会话的持久化索引（同 campaign 才吃）
-    // 不吃则 lastIndexedTurn=0·老存档会全量重嵌一遍（worker 内·不卡主线程但白烧几分钟）
-    if (!STATE._idxLoadTried) {
-      STATE._idxLoadTried = true;
-      try { await loadIndex(); } catch (_li) {}
-    }
-    var turn = (GM.turn || 0);
-    var since = STATE.lastIndexedTurn;
-    var added = 0;
-
-    // shijiHistory 增量
-    if (Array.isArray(GM.shijiHistory)) {
-      var newSj = GM.shijiHistory.filter(function(sh) { return sh && (sh.turn || 0) > since; });
-      for (var i = 0; i < newSj.length; i++) {
-        var sh = newSj[i];
-        var combined = (sh.shilu || sh.shizhengji || sh.zhengwen || '');
-        var sentences = combined.split(/[。！？\n]/).filter(function(s) { return s && s.length > 8; });
-        for (var j = 0; j < sentences.length && j < 30; j++) {
-          var vec = await _embed(sentences[j]);
-          if (vec) {
-            STATE.index.push({
-              id: 'sj_T' + sh.turn + '_' + j,
-              source: 'shiji',
-              turn: sh.turn,
-              text: sentences[j].slice(0, 200),
-              vec: vec
-            });
-            added++;
-          }
-        }
-      }
-    }
-
-    // ChronicleTracker 增量
-    if (typeof ChronicleTracker !== 'undefined' && ChronicleTracker.getAll) {
-      try {
-        var allChron = ChronicleTracker.getAll({}) || [];
-        for (var k = 0; k < allChron.length; k++) {
-          var c = allChron[k];
-          if (!c || (c.startTurn || 0) <= since) continue;
-          var txt = (c.title || '') + '·' + (c.description || c.summary || '');
-          var vec2 = await _embed(txt);
-          if (vec2) {
-            STATE.index.push({
-              id: 'ch_' + (c.id || k),
-              source: 'chronicle',
-              turn: c.startTurn || 0,
-              text: txt.slice(0, 200),
-              vec: vec2
-            });
-            added++;
-          }
-        }
-      } catch(_ce){}
-    }
-
-    // _foreshadows 增量
-    if (Array.isArray(GM._foreshadows)) {
-      for (var f = 0; f < GM._foreshadows.length; f++) {
-        var fs = GM._foreshadows[f];
-        if (!fs || (fs.turn || 0) <= since) continue;
-        var ft = (fs.content || fs.text || '');
-        if (!ft) continue;
-        var vec3 = await _embed(ft);
-        if (vec3) {
-          STATE.index.push({
-            id: 'fs_' + (fs.turn || 0) + '_' + f,
-            source: 'foreshadow',
-            turn: fs.turn || 0,
-            text: ft.slice(0, 200),
-            vec: vec3
-          });
-          added++;
-        }
-      }
-    }
-
-    // 12 表 eventHistory 增量
-    if (GM._memTables && GM._memTables.eventHistory && Array.isArray(GM._memTables.eventHistory.rows)) {
-      for (var e = 0; e < GM._memTables.eventHistory.rows.length; e++) {
-        var row = GM._memTables.eventHistory.rows[e];
-        if (!row) continue;
-        var rTurn = parseInt(row[1], 10) || 0;
-        if (rTurn <= since) continue;
-        var et = (row[2] || '') + ' ' + (row[5] || '');
-        if (!et.trim()) continue;
-        var vec4 = await _embed(et);
-        if (vec4) {
-          STATE.index.push({
-            id: 'eh_' + (row[0] || (rTurn + '_' + e)),
-            source: 'eventHistory',
-            turn: rTurn,
-            text: et.slice(0, 200),
-            vec: vec4
-          });
-          added++;
-        }
-      }
-    }
-
-    STATE.lastIndexedTurn = turn;
-    // perf round5: 有新增才落盘·失败静默（IDB 不可用等）
-    if (added > 0) { try { persistIndex().catch(function () {}); } catch (_pi) {} }
-    return { ok: true, added: added, total: STATE.index.length };
+    var identity = _ensureWorldState();
+    if (!identity.campaignId || !identity.timelineId) return { ok: false, reason: 'world identity unavailable' };
+    var lease = _captureWorldLease(identity);
+    if (_buildFlights[lease.token]) return _buildFlights[lease.token];
+    var flight = _buildIndexForLease(opts, identity, lease);
+    _buildFlights[lease.token] = flight;
+    return flight.finally(function() {
+      if (_buildFlights[lease.token] === flight) delete _buildFlights[lease.token];
+    });
   }
 
   // ────── 检索 ──────
@@ -463,22 +736,57 @@
     opts = opts || {};
     if (!STATE.enabled || !STATE.modelReady) return [];
     if (!query) return [];
+    var identity = _ensureWorldState();
+    var lease = _captureWorldLease(identity);
     var qVec = await _embed(query);
-    if (!qVec) return [];
-    var topK = opts.topK || 6;
-    var threshold = opts.threshold != null ? opts.threshold : STATE.threshold;
-    var scored = [];
-    for (var i = 0; i < STATE.index.length; i++) {
-      var item = STATE.index[i];
-      var sim = _cosineSim(qVec, item.vec);
-      if (sim >= threshold) scored.push({ item: item, sim: sim });
+    if (!qVec || !_isLeaseCurrent(lease)) return [];
+    var topK = Number(opts.topK);
+    if (!Number.isSafeInteger(topK) || topK <= 0 || topK > 100) topK = 6;
+    var threshold = opts.threshold != null ? Number(opts.threshold) : STATE.threshold;
+    if (!Number.isFinite(threshold)) threshold = STATE.threshold;
+    function worse(left, right) {
+      return left.sim < right.sim || (left.sim === right.sim && left.order > right.order);
     }
-    scored.sort(function(a, b) { return b.sim - a.sim; });
-    return scored.slice(0, topK).map(function(s) {
+    function heapPush(heap, entry) {
+      heap.push(entry);
+      var at = heap.length - 1;
+      while (at > 0) {
+        var parent = Math.floor((at - 1) / 2);
+        if (!worse(heap[at], heap[parent])) break;
+        var swap = heap[parent]; heap[parent] = heap[at]; heap[at] = swap; at = parent;
+      }
+    }
+    function heapReplaceWorst(heap, entry) {
+      heap[0] = entry;
+      var at = 0;
+      while (true) {
+        var left = at * 2 + 1;
+        var right = left + 1;
+        var worst = at;
+        if (left < heap.length && worse(heap[left], heap[worst])) worst = left;
+        if (right < heap.length && worse(heap[right], heap[worst])) worst = right;
+        if (worst === at) break;
+        var swap = heap[worst]; heap[worst] = heap[at]; heap[at] = swap; at = worst;
+      }
+    }
+    var scored = await _perfWithSpan('semantic.search', function() {
+      var heap = [];
+      for (var i = 0; i < STATE.index.length; i++) {
+        var item = STATE.index[i];
+        var sim = _cosineSim(qVec, item.vec);
+        _perfCount('semantic.vectorComparisons', 1);
+        if (sim < threshold) continue;
+        var entry = { item: item, sim: sim, order: i };
+        if (heap.length < topK) heapPush(heap, entry);
+        else if (worse(heap[0], entry)) heapReplaceWorst(heap, entry);
+      }
+      return heap.sort(function(a, b) { return (b.sim - a.sim) || (a.order - b.order); });
+    }, { candidates: STATE.index.length, topK: topK });
+    return scored.map(function(s) {
       return {
         source: 'vector',
         sub: s.item.source,
-        id: s.item.id,                 // S6(2026-06-03): 保留 origin 稳定 id，供向量 hit 进 dedup/lineage 治理
+        id: s.item.sourceId || s.item.id,
         turn: s.item.turn,
         text: s.item.text,
         sim: Math.round(s.sim * 100) / 100
@@ -498,7 +806,13 @@
     EndTurnHooks.register('after', function() {
       if (!STATE.enabled || !STATE.modelReady) return;
       // 异步索引·不阻塞
-      buildIndex().catch(function(e){ /* 静默 */ });
+      buildIndex().catch(function(error){
+        if (error && error.code === 'semantic_world_changed') return;
+        STATE.error = String(error && (error.message || error) || 'semantic index failure');
+        if (global.TM && global.TM.errors && typeof global.TM.errors.capture === 'function') {
+          global.TM.errors.capture(error, 'SemanticRecall.autoIndex');
+        } else if (global.console && console.warn) console.warn('[SemanticRecall] auto index failed:', error);
+      });
     }, 'SemanticRecall.autoIndex');
     return true;
   }
@@ -529,61 +843,190 @@
     if (_idxDbPromise) return _idxDbPromise;
     _idxDbPromise = new Promise(function(resolve, reject) {
       if (typeof indexedDB === 'undefined') return reject(new Error('IndexedDB 不可用'));
-      var req = indexedDB.open('tianming_semantic_idx', 1);
+      var req = indexedDB.open('tianming_semantic_idx', 2);
       req.onupgradeneeded = function(e) {
         var db = e.target.result;
-        if (!db.objectStoreNames.contains('idx')) db.createObjectStore('idx', { keyPath: 'id' });
+        var store;
+        if (!db.objectStoreNames.contains('idx')) store = db.createObjectStore('idx', { keyPath: 'id' });
+        else store = e.target.transaction.objectStore('idx');
+        try {
+          if (!store.indexNames || !store.indexNames.contains('worldModel')) {
+            store.createIndex('worldModel', ['campaignId', 'timelineId', 'modelVersion'], { unique: false });
+          }
+        } catch (indexError) {
+          STATE.error = 'semantic index schema upgrade failed: ' + (indexError.message || String(indexError));
+          throw indexError;
+        }
       };
       req.onsuccess = function(e) { resolve(e.target.result); };
       req.onerror = function(e) { reject(e.target.error); };
     });
     return _idxDbPromise;
   }
-  // perf round5 (2026-06-10): 持久化按 campaign(GM._runId) 隔离·防跨存档索引污染
-  // GM._runId 与 keju v7.1·D5 同一字段同一惯用法·懒生成后随存档持久
-  function _campaignId() {
-    try {
-      if (typeof GM !== 'undefined' && GM) {
-        if (!GM._runId) GM._runId = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-        return GM._runId;
-      }
-    } catch (_) {}
-    return '';
+  function _semanticMetaId(identity) {
+    return '__meta__:' + encodeURIComponent(identity.campaignId) + ':'
+      + encodeURIComponent(identity.timelineId) + ':' + encodeURIComponent(identity.modelVersion);
   }
-  function persistIndex() {
-    var campaign = _campaignId();
-    return _openIdxDB().then(function(db) {
-      return new Promise(function(resolve) {
+
+  function _persistStagedIndex(identity, staged, lease) {
+    staged = staged || {};
+    var newItems = Array.isArray(staged.newItems) ? staged.newItems : [];
+    _assertLeaseCurrent(lease, 'persist-open');
+    return _perfWithSpan('semantic.persist', function() { return _openIdxDB().then(function(db) {
+      _assertLeaseCurrent(lease, 'persist-transaction');
+      return new Promise(function(resolve, reject) {
         var tx = db.transaction('idx', 'readwrite');
         var s = tx.objectStore('idx');
-        s.clear();
-        s.put({ id: '__meta__', campaign: campaign, savedAt: Date.now(), count: STATE.index.length });
-        STATE.index.forEach(function(it) { s.put(it); });
-        tx.oncomplete = function(){ resolve({ ok: true, count: STATE.index.length }); };
+        var meta = {
+          id: _semanticMetaId(identity),
+          campaignId: identity.campaignId,
+          timelineId: identity.timelineId,
+          modelVersion: identity.modelVersion,
+          savedAt: Date.now(),
+          count: Number(staged.count) || 0,
+          lastIndexedTurn: Number(staged.lastIndexedTurn) || 0,
+          cursors: _cloneCursors(staged.cursors)
+        };
+        try {
+          s.put(meta);
+          _perfCount('semantic.idbPutCount', 1);
+          newItems.forEach(function(item) {
+            s.put(item);
+            _perfCount('semantic.idbPutCount', 1);
+          });
+        } catch (putError) {
+          try { if (typeof tx.abort === 'function') tx.abort(); }
+          catch (abortError) {
+            if (global.TM && global.TM.errors && typeof global.TM.errors.capture === 'function') {
+              global.TM.errors.capture(abortError, 'SemanticRecall.persistAbort');
+            }
+          }
+          reject(putError);
+          return;
+        }
+        tx.oncomplete = function(){ resolve({ ok: true, count: meta.count }); };
+        tx.onerror = function(e) { reject((e.target && e.target.error) || tx.error || new Error('semantic index persist failed')); };
+        tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('semantic index persist aborted')); };
+      });
+    }); }, { added: newItems.length, world: identity.key });
+  }
+
+  // Compatibility entry point for diagnostics/manual persistence. Production
+  // buildIndex uses _persistStagedIndex and never mutates STATE before commit.
+  function persistIndex(newItems) {
+    var identity = _ensureWorldState();
+    var lease = _captureWorldLease(identity);
+    newItems = Array.isArray(newItems) ? newItems : [];
+    return _persistStagedIndex(identity, {
+      newItems: newItems,
+      count: STATE.index.length,
+      lastIndexedTurn: STATE.lastIndexedTurn,
+      cursors: _cloneCursors(STATE.cursors)
+    }, lease);
+  }
+
+  function _loadIndexData(identity, lease) {
+    _assertLeaseCurrent(lease, 'load-open');
+    return _openIdxDB().then(function(db) {
+      _assertLeaseCurrent(lease, 'load-query');
+      return new Promise(function(resolve, reject) {
+        var tx = db.transaction('idx', 'readonly');
+        var store = tx.objectStore('idx');
+        var req;
+        var loadedResult = null;
+        var requestDone = false;
+        var transactionDone = false;
+        var settled = false;
+        function finishIfReady() {
+          if (!settled && requestDone && transactionDone) {
+            settled = true;
+            resolve(loadedResult);
+          }
+        }
+        function fail(error) {
+          if (settled) return;
+          settled = true;
+          reject(error);
+        }
+        try {
+          var index = typeof store.index === 'function' ? store.index('worldModel') : null;
+          req = index ? index.getAll([identity.campaignId, identity.timelineId, identity.modelVersion]) : store.getAll();
+        } catch (queryError) {
+          req = store.getAll();
+        }
+        req.onsuccess = function(e) {
+          try { _assertLeaseCurrent(lease, 'load-result'); }
+          catch (leaseError) { fail(leaseError); return; }
+          var rows = e.target.result || [];
+          var metaId = _semanticMetaId(identity);
+          var meta = null, items = [], legacyMeta = null;
+          rows.forEach(function(row) {
+            if (!row) return;
+            if (row.id === metaId) meta = row;
+            else if (row.id === '__meta__') legacyMeta = row;
+            else if (row.campaignId === identity.campaignId
+                && row.timelineId === identity.timelineId
+                && row.modelVersion === identity.modelVersion) items.push(row);
+          });
+          if (!meta) {
+            loadedResult = {
+              ok: false,
+              reason: legacyMeta ? 'legacy-index-rebuild' : 'world index missing',
+              items: [],
+              cursors: Object.create(null),
+              lastIndexedTurn: 0
+            };
+            requestDone = true;
+            finishIfReady();
+            return;
+          }
+          loadedResult = {
+            ok: true,
+            items: items,
+            cursors: _cloneCursors(meta.cursors),
+            lastIndexedTurn: Number(meta.lastIndexedTurn) || 0
+          };
+          requestDone = true;
+          finishIfReady();
+        };
+        req.onerror = function(e) { fail(e.target.error || new Error('semantic index load failed')); };
+        tx.oncomplete = function() {
+          transactionDone = true;
+          finishIfReady();
+        };
+        tx.onerror = function(e) { fail((e.target && e.target.error) || tx.error || new Error('semantic index load failed')); };
+        tx.onabort = function(e) { fail((e.target && e.target.error) || tx.error || new Error('semantic index load aborted')); };
       });
     });
   }
-  function loadIndex() {
-    var campaign = _campaignId();
-    return _openIdxDB().then(function(db) {
-      return new Promise(function(resolve) {
-        var tx = db.transaction('idx', 'readonly');
-        tx.objectStore('idx').getAll().onsuccess = function(e) {
-          var rows = e.target.result || [];
-          var meta = null, items = [];
-          rows.forEach(function(r) { if (r && r.id === '__meta__') meta = r; else if (r) items.push(r); });
-          // 无 meta（旧库）或 campaign 不匹配（别的存档）→ 不吃
-          if (!meta || !campaign || meta.campaign !== campaign) {
-            resolve({ ok: false, reason: 'campaign mismatch', count: 0 });
-            return;
-          }
-          STATE.index = items;
-          if (STATE.index.length > 0) {
-            STATE.lastIndexedTurn = STATE.index.reduce(function(m, it) { return Math.max(m, it.turn || 0); }, 0);
-          }
-          resolve({ ok: true, count: STATE.index.length });
-        };
-      });
+
+  function _applyLoadedIndex(loaded, lease) {
+    _assertLeaseCurrent(lease, 'load-apply');
+    var items = Array.isArray(loaded && loaded.items) ? loaded.items : [];
+    var existingIds = new Set();
+    items.forEach(function(item) {
+      _perfCount('semantic.existingIdVisits', 1);
+      if (!item || !item.source) return;
+      existingIds.add(item.source + '|' + (item.sourceId || item.id));
+    });
+    STATE.index = items;
+    STATE.existingIds = existingIds;
+    STATE.cursors = _cloneCursors(loaded && loaded.cursors);
+    STATE.lastIndexedTurn = Number(loaded && loaded.lastIndexedTurn) || 0;
+    STATE._idxLoadTried = true;
+    return { ok: !!(loaded && loaded.ok), reason: loaded && loaded.reason || '', count: items.length };
+  }
+
+  function loadIndex(identity, lease) {
+    identity = identity || _ensureWorldState();
+    lease = lease || _captureWorldLease(identity);
+    if (_loadFlights[lease.token]) return _loadFlights[lease.token];
+    var flight = _loadIndexData(identity, lease).then(function(loaded) {
+      return _applyLoadedIndex(loaded, lease);
+    });
+    _loadFlights[lease.token] = flight;
+    return flight.finally(function() {
+      if (_loadFlights[lease.token] === flight) delete _loadFlights[lease.token];
     });
   }
 

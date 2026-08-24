@@ -1001,6 +1001,23 @@ function uid(){
 }
 function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
 
+/**
+ * 读取非负整数年龄；0 是合法年龄。数值字符串兼容旧剧本，非法值使用显式 fallback。
+ * @param {Object|number|string|null|undefined} subject
+ * @param {number} fallback
+ * @returns {number|null}
+ */
+function getValidAge(subject, fallback) {
+  var raw = subject && typeof subject === 'object' ? subject.age : subject;
+  var n = typeof raw === 'number' ? raw
+    : (typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN);
+  var allowNullFallback = fallback === null;
+  var fb = Number(fallback);
+  if (!Number.isFinite(fb) || fb < 0) fb = 0;
+  if (!Number.isFinite(n) || n < 0) return allowNullFallback ? null : Math.floor(fb);
+  return Math.floor(n);
+}
+
 // Character loyalty must not change without an attributable gameplay reason.
 (function(global){
   if (!global || global.adjustCharacterLoyalty) return;

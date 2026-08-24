@@ -5,6 +5,61 @@
   root.TM = root.TM || {};
 
   var ns = root.TM.MemoryRetrieval = root.TM.MemoryRetrieval || {};
+  var _worldIndexCache = typeof WeakMap === 'function' ? new WeakMap() : null;
+  var _fallbackWorldIndex = [];
+
+  function _perfCount(name, delta) {
+    var perf = root.TM && root.TM.perf;
+    if (perf && typeof perf.count === 'function') perf.count(name, delta == null ? 1 : delta);
+  }
+
+  function _perfSpan(name, fn, metadata) {
+    var perf = root.TM && root.TM.perf;
+    if (perf && typeof perf.withSpan === 'function') return perf.withSpan(name, fn, metadata);
+    return fn();
+  }
+
+  function _worldIndexEntry(GM) {
+    if (!GM || typeof GM !== 'object') return null;
+    if (_worldIndexCache) {
+      var cached = _worldIndexCache.get(GM);
+      if (!cached) {
+        cached = {};
+        _worldIndexCache.set(GM, cached);
+      }
+      return cached;
+    }
+    for (var i = 0; i < _fallbackWorldIndex.length; i++) {
+      if (_fallbackWorldIndex[i].world === GM) return _fallbackWorldIndex[i].entry;
+    }
+    var entry = {};
+    _fallbackWorldIndex.push({ world: GM, entry: entry });
+    if (_fallbackWorldIndex.length > 8) _fallbackWorldIndex.shift();
+    return entry;
+  }
+
+  function _memoryRevision(GM, domain) {
+    if (!GM || typeof GM !== 'object') return 0;
+    var field = domain === 'edges' ? '_memoryEdgeRevision' : '_memoryRevision';
+    var value = Number(GM[field]);
+    return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+  }
+
+  function bumpMemoryRevision(GM, domain) {
+    if (!GM || typeof GM !== 'object') return 0;
+    var field = domain === 'edges' ? '_memoryEdgeRevision' : '_memoryRevision';
+    var next = _memoryRevision(GM, domain) + 1;
+    GM[field] = next; // arch-ok MemoryRetrieval owns the world-scoped compilation revision ledger
+    invalidateCompilationIndex(GM);
+    return next;
+  }
+
+  function invalidateCompilationIndex(GM) {
+    if (GM && _worldIndexCache) _worldIndexCache.delete(GM);
+    if (GM && !_worldIndexCache) {
+      _fallbackWorldIndex = _fallbackWorldIndex.filter(function(row) { return row.world !== GM; });
+    }
+  }
 
   var SOURCE_PRIORITY = {
     hard_state: 1.0,
@@ -672,7 +727,10 @@
     if (!ME || typeof ME.collect !== 'function') return [];
     var edges = allRelationEdges(GM).filter(graphExpansionAllowed);
     if (!edges.length) return [];
-    var envelopes = ME.collect(GM, { turn: opts.turn, sc1q: opts.sc1q });
+    var envelopes = _perfSpan('memory.collect', function() {
+      return ME.collect(GM, { turn: opts.turn, sc1q: opts.sc1q });
+    }, { reason: 'graph-expand' });
+    _perfCount('memory.envelopesProjected', envelopes.length);
     var envRows = envelopes.map(function(env) {
       return { env: env, nodes: envelopeNodes(env) };
     });
@@ -713,7 +771,10 @@
     var ME = root.TM && root.TM.MemoryEnvelope;
     if (!ME || typeof ME.collect !== 'function') return [];
     var out = [];
-    var envelopes = ME.collect(GM, { turn: opts.turn, sc1q: opts.sc1q });
+    var envelopes = _perfSpan('memory.collect', function() {
+      return ME.collect(GM, { turn: opts.turn, sc1q: opts.sc1q });
+    }, { reason: 'priority-hits' });
+    _perfCount('memory.envelopesProjected', envelopes.length);
     envelopes.forEach(function(env) {
       var source = envelopeSource(env);
       if (source !== 'hard_state' &&
@@ -969,15 +1030,19 @@
     return nodes.map(normalizeNode).filter(Boolean);
   }
 
-  function hitMatchesNode(hit, node) {
+  function _nodesMatchTarget(nodes, node) {
     var target = normalizeNode(node);
     if (!target) return false;
-    return hitNodes(hit).some(function(n) {
+    return arr(nodes).some(function(n) {
       return n === target || (target.length >= 4 && n.indexOf(target) >= 0);
     });
   }
 
-  function allRelationEdges(GM) {
+  function hitMatchesNode(hit, node) {
+    return _nodesMatchTarget(hitNodes(hit), node);
+  }
+
+  function _collectRelationEdges(GM) {
     var edges = [];
     if (!GM) return edges;
     if (Array.isArray(GM._memEdges)) {
@@ -993,6 +1058,219 @@
       });
     }
     return edges;
+  }
+
+  function _edgeSignature(GM) {
+    return [
+      _memoryRevision(GM, 'edges'),
+      arr(GM && GM._memEdges).length,
+      arr(GM && GM._edictRelations).length
+    ].join(':');
+  }
+
+  function _relationIndex(GM) {
+    if (!GM || typeof GM !== 'object') return { relationEdges: [], signature: 'none' };
+    var entry = _worldIndexEntry(GM);
+    var signature = _edgeSignature(GM);
+    if (entry.relation && entry.relation.signature === signature) return entry.relation;
+    entry.relation = _perfSpan('memory.edgeIndex', function() {
+      _perfCount('memory.edgeTableBuilds', 1);
+      return {
+        campaignId: String(GM._campaignId || GM.campaignId || GM._runId || ''),
+        timelineId: String(GM._timelineId || GM.timelineId || ''),
+        turn: Number(GM.turn || 0),
+        memoryRevision: _memoryRevision(GM, 'memory'),
+        edgeRevision: _memoryRevision(GM, 'edges'),
+        signature: signature,
+        relationEdges: _collectRelationEdges(GM)
+      };
+    }, { edgeRevision: _memoryRevision(GM, 'edges') });
+    return entry.relation;
+  }
+
+  function allRelationEdges(GM) {
+    return _relationIndex(GM).relationEdges;
+  }
+
+  function _eligibleSourcesByThreshold(matches, destinations) {
+    var thresholds = {};
+    destinations.forEach(function(row) {
+      thresholds[String(row.priority)] = { threshold: row.priority, first: null, second: null };
+    });
+    Object.keys(thresholds).forEach(function(key) {
+      var bucket = thresholds[key];
+      for (var i = 0; i < matches.length; i++) {
+        _perfCount('memory.edgeCandidateChecks', 1);
+        if (matches[i].priority < bucket.threshold) continue;
+        if (!bucket.first) bucket.first = matches[i];
+        else {
+          bucket.second = matches[i];
+          break;
+        }
+      }
+    });
+    return thresholds;
+  }
+
+  function _buildHitRelationIndex(hits, opts) {
+    opts = opts || {};
+    var worldEntry = opts.GM ? _worldIndexEntry(opts.GM) : null;
+    if (worldEntry && !worldEntry.nodeCache && typeof WeakMap === 'function') worldEntry.nodeCache = new WeakMap();
+    var nodeRevision = [
+      _memoryRevision(opts.GM, 'memory'),
+      _memoryRevision(opts.GM, 'edges'),
+      Number(opts.turn || (opts.GM && opts.GM.turn) || 0)
+    ].join(':');
+    var rows = arr(hits).map(function(hit, index) {
+      var signature = [
+        nodeRevision,
+        hit && hit.id,
+        hit && hit.key,
+        hit && hit.uuid,
+        hit && hit.name,
+        hit && hit.title,
+        hit && hit.edictId,
+        hit && hit.sourceId,
+        hit && hit.type,
+        hit && hit.kind,
+        hit && hit.factStatus,
+        textOf(hit).slice(0, 120),
+        arr(hit && hit.sourceRefs).length
+      ].join('|');
+      var cachedNodes = worldEntry && worldEntry.nodeCache && hit && typeof hit === 'object'
+        ? worldEntry.nodeCache.get(hit)
+        : null;
+      var nodes;
+      if (cachedNodes && cachedNodes.signature === signature) {
+        nodes = cachedNodes.nodes;
+      } else {
+        _perfCount('memory.hitNodeBuilds', 1);
+        nodes = hitNodes(hit);
+        if (worldEntry && worldEntry.nodeCache && hit && typeof hit === 'object') {
+          worldEntry.nodeCache.set(hit, { signature: signature, nodes: nodes });
+        }
+      }
+      return {
+        hit: hit,
+        index: index,
+        nodes: nodes,
+        priority: sourcePriorityOf(hit)
+      };
+    });
+    var relation = _relationIndex(opts.GM);
+    var hitsById = Object.create(null);
+    var hitsByNode = Object.create(null);
+    var rowsByNode = Object.create(null);
+    var rowsByGram = Object.create(null);
+    rows.forEach(function(row) {
+      var hitId = String(row.hit && (row.hit.id || row.hit.key || row.hit.uuid || row.hit.sourceId) || ('hit-' + row.index));
+      hitsById[hitId] = row.hit;
+      row.nodes.forEach(function(node) {
+        if (!hitsByNode[node]) hitsByNode[node] = [];
+        hitsByNode[node].push(row.hit);
+        if (!rowsByNode[node]) rowsByNode[node] = [];
+        rowsByNode[node].push(row);
+      });
+    });
+    // Only unresolved legacy/fuzzy targets need a substring index. Stable
+    // exact edges use rowsByNode and allocate no gram buckets at all.
+    var fuzzyTargets = Object.create(null);
+    relation.relationEdges.forEach(function(edge) {
+      if (!edge) return;
+      var type = String(edge.type || '').toLowerCase();
+      if (type !== 'supersedes' && type !== 'contradicts') return;
+      [edge.dst].concat(type === 'contradicts' ? [edge.src] : []).forEach(function(value) {
+        var target = normalizeNode(value);
+        if (target.length >= 4 && !rowsByNode[target]) fuzzyTargets[target] = true;
+      });
+    });
+    var wantedGrams = Object.create(null);
+    Object.keys(fuzzyTargets).forEach(function(target) {
+      for (var at = 0; at <= target.length - 4; at++) wantedGrams[target.slice(at, at + 4)] = true;
+    });
+    if (Object.keys(wantedGrams).length) {
+      rows.forEach(function(row) {
+        var rowGrams = Object.create(null);
+        row.nodes.forEach(function(node) {
+          if (node.length < 4) return;
+          for (var at = 0; at <= node.length - 4; at++) {
+            var gram = node.slice(at, at + 4);
+            if (!wantedGrams[gram] || rowGrams[gram]) continue;
+            rowGrams[gram] = true;
+            if (!rowsByGram[gram]) rowsByGram[gram] = [];
+            rowsByGram[gram].push(row);
+          }
+        });
+      });
+    }
+    function rowsMatchingTarget(targetValue) {
+      var target = normalizeNode(targetValue);
+      if (!target) return [];
+      var candidates = [];
+      var seenRows = Object.create(null);
+      function addCandidates(list) {
+        arr(list).forEach(function(row) {
+          if (!row || seenRows[row.index]) return;
+          seenRows[row.index] = true;
+          candidates.push(row);
+        });
+      }
+      addCandidates(rowsByNode[target]);
+      // Stable/exact node identities are authoritative. Substring matching is
+      // only a compatibility fallback for legacy fuzzy relations that have no
+      // exact destination in the current hit set.
+      if (!candidates.length && target.length >= 4) {
+        var smallestBucket = null;
+        for (var gramAt = 0; gramAt <= target.length - 4; gramAt++) {
+          var bucket = rowsByGram[target.slice(gramAt, gramAt + 4)];
+          if (bucket && (!smallestBucket || bucket.length < smallestBucket.length)) smallestBucket = bucket;
+        }
+        addCandidates(smallestBucket);
+      }
+      candidates.sort(function(left, right) { return left.index - right.index; });
+      return candidates.filter(function(row) {
+        _perfCount('memory.edgeCandidateChecks', 1);
+        return _nodesMatchTarget(row.nodes, target);
+      });
+    }
+    var supersededByHit = [];
+    var contradictionByHit = [];
+    relation.relationEdges.forEach(function(edge) {
+      if (!edge) return;
+      var type = String(edge.type || '').toLowerCase();
+      if (type !== 'supersedes' && type !== 'contradicts') return;
+      var destinations = rowsMatchingTarget(edge.dst);
+      var sources = type === 'contradicts' ? rowsMatchingTarget(edge.src) : [];
+      if (type === 'supersedes') {
+        destinations.forEach(function(row) {
+          if (!supersededByHit[row.index]) supersededByHit[row.index] = edge;
+        });
+        return;
+      }
+      var eligibleByThreshold = _eligibleSourcesByThreshold(sources, destinations);
+      destinations.forEach(function(row) {
+        if (contradictionByHit[row.index]) return;
+        var eligible = eligibleByThreshold[String(row.priority)] || {};
+        var source = eligible.first && eligible.first.hit !== row.hit
+          ? eligible.first
+          : eligible.second;
+        if (source) contradictionByHit[row.index] = { edge: edge, sourceHit: source.hit };
+      });
+    });
+    return {
+      campaignId: relation.campaignId,
+      timelineId: relation.timelineId,
+      turn: Number(opts.turn || relation.turn || 0),
+      memoryRevision: relation.memoryRevision,
+      edgeRevision: relation.edgeRevision,
+      envelopes: arr(opts.envelopes),
+      hitsById: hitsById,
+      normalizedNodesByHitId: rows,
+      hitsByNode: hitsByNode,
+      supersededByDestination: supersededByHit,
+      contradictionsByDestination: contradictionByHit,
+      relationEdges: relation.relationEdges
+    };
   }
 
   function supersededEdgeForHit(hit, opts) {
@@ -1058,50 +1336,54 @@
   }
 
   function rankHitsDetailed(hits, opts) {
-    opts = opts || {};
-    var input = Array.isArray(hits) ? hits : [];
-    var suppressed = [];
-    var visible = [];
-    input.forEach(function(rawHit) {
-      var hit = applyMemoryControls(rawHit, opts);
-      var reason = suppressionReason(hit, opts);
-      if (reason) suppressed.push(compactSuppressed(hit, reason));
-      else visible.push(hit);
-    });
-    var deduped = dedupeHits(visible);
-    var kept = [];
-    deduped.forEach(function(hit) {
-      var edge = supersededEdgeForHit(hit, opts);
-      if (edge) {
-        if (opts.includeSuperseded === true) {
-          var stale = cloneHit(hit);
-          stale.staleStatus = 'superseded';
-          stale.supersededBy = edge.src;
-          stale.edgeReason = edge.reason || '';
-          kept.push(stale);
+    return _perfSpan('memory.rank', function() {
+      opts = opts || {};
+      var input = Array.isArray(hits) ? hits : [];
+      var suppressed = [];
+      var visible = [];
+      input.forEach(function(rawHit) {
+        var hit = applyMemoryControls(rawHit, opts);
+        var reason = suppressionReason(hit, opts);
+        if (reason) suppressed.push(compactSuppressed(hit, reason));
+        else visible.push(hit);
+      });
+      var deduped = dedupeHits(visible);
+      var relationIndex = _buildHitRelationIndex(deduped, opts);
+      var kept = [];
+      deduped.forEach(function(hit, index) {
+        var edge = relationIndex.supersededByDestination[index] || null;
+        if (edge) {
+          if (opts.includeSuperseded === true) {
+            var stale = cloneHit(hit);
+            stale.staleStatus = 'superseded';
+            stale.supersededBy = edge.src;
+            stale.edgeReason = edge.reason || '';
+            kept.push(stale);
+          } else {
+            suppressed.push(compactSuppressed(hit, 'superseded', {
+              by: edge.src,
+              edgeReason: edge.reason
+            }));
+          }
         } else {
-          suppressed.push(compactSuppressed(hit, 'superseded', {
-            by: edge.src,
-            edgeReason: edge.reason
-          }));
+          var conflict = relationIndex.contradictionsByDestination[index] || null;
+          if (conflict) {
+            suppressed.push(compactSuppressed(hit, 'contradicted', {
+              by: conflict.edge.src,
+              edgeReason: conflict.edge.reason
+            }));
+          } else {
+            kept.push(hit);
+          }
         }
-      } else {
-        var conflict = contradictionEdgeForHit(hit, deduped, opts);
-        if (conflict) {
-          suppressed.push(compactSuppressed(hit, 'contradicted', {
-            by: conflict.edge.src,
-            edgeReason: conflict.edge.reason
-          }));
-        } else {
-          kept.push(hit);
-        }
-      }
-    });
-    return {
-      inputCount: input.length,
-      ranked: scoreAndSortHits(kept, opts),
-      suppressed: suppressed
-    };
+      });
+      return {
+        inputCount: input.length,
+        ranked: scoreAndSortHits(kept, opts),
+        suppressed: suppressed,
+        compilationIndex: relationIndex
+      };
+    }, { turn: opts && opts.turn });
   }
 
   function rankHits(hits, opts) {
@@ -1351,6 +1633,10 @@
   ns.scoreHit = scoreHit;
   ns.rankHitsDetailed = rankHitsDetailed;
   ns.rankHits = rankHits;
+  ns.bumpRevision = bumpMemoryRevision;
+  ns.invalidateCompilationIndex = invalidateCompilationIndex;
+  ns.relationIndex = _relationIndex;
+  ns.buildCompilationIndex = _buildHitRelationIndex;
   ns.packForInjection = packForInjection;
   ns.turnFocusTerms = turnFocusTerms;
   ns.applyFocusRelevance = applyFocusRelevance;

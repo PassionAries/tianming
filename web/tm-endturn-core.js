@@ -91,6 +91,8 @@ async function _tmRunEndTurnDeterministicTail() {
 
 async function _runPreSubmitPartyClassCalibration() {
   try {
+    var _hujiFirstPass = null;
+    var _hujiConsumerResult = null;
     var _pcSchedulerRan = false;
     try {
       if (typeof window !== 'undefined' && window.TM && TM.PartyClassActionScheduler && typeof TM.PartyClassActionScheduler.scheduleBeforeSubmit === 'function') {
@@ -236,7 +238,7 @@ async function _runPreSubmitPartyClassCalibration() {
     }
     try {
       if (typeof window !== 'undefined' && window.TM && TM.HujiRuntimeBridge && typeof TM.HujiRuntimeBridge.maintain === 'function') {
-        TM.HujiRuntimeBridge.maintain(GM, {
+        _hujiFirstPass = TM.HujiRuntimeBridge.maintain(GM, {
           source: 'pre-submit-huji-runtime-bridge',
           turn: GM && GM.turn,
           includePlayerSignals: true
@@ -259,7 +261,7 @@ async function _runPreSubmitPartyClassCalibration() {
     }
     try {
       if (typeof window !== 'undefined' && window.TM && TM.MinxinHardLinkConsumers && typeof TM.MinxinHardLinkConsumers.consume === 'function') {
-        TM.MinxinHardLinkConsumers.consume(GM, {
+        _hujiConsumerResult = TM.MinxinHardLinkConsumers.consume(GM, {
           source: 'pre-submit-minxin-hard-link-consumers',
           turn: GM && GM.turn
         });
@@ -270,10 +272,17 @@ async function _runPreSubmitPartyClassCalibration() {
     }
     try {
       if (typeof window !== 'undefined' && window.TM && TM.HujiRuntimeBridge && typeof TM.HujiRuntimeBridge.maintain === 'function') {
-        TM.HujiRuntimeBridge.maintain(GM, {
-          source: 'pre-submit-huji-runtime-bridge-after-hard-links',
-          turn: GM && GM.turn
-        });
+        if (typeof TM.HujiRuntimeBridge.maintainAfterHardLinks === 'function') {
+          TM.HujiRuntimeBridge.maintainAfterHardLinks(GM, _hujiFirstPass, _hujiConsumerResult, {
+            source: 'pre-submit-huji-runtime-bridge-after-hard-links',
+            turn: GM && GM.turn
+          });
+        } else {
+          TM.HujiRuntimeBridge.maintain(GM, {
+            source: 'pre-submit-huji-runtime-bridge-after-hard-links',
+            turn: GM && GM.turn
+          });
+        }
       }
     } catch(_hujiRuntimeBridgeAfterE) {
       try { console.warn('[endTurn] post-consumer huji runtime bridge failed', _hujiRuntimeBridgeAfterE); } catch(_){}
@@ -403,11 +412,26 @@ function _tmRestoreEndTurnObject(target, snapshot) {
 }
 
 function _tmCaptureEndTurnTransaction() {
+  var captureSpan = (typeof TM !== 'undefined' && TM.perf && typeof TM.perf.beginSpan === 'function')
+    ? TM.perf.beginSpan('endturn.transactionCapture') : null;
   var gmRef = GM, pRef = P;
   var transactionId = '';
   try { transactionId = 'turn-' + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2))); }
   catch (_) { transactionId = 'turn-' + Date.now() + '-' + Math.random().toString(16).slice(2); }
-  return {
+  var captureSession = {
+    transactionId: transactionId,
+    campaignId: gmRef && gmRef._campaignId || '',
+    timelineId: gmRef && gmRef._timelineId || '',
+    clickTurn: gmRef && gmRef.turn,
+    rollbackCapture: null,
+    preEndturnState: null,
+    finalCanonicalState: null,
+    preEndturnPayload: null,
+    finalPayload: null,
+    committed: false,
+    rolledBack: false
+  };
+  var transaction = {
     gmRef: gmRef,
     pRef: pRef,
     loadGen: (typeof window !== 'undefined' && window._tmLoadGen) || 0,
@@ -417,9 +441,16 @@ function _tmCaptureEndTurnTransaction() {
     transactionId: transactionId,
     gm: _tmCaptureEndTurnObject(gmRef, ['_postTurnJobs', '_postTurnDetachedJobs', '_indices']),
     p: _tmCaptureEndTurnObject(pRef, ['scenario', '_indices']),
+    captureSession: captureSession,
     committed: false,
     rolledBack: false
   };
+  captureSession.rollbackCapture = { gm: transaction.gm, p: transaction.p };
+  if (typeof TM !== 'undefined' && TM.perf && typeof TM.perf.count === 'function') {
+    TM.perf.count('world.rollbackClone.count', 1);
+  }
+  if (captureSpan && TM.perf && typeof TM.perf.endSpan === 'function') TM.perf.endSpan(captureSpan, { ok: true });
+  return transaction;
 }
 
 function _tmEndTurnTransactionCurrent(txn) {
@@ -438,6 +469,7 @@ function _tmMaybeStageTurnResult(html, idx) {
 function _tmCommitEndTurnTransaction(txn) {
   if (!_tmEndTurnTransactionCurrent(txn)) return false;
   txn.committed = true;
+  if (txn.captureSession) txn.captureSession.committed = true;
   GM._endTurnCommitPending = false; // arch-ok end-turn transaction owns its commit barrier
   var pendingResult = GM._pendingCommittedTurnResult;
   try { delete GM._pendingCommittedTurnResult; } catch (_) {} // arch-ok end-turn transaction owns its staged result
@@ -445,26 +477,200 @@ function _tmCommitEndTurnTransaction(txn) {
   return true;
 }
 
+function _tmReportEndTurnBoundaryError(error, label) {
+  if (typeof _tmReportDesktopAutoSaveBoundaryError === 'function') {
+    return _tmReportDesktopAutoSaveBoundaryError(error, 'endTurn · ' + String(label || 'boundary'));
+  }
+  var normalized = (error && (typeof error === 'object' || typeof error === 'function')) ? error : new Error(String(error));
+  if (typeof console !== 'undefined' && console.warn) console.warn('[endTurn] ' + String(label || 'boundary') + ':', normalized);
+  return normalized;
+}
+
+function _tmRequestEndTurnDesktopAutoSaveFlush(reason) {
+  if (typeof _tmRequestDeferredDesktopAutoSaveFlush === 'function') {
+    return _tmRequestDeferredDesktopAutoSaveFlush(reason);
+  }
+  if (typeof _tmFlushDeferredDesktopAutoSave !== 'function') return null;
+  var pending;
+  try {
+    pending = _tmFlushDeferredDesktopAutoSave(reason);
+  } catch (error) {
+    _tmReportEndTurnBoundaryError(error, 'deferred autosave flush · ' + String(reason || 'unknown'));
+    return null;
+  }
+  if (pending && typeof pending.catch === 'function') {
+    pending.catch(function(error) {
+      _tmReportEndTurnBoundaryError(error, 'deferred autosave flush · ' + String(reason || 'unknown'));
+    });
+  }
+  return pending;
+}
+
+function _tmCapturePreEndTurnCommittedState(txn) {
+  if (!_tmEndTurnTransactionCurrent(txn)) throw new Error('pre_endturn transaction lease expired');
+  if (typeof _buildSaveState !== 'function') throw new Error('pre_endturn save-state builder unavailable');
+  var span = (typeof TM !== 'undefined' && TM.perf && typeof TM.perf.beginSpan === 'function')
+    ? TM.perf.beginSpan('endturn.preEndturnBuild', { transactionId: txn.transactionId }) : null;
+  var state;
+  try {
+    state = _buildSaveState({ format: 'idb', detach: true, gm: txn.gmRef, p: txn.pRef });
+  } catch (error) {
+    if (span && TM.perf && typeof TM.perf.endSpan === 'function') TM.perf.endSpan(span, { ok: false, error: error.message || String(error) });
+    throw error;
+  }
+  if (span && TM.perf && typeof TM.perf.endSpan === 'function') TM.perf.endSpan(span, { ok: true });
+  if (!state || !state.GM || !state.P) throw new Error('pre_endturn click-state capture failed');
+  if (txn.captureSession) txn.captureSession.preEndturnState = state;
+  return state;
+}
+
+async function _tmCommitPreEndTurnRecoveryPoint(txn, state) {
+  if (!_tmEndTurnTransactionCurrent(txn)) throw new Error('pre_endturn transaction lease expired');
+  if (!state || !state.GM || !state.P) throw new Error('pre_endturn click-state unavailable');
+  if (typeof TM_SaveDB === 'undefined' || typeof TM_SaveDB.save !== 'function') {
+    throw new Error('pre_endturn storage unavailable');
+  }
+  var preSaveGM = txn.gmRef;
+  var preSaveP = txn.pRef;
+  var preStateGM = state.GM;
+  var preSaveLoadGen = txn.loadGen;
+  var preSnapshotId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : ('pre_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10));
+  var preTurn = Number(preStateGM.turn);
+  var preSid = preStateGM.sid;
+  if (!Number.isFinite(preTurn) || preTurn < 0) throw new Error('pre_endturn click-state turn invalid');
+  var preWriteStillCurrent = function() {
+    var liveLoadGen = (typeof window !== 'undefined' && window._tmLoadGen) || 0;
+    var liveSnapshotId = (typeof window !== 'undefined' && window._tmActivePreEndturnSnapshotId) || '';
+    return GM === preSaveGM && P === preSaveP
+      && liveLoadGen === preSaveLoadGen
+      && GM.turn === preTurn && GM.sid === preSid
+      && liveSnapshotId === preSnapshotId
+      && _tmEndTurnTransactionCurrent(txn);
+  };
+  state._preEndturn = { snapshotId: preSnapshotId, turn: preTurn, commitState: 'committed' };
+  var scenario = (typeof findScenarioById === 'function' && preSid) ? findScenarioById(preSid) : null;
+  var preMeta = {
+    name: '过回合前·' + (typeof getTSText === 'function' ? getTSText(preTurn) : 'T' + preTurn),
+    type: 'pre_endturn',
+    turn: preTurn,
+    scenarioName: scenario ? scenario.name : '',
+    eraName: preStateGM.eraName || '',
+    savedAt: Date.now(),
+    snapshotId: preSnapshotId,
+    commitState: 'committed'
+  };
+  try {
+    localStorage.setItem('tm_pre_endturn_mark', JSON.stringify({
+      turn: preTurn,
+      timestamp: Date.now(),
+      scenarioName: preMeta.scenarioName,
+      eraName: preMeta.eraName,
+      saveName: preStateGM.saveName || '',
+      snapshotId: preSnapshotId,
+      commitState: 'pending'
+    }));
+  } catch (markerError) {
+    _tmReportEndTurnBoundaryError(markerError, 'pre_endturn pending marker');
+  }
+  if (typeof window !== 'undefined') window._tmActivePreEndturnSnapshotId = preSnapshotId;
+  var preSaved = await TM_SaveDB.save('pre_endturn', state, preMeta, { writeGuard: preWriteStillCurrent });
+  if (preSaved !== true) throw new Error('pre_endturn IndexedDB commit failed');
+  if (!preWriteStillCurrent()) throw new Error('pre_endturn world lease expired');
+  var rawPreMark = localStorage.getItem('tm_pre_endturn_mark');
+  var livePreMark = rawPreMark ? JSON.parse(rawPreMark) : null;
+  if (!livePreMark || livePreMark.snapshotId !== preSnapshotId || livePreMark.turn !== preTurn) {
+    throw new Error('pre_endturn marker mismatch');
+  }
+  livePreMark.commitState = 'committed';
+  livePreMark.committedAt = Date.now();
+  localStorage.setItem('tm_pre_endturn_mark', JSON.stringify(livePreMark));
+  if (typeof _tmAdoptCommittedWorldSnapshot !== 'function'
+      || _tmAdoptCommittedWorldSnapshot(state, {
+        turn: preTurn,
+        transactionId: preSnapshotId,
+        takeOwnership: true
+      }) !== true) {
+    throw new Error('pre_endturn desktop baseline adoption failed');
+  }
+  txn.preEndTurnSnapshotId = preSnapshotId;
+  return true;
+}
+
+async function _tmPrepareEndTurnBoundary(txn, clickState) {
+  // 恢复点与桌面 committed 基线必须先固定为“点击过回合”时的世界；
+  // 之后的 LLM/党派/户籍校准属于本回合事务，失败时必须随事务一起回滚。
+  await _tmCommitPreEndTurnRecoveryPoint(txn, clickState);
+  await _runPreSubmitPartyClassCalibration();
+  return true;
+}
+
+function _tmRestoreCommittedBaselineAfterRollback(txn) {
+  try {
+    if (typeof _tmAdoptCommittedWorldSnapshot !== 'function') {
+      throw new Error('rollback committed snapshot boundary unavailable');
+    }
+    var restoredState = txn && txn.captureSession && txn.captureSession.preEndturnState;
+    if (!restoredState || !restoredState.GM || !restoredState.P) {
+      throw new Error('rollback committed click-state unavailable');
+    }
+    if (_tmAdoptCommittedWorldSnapshot(restoredState, {
+      turn: txn.gmRef.turn,
+      transactionId: String(txn.transactionId || 'end-turn') + ':rollback',
+      takeOwnership: true
+    }) !== true) {
+      throw new Error('rollback committed snapshot adoption failed');
+    }
+    return true;
+  } catch (baselineError) {
+    if (typeof _tmInvalidateCommittedWorldSnapshot === 'function') {
+      _tmInvalidateCommittedWorldSnapshot('end-turn rollback baseline failure');
+    }
+    _tmReportEndTurnBoundaryError(baselineError, 'restore rollback desktop autosave baseline');
+    return false;
+  }
+}
+
 function _tmRollbackEndTurnTransaction(txn, reason) {
   if (!_tmEndTurnTransactionCurrent(txn)) return false;
-  try { if (typeof closeTurnResult === 'function') closeTurnResult(); } catch (_) {}
-  _tmRestoreEndTurnObject(txn.pRef, txn.p);
-  _tmRestoreEndTurnObject(txn.gmRef, txn.gm);
+  var rollbackLease = { kind: 'end-turn', transactionId: txn.transactionId || '', startedAt: Date.now() };
+  if (typeof window !== 'undefined') window._tmWorldRollbackActive = rollbackLease;
+  var rollbackSpan = (typeof TM !== 'undefined' && TM.perf && typeof TM.perf.beginSpan === 'function')
+    ? TM.perf.beginSpan('endturn.rollbackRestore', { transactionId: txn.transactionId }) : null;
   try {
-    if (typeof buildIndices === 'function') buildIndices();
-    else if (typeof TM !== 'undefined' && TM.Indices && typeof TM.Indices.invalidate === 'function') TM.Indices.invalidate(txn.gmRef, txn.pRef);
-  } catch (_) {
-    try { if (typeof TM !== 'undefined' && TM.Indices && typeof TM.Indices.invalidate === 'function') TM.Indices.invalidate(txn.gmRef, txn.pRef); } catch (_) {}
-  }
-  txn.rolledBack = true;
-  try { if (typeof window !== 'undefined') window._tmLoadGen = (window._tmLoadGen || 0) + 1; } catch (_) {}
-  try {
+    try { if (typeof closeTurnResult === 'function') closeTurnResult(); }
+    catch (closeError) { _tmReportEndTurnBoundaryError(closeError, 'close rollback presentation'); }
+    _tmRestoreEndTurnObject(txn.pRef, txn.p);
+    _tmRestoreEndTurnObject(txn.gmRef, txn.gm);
+    try {
+      if (typeof buildIndices === 'function') buildIndices();
+      else if (typeof TM !== 'undefined' && TM.Indices && typeof TM.Indices.invalidate === 'function') TM.Indices.invalidate(txn.gmRef, txn.pRef);
+    } catch (indexError) {
+      _tmReportEndTurnBoundaryError(indexError, 'rebuild rollback indices');
+      try {
+        if (typeof TM !== 'undefined' && TM.Indices && typeof TM.Indices.invalidate === 'function') TM.Indices.invalidate(txn.gmRef, txn.pRef);
+      } catch (invalidateError) {
+        _tmReportEndTurnBoundaryError(invalidateError, 'invalidate rollback indices');
+      }
+    }
+    txn.rolledBack = true;
+    if (txn.captureSession) txn.captureSession.rolledBack = true;
+    if (typeof window !== 'undefined') window._tmLoadGen = (window._tmLoadGen || 0) + 1;
     GM.busy = false; // arch-ok end-turn transaction owns rollback cleanup
     GM._endTurnBusy = false; // arch-ok end-turn transaction owns rollback cleanup
     GM._lastEndTurnRollback = { at: Date.now(), turn: txn.turn, reason: String(reason && (reason.message || reason) || 'unknown') }; // arch-ok end-turn transaction owns rollback diagnostics
-  } catch (_) {}
-  try { if (typeof renderGameState === 'function') renderGameState(); } catch (_) {}
-  return true;
+    _tmRestoreCommittedBaselineAfterRollback(txn);
+    try { if (typeof renderGameState === 'function') renderGameState(); }
+    catch (renderError) { _tmReportEndTurnBoundaryError(renderError, 'render restored world'); }
+    return true;
+  } finally {
+    if (rollbackSpan && typeof TM !== 'undefined' && TM.perf && typeof TM.perf.endSpan === 'function') {
+      TM.perf.endSpan(rollbackSpan, { ok: txn.rolledBack === true });
+    }
+    if (typeof window !== 'undefined' && window._tmWorldRollbackActive === rollbackLease) window._tmWorldRollbackActive = null;
+    _tmRequestEndTurnDesktopAutoSaveFlush('end-turn-rollback');
+  }
 }
 
 async function _tmFinalizeEndTurnTransaction(ctx, txn) {
@@ -490,6 +696,17 @@ async function _tmFinalizeEndTurnTransaction(ctx, txn) {
   var saved = await ctx.meta.endTurnSavePromise;
   if (saved !== true) throw new Error('回合最终存档失败，已回滚本回合');
   if (!_tmCommitEndTurnTransaction(txn)) throw new Error('回合提交时世界身份已变化');
+  if (ctx.meta.canonicalWorldSnapshot && typeof _tmAdoptCommittedWorldSnapshot === 'function') {
+    var adopted = _tmAdoptCommittedWorldSnapshot(
+      ctx.meta.canonicalWorldSnapshot,
+      ctx.meta.canonicalWorldSnapshotMeta || { turn: GM.turn, transactionId: ctx.meta.transactionId, takeOwnership: true }
+    );
+    if (adopted !== true) {
+      _tmReportEndTurnBoundaryError(new Error('canonical committed snapshot adoption failed'), 'desktop autosave baseline');
+    }
+    ctx.meta.canonicalWorldSnapshot = null;
+    ctx.meta.canonicalWorldSnapshotMeta = null;
+  }
   try {
     if (typeof _endTurn_publishStagedTurnData === 'function') await _endTurn_publishStagedTurnData(ctx);
   } catch (publishError) {
@@ -530,6 +747,8 @@ async function _endTurnCore(options){
   var btn=_$("btn-end")||_$("btn-end-turn");
   if(GM.busy)return;
   _turnTxn = _tmCaptureEndTurnTransaction();
+  // 必须在后朝标记、busy/commit barrier 及校准写入之前冻结点击时世界。
+  var _preCommittedState = _tmCapturePreEndTurnCommittedState(_turnTxn);
   if (options && Object.prototype.hasOwnProperty.call(options, 'postTurnCourt')) {
     if (typeof _beginPostTurnCourtState !== 'function') throw new Error('后朝状态写口未加载');
     _beginPostTurnCourtState(!!options.postTurnCourt);
@@ -543,79 +762,19 @@ async function _endTurnCore(options){
     showLoading("\u65F6\u79FB\u4E8B\u53BB",10);
   }
 
-  // 预提交校准会修改党派、阶层、民心和户籍，必须位于事务快照之后。
-  // 任一关键校准失败都抛到本函数外层，恢复到玩家点击过回合前的完整状态。
-  await _runPreSubmitPartyClassCalibration();
-
-  // 上回合 post-turn 任务改到 AI prompt 构造前兜底等待。
-  // 入口不硬等，让 prep / 存档快照 / plan-prefetch 与上回合后台债务重叠。
-
   // ★ 过回合前自动存档·防 AI 长推演崩溃丢失本回合操作(诏令/奏疏批复/对话/调动)
   // 写入独立 IDB key 'pre_endturn'·与正常 autosave/slot_0 分离·不污染案卷目录
   // 写入 localStorage 标记 tm_pre_endturn_mark·页面刷新后可检测
   // 恢复点是事务的 prepare 阶段：必须先完整提交，才允许进入有副作用的推演。
   try {
-    if (typeof TM_SaveDB !== 'undefined' && typeof _buildSaveState === 'function') {
-      var _preSaveGM = GM;
-      var _preSaveP = P;
-      var _preSaveLoadGen = (typeof window !== 'undefined' && window._tmLoadGen) || 0;
-      var _preSnapshotId = (typeof crypto !== 'undefined' && crypto.randomUUID)
-        ? crypto.randomUUID()
-        : ('pre_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10));
-      var _preTurn = GM.turn;
-      var _preSid = GM.sid;
-      var _preWriteStillCurrent = function() {
-        var _liveLoadGen = (typeof window !== 'undefined' && window._tmLoadGen) || 0;
-        var _liveSnapshotId = (typeof window !== 'undefined' && window._tmActivePreEndturnSnapshotId) || '';
-        return GM === _preSaveGM && P === _preSaveP
-          && _liveLoadGen === _preSaveLoadGen
-          && GM.turn === _preTurn && GM.sid === _preSid
-          && _liveSnapshotId === _preSnapshotId;
-      };
-      var _preState = _buildSaveState({ format: 'idb', gm: _preSaveGM, p: _preSaveP });
-      _preState._preEndturn = { snapshotId: _preSnapshotId, turn: _preTurn, commitState: 'committed' };
-      var _scPre = (typeof findScenarioById === 'function' && GM.sid) ? findScenarioById(GM.sid) : null;
-      var _preMeta = {
-        name: '过回合前·' + (typeof getTSText === 'function' ? getTSText(GM.turn) : 'T' + GM.turn),
-        type: 'pre_endturn',
-        turn: _preTurn,
-        scenarioName: _scPre ? _scPre.name : '',
-        eraName: GM.eraName || '',
-        savedAt: Date.now(),
-        snapshotId: _preSnapshotId,
-        commitState: 'committed'
-      };
-      // 两阶段提交：先写 pending marker，再写带同一 snapshotId 的 IDB record；
-      // 仅事务确认成功后把 marker 提升为 committed。任何中途崩溃都只会安全回退 autosave。
-      try {
-        localStorage.setItem('tm_pre_endturn_mark', JSON.stringify({
-          turn: _preTurn, timestamp: Date.now(),
-          scenarioName: _preMeta.scenarioName,
-          eraName: _preMeta.eraName,
-          saveName: GM.saveName || '',
-          snapshotId: _preSnapshotId,
-          commitState: 'pending'
-        }));
-      } catch(_lsE){try{window.TM&&TM.errors&&TM.errors.captureSilent(_lsE,'pre_endturn ls mark');}catch(_){}}
-      try { window._tmActivePreEndturnSnapshotId = _preSnapshotId; } catch(_preIdE) {}
-      var _preSaved = await TM_SaveDB.save('pre_endturn', _preState, _preMeta, { writeGuard: _preWriteStillCurrent });
-      if (_preSaved !== true) throw new Error('pre_endturn IndexedDB commit failed');
-      if (!_preWriteStillCurrent()) throw new Error('pre_endturn world lease expired');
-      var _rawPreMark = localStorage.getItem('tm_pre_endturn_mark');
-      var _livePreMark = _rawPreMark ? JSON.parse(_rawPreMark) : null;
-      if (!_livePreMark || _livePreMark.snapshotId !== _preSnapshotId || _livePreMark.turn !== _preTurn) {
-        throw new Error('pre_endturn marker mismatch');
-      }
-      _livePreMark.commitState = 'committed';
-      _livePreMark.committedAt = Date.now();
-      localStorage.setItem('tm_pre_endturn_mark', JSON.stringify(_livePreMark));
-    } else {
-      throw new Error('pre_endturn storage unavailable');
-    }
+    await _tmPrepareEndTurnBoundary(_turnTxn, _preCommittedState);
   } catch(_psE) {
     (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_psE, 'PreEndTurnSave outer') : console.warn('[PreEndTurnSave outer]', _psE);
     throw _psE;
   }
+
+  // 上回合 post-turn 任务改到 AI prompt 构造前兜底等待。
+  // 入口不硬等，让 prep / 存档快照 / plan-prefetch 与上回合后台债务重叠。
 
   await EndTurnHooks.execute('before');
 
@@ -817,6 +976,9 @@ async function _endTurnCore(options){
       showTurnResult(_pdHtml);
     }
     await _tmFinalizeEndTurnTransaction(_obsCtx, _turnTxn);
+    GM.busy=false; // arch-ok end-turn transaction owns post-commit cleanup
+    GM._endTurnBusy=false; // arch-ok end-turn transaction owns post-commit cleanup
+    _tmRequestEndTurnDesktopAutoSaveFlush('end-turn-commit');
     return;
   }
 
@@ -835,6 +997,7 @@ async function _endTurnCore(options){
   await _tmFinalizeEndTurnTransaction(_obsCtx, _turnTxn);
   GM.busy=false;
   GM._endTurnBusy=false;
+  _tmRequestEndTurnDesktopAutoSaveFlush('end-turn-commit');
   } catch (error) {
     console.error('endTurn error:', error);
     if (_turnTxn) _tmRollbackEndTurnTransaction(_turnTxn, error);
@@ -843,6 +1006,7 @@ async function _endTurnCore(options){
     toast(_ehuman ? ('回合中断 · ' + _ehuman) : ('回合处理出错: ' + error.message));
     GM.busy = false;
     GM._endTurnBusy=false;
+    _tmRequestEndTurnDesktopAutoSaveFlush('end-turn-error');
     var btn = _$("btn-end")||_$("btn-end-turn");
     if (btn) {
       btn.textContent = "\u9759\u5F85\u65F6\u53D8";

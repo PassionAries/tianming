@@ -57,9 +57,12 @@ assert(courtUiIdx >= 0, 'opening Shuochao schedules court UI');
 assert(startIdx < courtUiIdx, 'end-turn pipeline starts before Shuochao UI schedule');
 const txnIdx = coreSrc.indexOf('_turnTxn = _tmCaptureEndTurnTransaction();');
 const courtStateIdx = coreSrc.indexOf("Object.prototype.hasOwnProperty.call(options, 'postTurnCourt')");
-const calibrationIdx = coreSrc.indexOf('await _runPreSubmitPartyClassCalibration();');
-assert(txnIdx >= 0 && courtStateIdx > txnIdx && calibrationIdx > courtStateIdx,
-  'court flags and mutating pre-submit calibration begin only after the transaction snapshot');
+const prepareIdx = coreSrc.indexOf('await _tmPrepareEndTurnBoundary(_turnTxn, _preCommittedState);', courtStateIdx);
+const recoveryCommitIdx = coreSrc.indexOf('await _tmCommitPreEndTurnRecoveryPoint(txn, clickState);');
+const calibrationIdx = coreSrc.indexOf('await _runPreSubmitPartyClassCalibration();', recoveryCommitIdx);
+assert(txnIdx >= 0 && courtStateIdx > txnIdx && prepareIdx > courtStateIdx
+  && recoveryCommitIdx >= 0 && calibrationIdx > recoveryCommitIdx,
+  'court flags begin after the transaction snapshot and calibration waits for the click-time recovery commit');
 
 const postTurnGM = {
   turn: 1,

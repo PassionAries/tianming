@@ -69,6 +69,70 @@ var TM_SaveDB = (function() {
     pre_endturn: true
   });
 
+  function _perfCount(name, delta) {
+    if (typeof TM !== 'undefined' && TM.perf && typeof TM.perf.count === 'function') TM.perf.count(name, delta);
+  }
+
+  function _perfWithSpan(name, fn, metadata) {
+    if (typeof TM !== 'undefined' && TM.perf && typeof TM.perf.withSpan === 'function') {
+      return TM.perf.withSpan(name, fn, metadata);
+    }
+    return fn();
+  }
+
+  function _utf8ByteLength(text) {
+    if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(text).byteLength;
+    return unescape(encodeURIComponent(text)).length;
+  }
+
+  function _checksumJson(json) {
+    return _perfWithSpan('save.checksum', async function() {
+      if (typeof crypto !== 'undefined' && crypto.subtle && typeof TextEncoder !== 'undefined') {
+        var digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+        return Array.prototype.map.call(new Uint8Array(digest), function(byte) {
+          return byte.toString(16).padStart(2, '0');
+        }).join('');
+      }
+      var hash = 2166136261;
+      for (var i = 0; i < json.length; i++) {
+        hash ^= json.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return 'fnv1a-' + (hash >>> 0).toString(16).padStart(8, '0');
+    });
+  }
+
+  /**
+   * Build the single immutable serialization artifact for one detached world.
+   * JSON is frozen synchronously before compression/checksum cross an async boundary.
+   */
+  function createCanonicalPayload(state, identity) {
+    var json = _perfWithSpan('save.stringify', function() { return JSON.stringify(state); }, identity || {});
+    if (typeof json !== 'string') return Promise.reject(new Error('canonical world state is not serializable'));
+    _perfCount('save.stringify.count', 1);
+    _perfCount('save.stringify.bytes', _utf8ByteLength(json));
+    var compressedPromise = _perfWithSpan('save.compress', function() {
+      _perfCount('save.compress.count', 1);
+      return SaveCompression.compress(json);
+    }, identity || {});
+    var checksumPromise = _checksumJson(json);
+    return Promise.all([compressedPromise, checksumPromise]).then(function(parts) {
+      var compressed = parts[0];
+      var compressedBytes = compressed && typeof compressed.size === 'number'
+        ? compressed.size : _utf8ByteLength(String(compressed));
+      _perfCount('save.compressed.bytes', compressedBytes);
+      return Object.freeze({
+        identity: Object.freeze(Object.assign({}, identity || {})),
+        state: state,
+        json: json,
+        jsonByteLength: _utf8ByteLength(json),
+        checksum: parts[1],
+        compressed: compressed,
+        compressedByteLength: compressedBytes
+      });
+    });
+  }
+
   function _legacyTimelineId(campaignId) {
     try {
       if (typeof window !== 'undefined' && typeof window._tmLegacyTimelineId === 'function') {
@@ -330,6 +394,7 @@ var TM_SaveDB = (function() {
     if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
     var metadata = _toSaveMetadata(record);
     if (!_available || !_db) {
+      return _perfWithSpan('save.localFallback', function() {
       var payloadKey = 'tm_idb_' + SAVE_STORE + '_' + record.id;
       var metadataKey = 'tm_idb_' + SAVE_META_STORE + '_' + record.id;
       var previousPayload = localStorage.getItem(payloadKey);
@@ -358,6 +423,7 @@ var TM_SaveDB = (function() {
         }
         return Promise.reject(e);
       }
+      }, { records: 1 });
     }
     return new Promise(function(resolve, reject) {
       try {
@@ -398,6 +464,7 @@ var TM_SaveDB = (function() {
     if (!records.length) return Promise.resolve(false);
     if (!_writeGuardAllows(writeGuard)) return Promise.resolve(false);
     if (!_available || !_db) {
+      return _perfWithSpan('save.localFallback', function() {
       var items = [];
       records.forEach(function(record) {
         var payloadKey = 'tm_idb_' + SAVE_STORE + '_' + record.id;
@@ -444,6 +511,7 @@ var TM_SaveDB = (function() {
         }
         return Promise.reject(error);
       }
+      }, { records: records.length, atomic: true });
     }
     return new Promise(function(resolve, reject) {
       try {
@@ -812,17 +880,28 @@ var TM_SaveDB = (function() {
     }
     // 在调用栈内立即固化 JSON。_ensureOpen / gzip 都是异步；若延后 stringify，
     // selective snapshot 中安全复用的 append-only 引用可能在过回合期间继续增长，污染 pre_endturn 时点。
-    var jsonStr;
     var saveIdentity = _saveIdentityFromGameState(gameState);
-    try { jsonStr = JSON.stringify(gameState); }
-    catch (e) { return Promise.reject(e); }
+    var payloadPromise;
+    try {
+      payloadPromise = options.canonicalPayload
+        ? Promise.resolve(options.canonicalPayload)
+        : createCanonicalPayload(gameState, {
+          campaignId: saveIdentity.campaignId,
+          timelineId: saveIdentity.timelineId,
+          turn: meta && meta.turn
+        });
+    } catch (e) { return Promise.reject(e); }
     if (!_writeStillAllowed()) return Promise.resolve(false);
     var previousMetadata = null;
-    return _ensureOpen().then(function() {
-      return _get(SAVE_META_STORE, id);
-    }).then(function(previous) {
-      previousMetadata = previous;
-      return SaveCompression.compress(jsonStr).then(function(compressed) {
+    return Promise.all([
+      _ensureOpen().then(function() { return _get(SAVE_META_STORE, id); }),
+      payloadPromise
+    ]).then(function(parts) {
+      previousMetadata = parts[0];
+      var payload = parts[1];
+      if (!payload || typeof payload.json !== 'string') throw new Error('canonical save payload invalid');
+      var jsonStr = payload.json;
+      var compressed = payload.compressed;
         // Blob 只能由 IndexedDB 结构化克隆安全保存。localStorage 的 JSON.stringify
         // 会把 Blob 变成 {}，因此降级路径必须保留原始 JSON 字符串。
         var isCompressed = !!(_available && _db && compressed !== jsonStr);
@@ -850,11 +929,12 @@ var TM_SaveDB = (function() {
         }
         // 压缩/开库可能跨越读档或下一回合；真正开启写事务前再验一次租约。
         if (!_writeStillAllowed()) return false;
-        return _putSaveRecord(record, 0, _writeStillAllowed).then(function(saved) {
+        return _perfWithSpan('save.idbCommit', function() {
+          return _putSaveRecord(record, 0, _writeStillAllowed);
+        }, { slots: 1 }).then(function(saved) {
           if (saved !== true) return saved;
           return _gcReplacedSaveTimelines(previousMetadata ? [previousMetadata] : [], [record]);
         });
-      });
     });
   }
 
@@ -869,6 +949,9 @@ var TM_SaveDB = (function() {
       catch (_) { return false; }
     }
     var frozen;
+    var uniqueStates = [];
+    var uniquePayloads = [];
+    var uniqueProvidedPayloads = [];
     var frozenTurnPublishReceipt = null;
     try {
       var seenIds = Object.create(null);
@@ -877,13 +960,35 @@ var TM_SaveDB = (function() {
         var id = String(entry.id);
         if (seenIds[id]) throw new Error('批量存档 id 重复：' + id);
         seenIds[id] = true;
-        var json = JSON.stringify(entry.gameState);
-        if (typeof json !== 'string') throw new Error('批量存档正文不可序列化：' + id);
         var frozenMeta = Object.assign({}, entry.meta || {});
         var identity = _saveIdentityFromGameState(entry.gameState);
         if (!frozenMeta.campaignId) frozenMeta.campaignId = identity.campaignId;
         if (!frozenMeta.timelineId) frozenMeta.timelineId = identity.timelineId;
-        return { id: id, json: json, meta: frozenMeta };
+        var sharedIndex = uniqueStates.indexOf(entry.gameState);
+        var payloadPromise;
+        if (sharedIndex >= 0) {
+          if (entry.canonicalPayload && uniqueProvidedPayloads[sharedIndex]
+              && entry.canonicalPayload !== uniqueProvidedPayloads[sharedIndex]) {
+            throw new Error('同一 canonical state 收到不同 payload：' + id);
+          }
+          payloadPromise = uniquePayloads[sharedIndex];
+          _perfCount('save.payloadReuse.count', 1);
+        } else {
+          if (entry.canonicalPayload) {
+            payloadPromise = Promise.resolve(entry.canonicalPayload);
+          } else {
+            payloadPromise = createCanonicalPayload(entry.gameState, {
+              campaignId: frozenMeta.campaignId,
+              timelineId: frozenMeta.timelineId,
+              turn: frozenMeta.turn,
+              transactionId: options.transactionId || ''
+            });
+          }
+          uniqueStates.push(entry.gameState);
+          uniquePayloads.push(payloadPromise);
+          uniqueProvidedPayloads.push(entry.canonicalPayload || null);
+        }
+        return { id: id, payloadPromise: payloadPromise, meta: frozenMeta };
       });
       if (options.turnPublishReceipt) {
         frozenTurnPublishReceipt = _normalizeTurnPublishReceipt(options.turnPublishReceipt, 'world-committed');
@@ -894,12 +999,15 @@ var TM_SaveDB = (function() {
     var savedRecords = [];
     return _ensureOpen().then(async function() {
       previousMetadata = await Promise.all(frozen.map(function(item) { return _get(SAVE_META_STORE, item.id); }));
+      var payloads = await Promise.all(frozen.map(function(item) { return item.payloadPromise; }));
       var timestamp = Date.now();
       var records = [];
       for (var i = 0; i < frozen.length; i++) {
         var item = frozen[i];
-        var compressed = await SaveCompression.compress(item.json);
-        var isCompressed = !!(_available && _db && compressed !== item.json);
+        var payload = payloads[i];
+        if (!payload || typeof payload.json !== 'string') throw new Error('批量存档 canonical payload 无效：' + item.id);
+        var compressed = payload.compressed;
+        var isCompressed = !!(_available && _db && compressed !== payload.json);
         records.push({
           id: item.id,
           type: item.meta.type || 'manual',
@@ -914,13 +1022,15 @@ var TM_SaveDB = (function() {
           commitState: item.meta.commitState || '',
           campaignId: item.meta.campaignId || '',
           timelineId: item.meta.timelineId || '',
-          gameState: isCompressed ? compressed : item.json,
+          gameState: isCompressed ? compressed : payload.json,
           _compressed: isCompressed
         });
       }
       if (!_writeStillAllowed()) return false;
       savedRecords = records;
-      return _putSaveRecordsAtomic(records, _writeStillAllowed, 0, frozenTurnPublishReceipt);
+      return _perfWithSpan('save.idbCommit', function() {
+        return _putSaveRecordsAtomic(records, _writeStillAllowed, 0, frozenTurnPublishReceipt);
+      }, { slots: records.length });
     }).then(function(saved) {
       if (saved !== true) return saved;
       return _gcReplacedSaveTimelines(previousMetadata, savedRecords);
@@ -1492,6 +1602,7 @@ var TM_SaveDB = (function() {
     open: open,
     save: save,
     saveManyAtomic: saveManyAtomic,
+    createCanonicalPayload: createCanonicalPayload,
     clearPendingTurnDataPublishAtomic: clearPendingTurnDataPublishAtomic,
     saveChronicleRecord: saveChronicleRecord,
     listChronicleRecords: listChronicleRecords,

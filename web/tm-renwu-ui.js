@@ -502,7 +502,10 @@ function viewRenwu(i){
   var html = '<div style="max-width:600px;margin:auto;">';
 
   // 头部：名字+称号+阵营
-  var _isPlayerChar = ch.isPlayer || (P.playerInfo && P.playerInfo.characterName === ch.name);
+  var _rwRuntimePlayer = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getCharacter === 'function')
+    ? TM.Player.getCharacter(GM)
+    : ((GM.chars || []).find(function(row) { return row && row.isPlayer === true; }) || null);
+  var _isPlayerChar = ch === _rwRuntimePlayer;
   html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.8rem;">';
   html += '<div><span style="font-size:1.3rem;font-weight:700;color:var(--gold);">' + escHtml(ch.name) + '</span>';
   if(ch.title) html += ' <span style="color:var(--txt-s);font-size:0.85rem;">' + escHtml(ch.title) + '</span>';
@@ -634,7 +637,7 @@ function viewRenwu(i){
       var _spouses = (GM.chars || []).filter(function(c2) { return c2.alive !== false && _rwIsPlayerConsort(c2) && c2.family !== ch.family; });
       // 这里用关联spouse（如果当前角色是玩家）
       var _mySpouses = [];
-      if (ch.isPlayer || (P.playerInfo && P.playerInfo.characterName === ch.name)) {
+      if (ch === _rwRuntimePlayer) {
         _mySpouses = (GM.chars || []).filter(function(c2) { return _rwIsPlayerConsort(c2) && c2.alive !== false; });
       }
 
@@ -832,7 +835,9 @@ function viewRenwu(i){
 
   // 好感分解（对玩家）
   if(typeof OpinionSystem !== 'undefined'){
-    var playerChar = findCharByName(P.playerInfo.characterName);
+    var playerChar = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getCharacter === 'function')
+      ? TM.Player.getCharacter(GM)
+      : (GM.chars || []).find(function(c) { return c && c.isPlayer === true; });
     if(playerChar && playerChar.name !== ch.name){
       var baseOp = OpinionSystem.calculateBase(ch, playerChar);
       var totalOp = OpinionSystem.getTotal(ch, playerChar);

@@ -1074,7 +1074,8 @@ async function pickHistoricalCandidates(exam) {
         console.warn('[\u79D1\u4E3E\u00B7\u6EE4] \u4E22\u5F03\u5DF2\u4EFB\u5B98\u5019\u9009:', c.name, _existCh.officialTitle||_existCh.title);
         return false;
       }
-      if (!c.age || c.age < 18 || c.age > 60) return false;
+      var candidateAge = typeof getValidAge === 'function' ? getValidAge(c, null) : (Number.isFinite(c.age) ? Math.floor(c.age) : null);
+      if (candidateAge === null || candidateAge < 18 || candidateAge > 60) return false;
       return Math.random() < (c.probability || 0.7);
     });
 

@@ -383,7 +383,9 @@
       else if (year > deathY) { timelineStatus = 'past_visitor'; displacementYears = year - deathY; isCrossTime = true; }
       else { timelineStatus = 'future_visitor'; displacementYears = birthY - year; isCrossTime = true; }
     }
-    var ageCalc = (birthY != null && timelineStatus === 'alive') ? (year - birthY) : (opts.age || null);
+    var ageCalc = (birthY != null && timelineStatus === 'alive')
+      ? (year - birthY)
+      : ((opts.age !== undefined && opts.age !== null) ? opts.age : null);
     var deltaSinceScn = year - scnStart;
     // 玩家世界近况摘要（取 shizhengji 末 N 段·剧本起至今）
     var playerTimelineSummary = '';
@@ -690,9 +692,8 @@
         if (!_faction) _faction = '中立';
 
         var newChar = {
-          id: 'autogen_' + Date.now() + '_' + name,
           name: name,
-          age: data.age || 30,
+          age: typeof getValidAge === 'function' ? getValidAge(data, 30) : (Number.isFinite(data.age) && data.age >= 0 ? Math.floor(data.age) : 30),
           gender: data.gender || '\u7537',
           ethnicity: data.ethnicity || '\u6C49',
           origin: data.origin || '',
@@ -769,7 +770,7 @@
         };
 
         if (!GM.chars) GM.chars = [];
-        (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(newChar);
+        createRuntimeCharacter(newChar);
 
         // 直接注册索引·O(1) 而非 O(N) 重建（previous envoy 场景的同类修）
         if (GM._indices && GM._indices.charByName) {
@@ -828,9 +829,8 @@
     };
     var _fbStats = _tmNormalizeGeneratedStats(name, _fbData, opts);
     var newChar = {
-      id: 'autogen_tpl_' + Date.now() + '_' + name,
       name: name,
-      age: opts.age || 35,
+      age: typeof getValidAge === 'function' ? getValidAge(opts, 35) : (Number.isFinite(opts.age) && opts.age >= 0 ? Math.floor(opts.age) : 35),
       gender: '\u7537',
       ethnicity: '\u6C49',
       origin: '',
@@ -875,7 +875,7 @@
       _memorySeeds: [{ turn: GM.turn, event: (opts.reason||'\u5165\u671D') + '\u00B7\u6A21\u677F\u751F\u6210', emotion: '\u5E73' }]
     };
     if (!GM.chars) GM.chars = [];
-    (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(newChar);
+    createRuntimeCharacter(newChar);
     if (opts.assignPost && GM.officeTree) _tryAssignPost(name, opts.assignPost);
     if (typeof buildIndices === 'function') { try { buildIndices(); } catch(_){} }
     return newChar;

@@ -19,8 +19,9 @@ function _renderOfficeSummary() {
   var totalPos = treeStats.headCount;
   var actualCount = treeStats.actualCount;
   var materialized = treeStats.materialized;
-  var vacantPos = totalPos - actualCount;
-  var unmaterialized = actualCount - materialized;
+  var vacantPos = Math.max(0, Number(treeStats.vacant) || 0);
+  var overstaffed = Math.max(0, Number(treeStats.overstaffed) || 0);
+  var unmaterialized = Math.max(0, Number(treeStats.unmaterialized) || 0);
 
   // 俸禄
   var theoryCost = 0, actualCost = 0;
@@ -165,6 +166,10 @@ function _renderOfficeSummary() {
         });
       })(GM.officeTree||[]);
       alerts.push({type:'warn', ic:'\u7F3A', lbl:'\u804C\u4F4D\u7A7A\u7F3A\uFF1A', txt:_vacNames.join('\u3001') + (vacantPos > 5 ? '\u7B49 ' : '\u00B7') + '\u5171 <strong>' + vacantPos + '</strong> \u804C\u5F85\u8865'});
+    }
+
+    if (overstaffed > 0) {
+      alerts.push({type:'danger', ic:'\u8D85', lbl:'\u7F16\u5236\u8D85\u5458\uFF1A', txt:'\u5B9E\u6709\u5B98\u5458\u8D85\u51FA\u7F16\u5236 <strong>' + overstaffed + '</strong> \u5458\u00B7\u8BF7\u6838\u67E5\u91CD\u590D\u4EFB\u547D\u6216\u65E7\u6863\u7F16\u5236'});
     }
 
     // 未具象
@@ -398,6 +403,12 @@ function _offAutoFill(deptName, posName) {
 
 /** 选择候选人→写入诏令建议库 */
 function _offSelectCandidate(charName, deptName, posName) {
+  var candidate = typeof findCharByName === 'function' ? findCharByName(charName) : null;
+  var candidateAge = typeof getValidAge === 'function' ? getValidAge(candidate, 30) : (candidate && Number.isFinite(Number(candidate.age)) && Number(candidate.age) >= 0 ? Math.floor(Number(candidate.age)) : 30);
+  if (!candidate || candidateAge < 20 || candidateAge > 70) {
+    if (typeof toast === 'function') toast('候选人年龄不符合任官契约', 'error');
+    return false;
+  }
   if (!GM._edictSuggestions) GM._edictSuggestions = [];
   GM._edictSuggestions.push({
     source: '官制', from: '铨曹',
@@ -406,6 +417,7 @@ function _offSelectCandidate(charName, deptName, posName) {
   });
   toast('已录入诏书建议库——请在诏令中正式下旨');
   if (typeof _renderEdictSuggestions === 'function') _renderEdictSuggestions();
+  return true;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -447,17 +459,20 @@ function _offOpenPicker(pathArr, deptName, posName, currentHolder) {
   req.primaryLabel = statLabel[req.primary] || req.primary;
   req.secondaryLabel = statLabel[req.secondary] || req.secondary;
 
-  // 玩家所在势力领袖·多重兜底：GM.facs.isPlayer → P.playerInfo.factionName → GM.playerFaction
+  // 玩家所在势力领袖：运行态 GM/TM.Player 为权威，不回读剧本模板的旧君身份。
   var playerFac = (GM.facs||[]).find(function(f){ return f.isPlayer; });
   var playerFacName = playerFac ? playerFac.name : '';
   if (!playerFacName) {
-    playerFacName = (P.playerInfo && P.playerInfo.factionName) || GM.playerFaction || '';
+    var runtimeInfo = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getInfo === 'function') ? TM.Player.getInfo() : (GM.playerInfo || {});
+    playerFacName = runtimeInfo.factionName || GM.playerFaction || '';
   }
   var playerParty = playerFac && playerFac.leaderParty ? playerFac.leaderParty : '';
 
   // 候选池：活人·非玩家·非已在此职；派系过滤仅在玩家有明确势力时生效（中立/无派系角色始终可用）
   var cands = (GM.chars || []).filter(function(c) {
     if (!c || c.alive === false || c.isPlayer) return false;
+    var age = typeof getValidAge === 'function' ? getValidAge(c, 30) : (Number.isFinite(Number(c.age)) && Number(c.age) >= 0 ? Math.floor(Number(c.age)) : 30);
+    if (age < 20 || age > 70) return false;
     if (c.name === currentHolder) return false; // 现任不是候选
     // 派系锁：仅当玩家有明确势力且角色也有明确且不匹配的派系时才排除
     // 中立角色（c.faction 空）一律允许；玩家无明确势力时不做派系过滤
@@ -502,8 +517,8 @@ function _offOpenPicker(pathArr, deptName, posName, currentHolder) {
     // 警示标志
     c._pickerWarnings = [];
     if (loyVal < req.loyNeeded) c._pickerWarnings.push('\u5FE0\u8BDA\u4E0D\u8DB3');
-    if (c.age && c.age >= 65) c._pickerWarnings.push('\u5E74\u8FC8');
-    if (c.age && c.age < 20) c._pickerWarnings.push('\u5E74\u5E7C');
+    var pickerAge = typeof getValidAge === 'function' ? getValidAge(c, 30) : (Number.isFinite(Number(c.age)) && Number(c.age) >= 0 ? Math.floor(Number(c.age)) : 30);
+    if (pickerAge >= 65) c._pickerWarnings.push('\u5E74\u8FC8');
   });
   // 主排序：胜任度 desc；次排序：忠诚 desc
   cands.sort(function(a,b){

@@ -18,18 +18,28 @@ function assert(cond, msg) {
 }
 
 function freshSandbox(adjImpl) {
-  var sb = { console: console };
-  sb.window = sb; sb.global = sb;
+  var sb = { console: console, Date: Date, JSON: JSON, Math: Math, Map: Map, Set: Set };
+  sb.window = sb; sb.global = sb; sb.globalThis = sb;
+  sb.deepClone = function (value) { return JSON.parse(JSON.stringify(value)); };
+  sb.initDataListeners = function () {};
+  sb.TM = { errors: { capture: function () {}, captureSilent: function () {} }, FactionIndex: { rebuild: function () {} } };
   sb.addEB = function (cat, msg) { sb._ebs.push(cat + '·' + msg); };
   sb._ebs = [];
   if (adjImpl) sb.adjudicatePlayerDeath = adjImpl;
   sb.GM = {
     turn: 20,
-    facs: [], chars: [{ name: '朱由检', isPlayer: true, alive: true }], armies: [],
+    _campaignId: 'revolt-breach-smoke',
+    facs: [], chars: [{ id: 'char-player', name: '朱由检', isPlayer: true, alive: true }], armies: [],
     minxin: { revolts: [{ id: 'rv9', region: '陕西', status: 'ongoing', level: 5, scale: 1000000, turn: 10, _breachMarch: { started: 20 } }] }
   };
-  sb.P = { conf: { revoltEntityEnabled: true } };
+  sb.P = {
+    conf: { revoltEntityEnabled: true }, playerInfo: { characterName: '朱由检' },
+    scenarios: [], engineConstants: {}, buildings: [], armyTemplates: [], parties: [], classes: [], factions: [],
+    unitSystem: { enabled: false }
+  };
   vm.createContext(sb);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-indices.js'), 'utf8'), sb, { filename: 'tm-indices.js' });
+  sb.buildIndices = function () {};
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-revolt-entity.js'), 'utf8'), sb, { filename: 'tm-revolt-entity.js' });
   return sb;
 }

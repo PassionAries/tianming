@@ -152,6 +152,7 @@
     }
   },
   "devDependencies": {
+    "acorn": "^8.15.0",
     "electron": "^33.0.0",
     "electron-builder": "^25.1.8"
   },

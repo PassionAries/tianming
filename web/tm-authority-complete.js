@@ -283,8 +283,9 @@
       } else if (typeof G.huangquan === 'object') G.huangquan.index = 5;
       if (typeof G.huangwei === 'object') G.huangwei.index = 10;
       if (typeof G.minxin === 'object') G.minxin.trueIndex = Math.max(0, G.minxin.trueIndex - 30);
-      var _pdName = (typeof global.P !== 'undefined' && global.P && global.P.playerInfo && global.P.playerInfo.characterName) || '';
-      var _pdSov = (G.chars || []).find(function (c) { return c && (c.isPlayer || (_pdName && c.name === _pdName)); });
+      var _pdSov = (global.TM && global.TM.Player && typeof global.TM.Player.getCharacter === 'function')
+        ? global.TM.Player.getCharacter(G)
+        : (G.chars || []).find(function(c) { return c && c.isPlayer === true; });
       if (_pdSov) {
         if (_pmInner) _pdSov._puppet = true;
         else { _pdSov._deposed = true; _pdSov._deposedTurn = ctx.turn; }
@@ -1082,10 +1083,13 @@
     var player = (G.chars || []).find(function(c){return c.isPlayer;});
     if (player) {
       var playerKey = player.id || player.name || 'player';
-      if ((player.age || 30) < 12 && _autoAuthorityEventDue('huangquan', 'young:' + playerKey, _turnsForMonthsLocal(12))) {
+      var _authorityAge = typeof getValidAge === 'function' ? getValidAge(player, 30) : (Number.isFinite(player.age) && player.age >= 0 ? Math.floor(player.age) : 30);
+      var _authorityHealth = Number(player.health);
+      if (!Number.isFinite(_authorityHealth)) _authorityHealth = 80;
+      if (_authorityAge < 12 && _autoAuthorityEventDue('huangquan', 'young:' + playerKey, _turnsForMonthsLocal(12))) {
         triggerHuangquanEvent('youngOrIllness', { reason: '\u5e7c\u4e3b\u4e34\u671d' });
       }
-      if ((player.health || 80) < 40 && _autoAuthorityEventDue('huangquan', 'ill:' + playerKey, _turnsForMonthsLocal(6))) {
+      if (_authorityHealth < 40 && _autoAuthorityEventDue('huangquan', 'ill:' + playerKey, _turnsForMonthsLocal(6))) {
         triggerHuangquanEvent('youngOrIllness', { reason: '\u541b\u4e3b\u4f53\u5f31' });
       }
     }

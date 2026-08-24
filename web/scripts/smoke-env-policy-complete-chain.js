@@ -197,6 +197,11 @@ assert(sameDemographicTotals(afterWorld, beforeWorld),
 const plainEnvironment = ctx.GM.environment.byRegion.plain;
 assert(Math.abs(plainEnvironment.currentLoad - afterPlain.mouths / plainEnvironment.carryingMax) < 1e-12,
   'migration relief should immediately recompute the receiving province load');
+const mountainEnvironment = ctx.GM.environment.byRegion.mountain;
+const mountainPhysicalLoad = afterMountain.mouths / mountainEnvironment.carryingMax;
+assert(Math.abs(mountainEnvironment.currentLoad - Math.max(0, mountainPhysicalLoad - 0.10)) < 1e-12
+  && Math.abs(mountainEnvironment.effectiveLoadRelief - 0.10) < 1e-12,
+'migration relief should survive carrying recomputation as an explicit active-policy load adjustment');
 const expectedNationalLoad = Object.values(ctx.GM.environment.byRegion)
   .reduce((sum, row) => sum + row.currentLoad, 0) / Object.keys(ctx.GM.environment.byRegion).length;
 assert(Math.abs(ctx.GM.environment.nationalLoad - expectedNationalLoad) < 1e-12,
@@ -316,7 +321,9 @@ function runAllRegionMigrationOrder(order) {
   'only pre-policy overloaded sources should move once into the pre-policy receiving province');
   Object.keys(specs).forEach(id => {
     const environment = orderCtx.GM.environment.byRegion[id];
-    assert(Math.abs(environment.currentLoad - leaves[id].populationDetail.mouths / environment.carryingMax) < 1e-12,
+    const expectedEffectiveLoad = Math.max(0,
+      leaves[id].populationDetail.mouths / environment.carryingMax - 0.10);
+    assert(Math.abs(environment.currentLoad - expectedEffectiveLoad) < 1e-12,
       'all-region migration should refresh the final load for ' + id);
   });
   const byId = {};
@@ -333,6 +340,11 @@ assert(JSON.stringify(forwardMigration) === JSON.stringify(reverseMigration),
 
 ctx.EnvCapacityEngine.tick({ turn: 73, monthRatio: 12, _monthRatio: 12, strict: true });
 assert(ctx.GM.environment.byRegion.mountain.ecoScars.soilErosion < beforeScar, 'active policies should reduce scars through tick');
+const postTickMountain = ctx.GM.environment.byRegion.mountain;
+const postTickMouths = mountainLeaves.reduce((sum, leaf) => sum + leaf.populationDetail.mouths, 0);
+assert(Math.abs(postTickMountain.currentLoad
+  - Math.max(0, postTickMouths / postTickMountain.carryingMax - 0.10)) < 1e-12,
+'active load relief should remain effective after the next full environment recomputation');
 assert(ctx.GM._envPolicyActions && ctx.GM._envPolicyActions.length >= 3, 'edict path should audit environment policy actions');
 assert(ctx.GM.environment.policyHistory && ctx.GM.environment.policyHistory.length >= 3, 'environment should keep policy history');
 

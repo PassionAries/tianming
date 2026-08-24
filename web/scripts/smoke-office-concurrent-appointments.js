@@ -94,9 +94,9 @@ function resetState() {
   context.GM._chronicle = [];
   context.GM.qijuHistory = [];
   context.GM.chars = [
-    { name: '兼官者', officialTitle: '侍郎', position: '侍郎', alive: true, location: '京师' },
-    { name: '前任尚书', officialTitle: '尚书', position: '尚书', alive: true, location: '京师' },
-    { name: '调任者', officialTitle: '给事中', position: '给事中', alive: true, location: '京师' }
+    { id: 'char-concurrent', name: '兼官者', officialTitle: '侍郎', position: '侍郎', alive: true, location: '京师' },
+    { id: 'char-former-minister', name: '前任尚书', officialTitle: '尚书', position: '尚书', alive: true, location: '京师' },
+    { id: 'char-transfer', name: '调任者', officialTitle: '给事中', position: '给事中', alive: true, location: '京师' }
   ];
   context.GM.officeTree = [
     { name: '吏部', positions: [

@@ -526,7 +526,6 @@
       var ageBase = 22 + Math.floor(rng() * 23);   // 22-45 武人偏年轻
       var exteriorScores = _kjG3GenExteriorScores(seed, i, archetype);
       var wujinshi = {
-        id:        'wuju_' + examYear + '_' + i + '_' + Date.now(),
         name:      name,
         age:       ageBase,
         gender:    '男',
@@ -610,7 +609,7 @@
         wujinshi.resources.fame = 50 + Math.floor(rng() * 20);
       }
       _kjG3MarkWujinshi(wujinshi, examYear, examiner, td, exteriorScores);
-      (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(wujinshi);
+      createRuntimeCharacter(wujinshi);
       wujinshiList.push(wujinshi);
     }
     return wujinshiList;
@@ -1149,7 +1148,6 @@
     // M2 fix·birthYear / age 加 ±2 扰动·避同年荫袭子全 18 岁集体出生
     var sonAge = 16 + Math.floor(Math.random() * 5);   // 16-20
     var son = {
-      id:        'wuju_inherit_' + Date.now(),
       name:      sonName,
       age:       sonAge,
       gender:    '男',
@@ -1172,7 +1170,7 @@
       alive:     true
     };
     if (!Array.isArray(GM.chars)) GM.chars = [];
-    (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(son);
+    createRuntimeCharacter(son);
     if (Array.isArray(GM._chronicle)) {
       if (typeof TM !== 'undefined' && TM.Chronicle) TM.Chronicle.record({
         turn: GM.turn || 1,

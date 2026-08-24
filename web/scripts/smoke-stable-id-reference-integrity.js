@@ -125,11 +125,18 @@ console.log('[smoke-stable-id-reference-integrity]');
     'invalid commanderId is repaired from the unique commander name');
   world.chars[1].father = '甲';
   world.chars[1].fatherId = 'dangling-relative';
+  world.chars[0].childrenIds = ['乙'];
+  world.chars[0].designatedHeirId = '乙';
+  world.harem = { crownPrince: '乙', crownPrinceId: '乙' };
   world.officeTree[0].positions[0].holderId = 'dangling-holder';
   context._tmBackfillStableForeignKeys(world);
   ok(world.chars[1].fatherId === world.chars[0].id
     && world.officeTree[0].positions[0].holderId === world.chars[0].id,
   'relative and office-holder IDs are repaired from unique legacy names');
+  ok(world.chars[0].childrenIds[0] === commanderId
+    && world.chars[0].designatedHeirId === commanderId
+    && world.harem.crownPrinceId === commanderId,
+  'legacy child and crown-prince name references migrate to stable IDs');
   let valid = true;
   try { context._tmValidateStableForeignKeys(world); } catch (_) { valid = false; }
   ok(valid, 'repaired stable foreign keys pass closure validation');

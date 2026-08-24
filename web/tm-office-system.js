@@ -30,13 +30,14 @@
 // ============================================================
 
 /** 迁移并双向同步 position 数据：老模型(headCount/actualCount/holder+additionalHolders) ↔ 新模型(establishedCount/vacancyCount/actualHolders) */
-function _offMigratePosition(pos) {
+function _offMigratePosition(pos, world) {
   if (!pos || typeof pos !== 'object') return;
 
   // ── Step 1: 规范老字段 ──
   if (pos.headCount === undefined || pos.headCount === null || pos.headCount === '') pos.headCount = 1;
   if (typeof pos.headCount === 'string') { var _hc = parseInt(pos.headCount, 10); pos.headCount = isNaN(_hc) || _hc < 1 ? 1 : _hc; }
   if (!Array.isArray(pos.additionalHolders)) pos.additionalHolders = [];
+  if (!Array.isArray(pos.additionalHolderIds)) pos.additionalHolderIds = [];
   var _matCount = (pos.holder ? 1 : 0) + pos.additionalHolders.length;
   if (pos.actualCount === undefined) pos.actualCount = _matCount;
 
@@ -54,15 +55,26 @@ function _offMigratePosition(pos) {
     // 新字段已设 → 反向同步 actualCount
     var _derivedActual = Math.max(0, pos.establishedCount - pos.vacancyCount);
     if (pos.actualCount < _derivedActual) pos.actualCount = _derivedActual;
-    else if (pos.actualCount > _derivedActual && _matCount <= _derivedActual) pos.actualCount = _derivedActual;
+    // 旧档可能只用 actualCount 表达超编、尚无具象 holder 行；不得把该信息压回编制数。
+    // 后续 actualHolders 迁移会为这些实有人数补占位，统计层再分别报告缺员/超编。
   }
 
   // ── Step 3: actualHolders——若未存在则从老字段(holder + additionalHolders)构建 ──
   if (!Array.isArray(pos.actualHolders)) {
     var ah = [];
-    if (pos.holder) ah.push({ name: pos.holder, generated: true });
-    pos.additionalHolders.forEach(function(nm) {
-      if (nm && !ah.some(function(h){return h.name===nm;})) ah.push({ name: nm, generated: true });
+    if (pos.holder) ah.push({
+      characterId: pos.holderId === undefined || pos.holderId === null ? '' : String(pos.holderId).trim(),
+      name: pos.holder,
+      generated: true
+    });
+    pos.additionalHolders.forEach(function(nm, index) {
+      var mirrorId = pos.additionalHolderIds[index] === undefined || pos.additionalHolderIds[index] === null
+        ? '' : String(pos.additionalHolderIds[index]).trim();
+      var duplicate = ah.some(function(holder) {
+        if (mirrorId && holder.characterId) return String(holder.characterId) === mirrorId;
+        return !mirrorId && !holder.characterId && holder.name === nm;
+      });
+      if (nm && !duplicate) ah.push({ characterId: mirrorId, name: nm, generated: true });
     });
     // 补占位到 actualCount 长度
     while (ah.length < pos.actualCount) {
@@ -78,6 +90,9 @@ function _offMigratePosition(pos) {
     if (pos.actualHolders.length > pos.actualCount) pos.actualCount = pos.actualHolders.length;
   }
 
+  _offMigratePositionHolderIdentities(pos, world);
+  _offSyncLegacyHolderFields(pos, world);
+
   // 单人俸禄兼容
   if (!pos.perPersonSalary && pos.salary) pos.perPersonSalary = pos.salary;
   if (!pos.salary && pos.perPersonSalary) pos.salary = pos.perPersonSalary;
@@ -86,30 +101,161 @@ function _offMigratePosition(pos) {
 }
 
 /** 迁移整棵官制树 */
-function _offMigrateTree(tree) {
+function _offMigrateTree(tree, world) {
   if (!tree) return;
   _offWalkOfficeTree(tree, function(n) {
-    (n.positions||[]).forEach(function(p) { _offMigratePosition(p); });
+    (n.positions||[]).forEach(function(p) { _offMigratePosition(p, world); });
   });
+}
+
+function _offRuntimeWorld(world) {
+  return world || (typeof GM !== 'undefined' && GM) || null;
+}
+
+/** 仅以对象引用或稳定 ID 为权威；姓名只允许唯一旧档迁移。 */
+function _offResolveCharacterIdentity(ref, world) {
+  var G = _offRuntimeWorld(world);
+  var chars = G && Array.isArray(G.chars) ? G.chars : [];
+  if (!ref) return { ok: false, reason: 'character-reference-missing', char: null };
+  if (typeof ref === 'object') {
+    if (chars.indexOf(ref) < 0) return { ok: false, reason: 'character-not-in-world', char: null };
+    if (ref.id === undefined || ref.id === null || !String(ref.id).trim()) {
+      return { ok: false, reason: 'character-stable-id-missing', char: null };
+    }
+    return { ok: true, char: ref, characterId: String(ref.id).trim(), name: String(ref.name || '') };
+  }
+  var key = String(ref).trim();
+  if (!key) return { ok: false, reason: 'character-reference-missing', char: null };
+  var byId = chars.filter(function(ch) {
+    return ch && ch.id !== undefined && ch.id !== null && String(ch.id).trim() === key;
+  });
+  if (byId.length === 1) {
+    return { ok: true, char: byId[0], characterId: key, name: String(byId[0].name || '') };
+  }
+  if (byId.length > 1) return { ok: false, reason: 'duplicate-character-id', char: null };
+  var byName = chars.filter(function(ch) { return ch && ch.name === key; });
+  if (byName.length !== 1) {
+    return { ok: false, reason: byName.length ? 'ambiguous-character-name' : 'character-not-found', char: null };
+  }
+  if (byName[0].id === undefined || byName[0].id === null || !String(byName[0].id).trim()) {
+    return { ok: false, reason: 'character-stable-id-missing', char: null };
+  }
+  return {
+    ok: true,
+    char: byName[0],
+    characterId: String(byName[0].id).trim(),
+    name: String(byName[0].name || '')
+  };
+}
+
+function _offMigrateHolderIdentity(holder, world) {
+  if (!holder || holder.generated === false) return { ok: false, reason: 'not-materialized' };
+  var existingId = holder.characterId === undefined || holder.characterId === null
+    ? '' : String(holder.characterId).trim();
+  var resolved = _offResolveCharacterIdentity(existingId || holder.name, world);
+  if (!resolved.ok) {
+    holder.identityStatus = resolved.reason;
+    return resolved;
+  }
+  holder.characterId = resolved.characterId;
+  holder.name = resolved.name;
+  delete holder.identityStatus;
+  return resolved;
+}
+
+function _offMigratePositionHolderIdentities(pos, world) {
+  var out = { migrated: 0, ambiguous: 0, unresolved: 0 };
+  if (!pos || !Array.isArray(pos.actualHolders)) return out;
+  pos.actualHolders.forEach(function(holder) {
+    if (!holder || holder.generated === false) return;
+    var before = holder.characterId;
+    var result = _offMigrateHolderIdentity(holder, world);
+    if (result.ok && before !== holder.characterId) out.migrated++;
+    else if (result.reason === 'ambiguous-character-name') out.ambiguous++;
+    else if (!result.ok) out.unresolved++;
+  });
+  return out;
+}
+
+function _offHolderIdentityKey(holder, index) {
+  if (holder && holder.characterId !== undefined && holder.characterId !== null && String(holder.characterId).trim()) {
+    return 'id:' + String(holder.characterId).trim();
+  }
+  var name = holder && holder.name ? String(holder.name) : '';
+  return name ? 'legacy-name:' + name : 'placeholder:' + String(index || 0);
+}
+
+function _offAllHolderEntries(pos, world) {
+  if (!pos || !Array.isArray(pos.actualHolders)) return [];
+  _offMigratePositionHolderIdentities(pos, world);
+  var seen = Object.create(null);
+  return pos.actualHolders.filter(function(holder, index) {
+    if (!holder || !holder.name || holder.generated === false) return false;
+    var key = _offHolderIdentityKey(holder, index);
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+}
+
+function _offSyncLegacyHolderFields(pos, world) {
+  if (!pos) return;
+  var entries = _offAllHolderEntries(pos, world);
+  pos.holder = entries[0] ? entries[0].name : '';
+  pos.holderId = entries[0] && entries[0].characterId ? String(entries[0].characterId) : '';
+  pos.additionalHolders = entries.slice(1).map(function(holder) { return holder.name; });
+  pos.additionalHolderIds = entries.slice(1).map(function(holder) {
+    return holder.characterId ? String(holder.characterId) : '';
+  });
+  if (Array.isArray(pos.actualHolders)) pos.actualCount = pos.actualHolders.length;
 }
 
 /** 获取职位的具象人数——优先新模型 actualHolders，降级老模型 */
 function _offMaterializedCount(pos) {
   if (Array.isArray(pos.actualHolders)) {
-    return pos.actualHolders.filter(function(h){return h && h.name && h.generated!==false;}).length;
+    return _offAllHolderEntries(pos).length;
   }
-  return (pos.holder ? 1 : 0) + (pos.additionalHolders ? pos.additionalHolders.length : 0);
+  return _offAllHolders(pos).length;
 }
 
 /** 获取职位的所有具象角色名列表——优先新模型 */
 function _offAllHolders(pos) {
   if (Array.isArray(pos.actualHolders)) {
-    return pos.actualHolders.filter(function(h){return h && h.name && h.generated!==false;}).map(function(h){return h.name;});
+    return _offAllHolderEntries(pos).map(function(holder) { return holder.name; });
+  }
+  var seen = {};
+  function uniqueName(value) {
+    var name = value == null ? '' : String(value).trim();
+    if (!name || seen[name]) return false;
+    seen[name] = true;
+    return true;
   }
   var arr = [];
   if (pos.holder) arr.push(pos.holder);
   if (pos.additionalHolders) arr = arr.concat(pos.additionalHolders);
-  return arr;
+  return arr.filter(uniqueName);
+}
+
+function _offPositionStats(pos) {
+  _offMigratePosition(pos);
+  var established = Number(pos && pos.establishedCount);
+  if (!Number.isFinite(established) || established < 0) established = Number(pos && pos.headCount);
+  if (!Number.isFinite(established) || established < 0) established = 1;
+  established = Math.floor(established);
+  var holders = _offAllHolders(pos);
+  var placeholders = Array.isArray(pos && pos.actualHolders)
+    ? pos.actualHolders.filter(function(h) { return h && h.generated === false; }).length
+    : 0;
+  var actual = holders.length + placeholders;
+  return {
+    headCount: established,
+    actualCount: actual,
+    materialized: holders.length,
+    vacant: Math.max(0, established - actual),
+    overstaffed: Math.max(0, actual - established),
+    unmaterialized: Math.max(0, actual - holders.length),
+    holders: holders
+  };
 }
 
 function _offWalkOfficeTree(nodes, visitor, chain) {
@@ -324,124 +470,190 @@ function _offSeatPersonInPosition(pos, person, opts) {
   opts = opts || {};
   if (!pos || !person) return { ok: false, reason: 'missing position/person' };
   _offMigratePosition(pos);
-  var namedBefore = _offAllHolders(pos);
-  var oldHolder = opts.oldHolder;
-  if (oldHolder == null) oldHolder = pos.holder || namedBefore[0] || '';
-  if (opts.replace !== false && oldHolder && oldHolder !== person) {
-    if (typeof _offDismissPerson === 'function') _offDismissPerson(pos, oldHolder);
-    else if (pos.holder === oldHolder) pos.holder = '';
+  var resolved = _offResolveCharacterIdentity(person);
+  if (!resolved.ok) return { ok: false, reason: resolved.reason };
+  var entriesBefore = _offAllHolderEntries(pos);
+  var oldEntry = entriesBefore[0] || null;
+  if (opts.replace !== false && oldEntry && String(oldEntry.characterId || '') !== resolved.characterId) {
+    var dismissed = _offDismissCharacter(pos, oldEntry.characterId || oldEntry.name);
+    if (!dismissed.ok) return dismissed;
   }
-  if (typeof _offAppointPerson === 'function') _offAppointPerson(pos, person);
-  else pos.holder = person;
-  if (pos.publicTreasury) pos.publicTreasury.currentHead = person;
-  if (!pos.holder) pos.holder = person;
-  return { ok: true, oldHolder: oldHolder || '', holders: _offAllHolders(pos) };
+  var appointed = _offAppointCharacter(pos, resolved.char);
+  if (!appointed.ok) return appointed;
+  if (pos.publicTreasury) {
+    pos.publicTreasury.currentHead = resolved.name;
+    pos.publicTreasury.currentHeadId = resolved.characterId;
+  }
+  return { ok: true, oldHolder: oldEntry ? oldEntry.name : '', holders: _offAllHolders(pos) };
 }
 
-/** 任命：把 person 装入 position 的 actualHolders（优先填占位；无占位则扩展） */
-function _offAppointPerson(pos, person) {
-  if (!pos || !person) return;
-  _offMigratePosition(pos);
+/** 稳定 ID 任命：优先填占位；无占位则扩展。 */
+function _offAppointCharacter(pos, characterOrId, options) {
+  if (!pos || !characterOrId) return { ok: false, reason: 'missing-position-or-character' };
+  options = options || {};
+  var resolved = _offResolveCharacterIdentity(characterOrId, options.world);
+  if (!resolved.ok) return { ok: false, reason: resolved.reason };
+  _offMigratePosition(pos, options.world);
   if (!Array.isArray(pos.actualHolders)) pos.actualHolders = [];
   // ── 幽灵 holder 净化 ── 老剧本/老存档 holder 字段写了名字但 GM.chars 无此人·
   // 这种 ghost 占据 primary 位·新任会被挤为次席·导致 UI 渲染仍显「空缺」。
   // 任命前一律将 ghost 名转为占位·让新任能登 primary。
-  try {
-    if (typeof GM !== 'undefined' && Array.isArray(GM.chars)) {
-      var charSet = {};
-      GM.chars.forEach(function(c) { if (c && c.name) charSet[c.name] = true; });
-      pos.actualHolders.forEach(function(h) {
-        if (h && h.name && h.generated !== false && !charSet[h.name]) {
-          // 名字存在但 chars 无此人 → ghost·转为空占位
-          h._ghostPurged = h.name;
-          h.name = '';
-          h.generated = false;
-          if (!h.placeholderId) h.placeholderId = 'ph_' + Math.random().toString(36).slice(2,8);
-        }
-      });
+  pos.actualHolders.forEach(function(holder) {
+    if (!holder || !holder.name || holder.generated === false) return;
+    var holderResult = _offMigrateHolderIdentity(holder, options.world);
+    if (!holderResult.ok && holderResult.reason !== 'ambiguous-character-name') {
+      holder._ghostPurged = holder.name;
+      holder.name = '';
+      delete holder.characterId;
+      holder.generated = false;
+      if (!holder.placeholderId) holder.placeholderId = 'ph_' + Math.random().toString(36).slice(2,8);
     }
-  } catch(_){}
-  // 若已有同名条目，跳过
-  if (pos.actualHolders.some(function(h){return h && h.name === person && h.generated!==false;})) return;
+  });
+  if (pos.actualHolders.some(function(holder) {
+    return holder && holder.generated !== false && String(holder.characterId || '') === resolved.characterId;
+  })) return { ok: true, alreadyAppointed: true, characterId: resolved.characterId };
   // 找第一个 generated:false 占位
   var slot = pos.actualHolders.find(function(h){return h && h.generated===false;});
   if (slot) {
-    slot.name = person;
+    slot.name = resolved.name;
+    slot.characterId = resolved.characterId;
     slot.generated = true;
     slot.appointedTurn = (typeof GM!=='undefined' && GM.turn) || 0;
+    delete slot.identityStatus;
   } else {
     // 无占位——扩展一个（编制可能因此增加）
-    pos.actualHolders.push({ name: person, generated: true, appointedTurn: (typeof GM!=='undefined' && GM.turn) || 0 });
+    slot = {
+      characterId: resolved.characterId,
+      name: resolved.name,
+      generated: true,
+      appointedTurn: (typeof GM!=='undefined' && GM.turn) || 0
+    };
+    pos.actualHolders.push(slot);
     if (pos.actualHolders.length > pos.establishedCount) pos.establishedCount = pos.actualHolders.length;
     if (pos.actualHolders.length > pos.headCount) pos.headCount = pos.actualHolders.length;
     pos.actualCount = pos.actualHolders.length;
   }
-  // 同步老字段
-  var named = pos.actualHolders.filter(function(h){return h && h.name && h.generated!==false;}).map(function(h){return h.name;});
-  pos.holder = named[0] || '';
-  pos.additionalHolders = named.slice(1);
-  pos.actualCount = named.length + pos.actualHolders.filter(function(h){return h && h.generated===false;}).length;
+  _offSyncLegacyHolderFields(pos, options.world);
   // vacancyCount 同步：编制 - 已任 (而非旧值)
   if (typeof pos.establishedCount === 'number') {
-    pos.vacancyCount = Math.max(0, pos.establishedCount - named.length);
+    pos.vacancyCount = Math.max(0, pos.establishedCount - _offMaterializedCount(pos));
   }
+  return { ok: true, characterId: resolved.characterId, holder: slot };
 }
 
-/** 罢免：从 actualHolders 中移除 person，留下 generated:false 占位（不变更编制） */
-function _offDismissPerson(pos, person) {
-  if (!pos || !person) return;
-  _offMigratePosition(pos);
+/** 姓名兼容入口：仅唯一姓名可迁移；同名时明确拒绝。 */
+function _offAppointPerson(pos, person) {
+  return _offAppointCharacter(pos, person);
+}
+
+/** 稳定 ID 罢免：留下 generated:false 占位（不变更编制）。 */
+function _offDismissCharacter(pos, characterOrId, options) {
+  if (!pos || !characterOrId) return { ok: false, reason: 'missing-position-or-character' };
+  options = options || {};
+  var resolved = _offResolveCharacterIdentity(characterOrId, options.world);
+  if (!resolved.ok) return { ok: false, reason: resolved.reason };
+  _offMigratePosition(pos, options.world);
   if (!Array.isArray(pos.actualHolders)) pos.actualHolders = [];
-  var idx = pos.actualHolders.findIndex(function(h){return h && h.name === person;});
+  var idx = pos.actualHolders.findIndex(function(holder) {
+    return holder && holder.generated !== false && String(holder.characterId || '') === resolved.characterId;
+  });
   if (idx >= 0) {
     // 替换为占位（保持位置计数）
-    pos.actualHolders[idx] = { name: '', generated: false, placeholderId: 'ph_' + Math.random().toString(36).slice(2,8), vacatedBy: person, vacatedTurn: (typeof GM!=='undefined' && GM.turn) || 0 };
+    pos.actualHolders[idx] = {
+      name: '', generated: false,
+      placeholderId: 'ph_' + Math.random().toString(36).slice(2,8),
+      vacatedBy: resolved.name,
+      vacatedCharacterId: resolved.characterId,
+      vacatedTurn: (typeof GM!=='undefined' && GM.turn) || 0
+    };
   }
-  var named = pos.actualHolders.filter(function(h){return h && h.name && h.generated!==false;}).map(function(h){return h.name;});
-  pos.holder = named[0] || '';
-  pos.additionalHolders = named.slice(1);
+  _offSyncLegacyHolderFields(pos, options.world);
+  return idx >= 0
+    ? { ok: true, characterId: resolved.characterId }
+    : { ok: false, reason: 'holder-not-found', characterId: resolved.characterId };
 }
 
-/** 扫遍官制树·清除指定姓名的所有 holder 登记（死亡/贬谪/退隐级联）
+function _offDismissPerson(pos, person) {
+  return _offDismissCharacter(pos, person);
+}
+
+/** 真正腾空一个具名席位；用于继承等必须产生官缺的控制权交接。 */
+function _offVacatePersonSlot(pos, characterOrId, reason, world) {
+  if (!pos || !characterOrId) return { ok: false, reason: 'missing-position-or-character' };
+  var resolved = _offResolveCharacterIdentity(characterOrId, world);
+  if (!resolved.ok) return { ok: false, reason: resolved.reason };
+  _offMigratePosition(pos, world);
+  if (!Array.isArray(pos.holderHistory)) pos.holderHistory = [];
+  pos.holderHistory.push({
+    characterId: resolved.characterId,
+    name: resolved.name,
+    until: (typeof GM !== 'undefined' && GM.turn) || 0,
+    reason: reason || 'succession'
+  });
+  if (Array.isArray(pos.actualHolders)) {
+    pos.actualHolders = pos.actualHolders.filter(function(h) {
+      return !(h && String(h.characterId || '') === resolved.characterId && h.generated !== false);
+    });
+  }
+  _offSyncLegacyHolderFields(pos, world);
+  var established = Number(pos.establishedCount);
+  if (!Number.isFinite(established) || established < 0) established = Number(pos.headCount);
+  if (!Number.isFinite(established) || established < 0) established = 1;
+  pos.vacancyCount = Math.max(0, Math.floor(established) - pos.actualCount);
+  return { ok: true, characterId: resolved.characterId };
+}
+
+/** 扫遍官制树·按稳定角色 ID 清除所有 holder 登记（死亡/贬谪/退隐级联）
  * 返回 { vacated: [{dept, pos, rank}...] } 供事件日志使用
  * reason: 'death' | 'demote' | 'retire' | 'exile' | 'execute'
  */
-function _offVacateByCharName(charName, reason, tree) {
-  if (!charName) return { vacated: [] };
+function _offVacateByCharId(characterId, reason, tree, options) {
+  options = options || {};
+  var resolved = _offResolveCharacterIdentity(characterId, options.world);
+  if (!resolved.ok) return { ok: false, reason: resolved.reason, vacated: [] };
   tree = tree || (typeof GM !== 'undefined' && GM.officeTree) || [];
   var vacated = [];
   _offWalkOfficeTree(tree, function(n, curChain) {
     (n.positions || []).forEach(function(p) {
       if (!p) return;
-      // 新模型 actualHolders
-      if (Array.isArray(p.actualHolders)) {
-        var hitNew = p.actualHolders.some(function(h){ return h && h.name === charName && h.generated !== false; });
-        if (hitNew) {
-          _offDismissPerson(p, charName);
-          vacated.push({ dept: n.name, pos: p.name, rank: p.rank || '', chain: curChain, reason: reason || '' });
+      _offMigratePosition(p, options.world);
+      var hit = _offAllHolderEntries(p, options.world).some(function(holder) {
+        return String(holder.characterId || '') === resolved.characterId;
+      });
+      if (!hit) return;
+      var result = options.leaveVacancy === true
+        ? _offVacatePersonSlot(p, resolved.char, reason, options.world)
+        : _offDismissCharacter(p, resolved.char, { world: options.world });
+      if (!result.ok) throw new Error('官职稳定 ID 注销失败: ' + result.reason);
+      if (p.publicTreasury) {
+        var headMatches = String(p.publicTreasury.currentHeadId || '') === resolved.characterId;
+        if (!p.publicTreasury.currentHeadId && p.publicTreasury.currentHead) {
+          var legacyHead = _offResolveCharacterIdentity(p.publicTreasury.currentHead, options.world);
+          headMatches = legacyHead.ok && legacyHead.characterId === resolved.characterId;
         }
-      }
-      // 老模型 holder 直接匹配（即使已做 dismiss 也做兜底）
-      if (p.holder === charName) {
-        if (!Array.isArray(p.holderHistory)) p.holderHistory = [];
-        p.holderHistory.push({ name: charName, until: (typeof GM !== 'undefined' && GM.turn) || 0, reason: reason || '身故级联' });
-        p.holder = '';
-        p.holderSinceTurn = 0;
-        // 公库头衔同步
-        if (p.publicTreasury && p.publicTreasury.currentHead === charName) {
-          p.publicTreasury.previousHead = charName;
+        if (headMatches) {
+          p.publicTreasury.previousHead = resolved.name;
+          p.publicTreasury.previousHeadId = resolved.characterId;
           p.publicTreasury.currentHead = null;
+          p.publicTreasury.currentHeadId = '';
         }
-        vacated.push({ dept: n.name, pos: p.name, rank: p.rank || '', chain: curChain, reason: reason || '' });
       }
-      // additionalHolders 兼容
-      if (Array.isArray(p.additionalHolders)) {
-        var ai = p.additionalHolders.indexOf(charName);
-        if (ai >= 0) p.additionalHolders.splice(ai, 1);
-      }
+      vacated.push({
+        characterId: resolved.characterId,
+        name: resolved.name,
+        dept: n.name, pos: p.name, rank: p.rank || '', chain: curChain, reason: reason || ''
+      });
     });
   });
-  return { vacated: vacated };
+  return { ok: true, characterId: resolved.characterId, vacated: vacated };
+}
+
+/** 旧姓名兼容：仅当前世界唯一姓名可迁移，歧义姓名绝不猜测。 */
+function _offVacateByCharName(charName, reason, tree, options) {
+  options = options || {};
+  var resolved = _offResolveCharacterIdentity(charName, options.world);
+  if (!resolved.ok) return { ok: false, reason: resolved.reason, vacated: [] };
+  return _offVacateByCharId(resolved.characterId, reason, tree, options);
 }
 
 /** 扫全局·清除所有 alive===false 或找不到的 holder（endturn 兜底 sweep）
@@ -450,25 +662,27 @@ function _offVacateByCharName(charName, reason, tree) {
 function _offSweepGhostHolders() {
   if (typeof GM === 'undefined' || !GM.officeTree) return { swept: [] };
   var swept = [];
-  var _findCh = (typeof findCharByName === 'function') ? findCharByName : function(n){
-    return (GM.chars||[]).find(function(c){ return c && c.name === n; });
-  };
   _offWalkOfficeTree(GM.officeTree, function(n) {
     (n.positions || []).forEach(function(p) {
       if (!p) return;
-      var names = [];
-      if (p.holder) names.push(p.holder);
-      if (Array.isArray(p.actualHolders)) {
-        p.actualHolders.forEach(function(h){ if (h && h.name && h.generated !== false) names.push(h.name); });
-      }
-      var seen = {};
-      names.forEach(function(nm){
-        if (seen[nm]) return; seen[nm] = 1;
-        var ch = _findCh(nm);
-        if (!ch || ch.alive === false || ch.dead) {
-          _offVacateByCharName(nm, 'ghost-sweep');
-          swept.push({ name: nm, dept: n.name, pos: p.name });
+      _offMigratePosition(p);
+      _offAllHolderEntries(p).slice().forEach(function(holder) {
+        var resolved = _offResolveCharacterIdentity(holder.characterId || holder.name);
+        if (resolved.ok && resolved.char.alive !== false && !resolved.char.dead) return;
+        // 同名歧义不是幽灵：保留旧行等待显式迁移，绝不任选一人。
+        if (!resolved.ok && resolved.reason === 'ambiguous-character-name') return;
+        if (resolved.ok) {
+          _offVacateByCharId(resolved.characterId, 'ghost-sweep');
+        } else {
+          if (!Array.isArray(p.holderHistory)) p.holderHistory = [];
+          p.holderHistory.push({
+            characterId: holder.characterId || '', name: holder.name,
+            until: Number(GM.turn) || 0, reason: 'ghost-sweep'
+          });
+          p.actualHolders = p.actualHolders.filter(function(row) { return row !== holder; });
+          _offSyncLegacyHolderFields(p);
         }
+        swept.push({ characterId: holder.characterId || '', name: holder.name, dept: n.name, pos: p.name });
       });
     });
   });
@@ -477,32 +691,35 @@ function _offSweepGhostHolders() {
 
 /** 获取部门的聚合统计 */
 function _offDeptStats(dept) {
-  var stats = { headCount: 0, actualCount: 0, materialized: 0, vacant: 0, unmaterialized: 0, holders: [] };
+  var stats = { headCount: 0, actualCount: 0, materialized: 0, vacant: 0, overstaffed: 0, unmaterialized: 0, holders: [] };
   _offWalkOfficeTree([dept], function(n) {
     (n.positions||[]).forEach(function(p) {
-      _offMigratePosition(p);
-      stats.headCount += (p.headCount||1);
-      stats.actualCount += (p.actualCount||0);
-      var m = _offMaterializedCount(p);
-      stats.materialized += m;
-      _offAllHolders(p).forEach(function(h) { stats.holders.push(h); });
+      var posStats = _offPositionStats(p);
+      stats.headCount += posStats.headCount;
+      stats.actualCount += posStats.actualCount;
+      stats.materialized += posStats.materialized;
+      stats.vacant += posStats.vacant;
+      stats.overstaffed += posStats.overstaffed;
+      stats.unmaterialized += posStats.unmaterialized;
+      posStats.holders.forEach(function(h) { stats.holders.push(h); });
     });
   });
-  stats.vacant = stats.headCount - stats.actualCount;
-  stats.unmaterialized = stats.actualCount - stats.materialized;
   return stats;
 }
 
 /** 获取整棵树的聚合统计 */
 function _offTreeStats(tree) {
-  var stats = { headCount: 0, actualCount: 0, materialized: 0, depts: 0 };
+  var stats = { headCount: 0, actualCount: 0, materialized: 0, vacant: 0, overstaffed: 0, unmaterialized: 0, depts: 0 };
   _offWalkOfficeTree(tree||[], function(n) {
     stats.depts++;
     (n.positions||[]).forEach(function(p) {
-      _offMigratePosition(p);
-      stats.headCount += (p.headCount||1);
-      stats.actualCount += (p.actualCount||0);
-      stats.materialized += _offMaterializedCount(p);
+      var posStats = _offPositionStats(p);
+      stats.headCount += posStats.headCount;
+      stats.actualCount += posStats.actualCount;
+      stats.materialized += posStats.materialized;
+      stats.vacant += posStats.vacant;
+      stats.overstaffed += posStats.overstaffed;
+      stats.unmaterialized += posStats.unmaterialized;
     });
   });
   return stats;
@@ -561,6 +778,104 @@ function getRankInfo(rankStr) {
   return null;
 }
 
+/**
+ * 规范官阶数值。官阶表以 level 数值越小越高为唯一契约；非法值不猜测。
+ * @param {number|string|Object} value
+ * @returns {number|null}
+ */
+function normalizeRankLevel(value) {
+  if (value && typeof value === 'object') {
+    if (value.rankLevel !== undefined) value = value.rankLevel;
+    else if (value.level !== undefined) value = value.level;
+    else value = value.rank || value.officialTitle || value.title;
+  }
+  var H = _activeRankHierarchy();
+  if (typeof value === 'string' && value.trim() && !/^[-+]?\d+(?:\.\d+)?$/.test(value.trim())) {
+    var fromText = getRankInfo(value);
+    return fromText && Number.isFinite(Number(fromText.level)) ? Number(fromText.level) : null;
+  }
+  var n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  for (var i = 0; i < H.length; i++) {
+    if (Number(H[i] && H[i].level) === n) return n;
+  }
+  return null;
+}
+
+/** 按 level 或角色对象取得当前朝代官阶元数据。 */
+function getRankMeta(value, rankText) {
+  var H = _activeRankHierarchy();
+  var level = normalizeRankLevel(value);
+  if (level == null && rankText) level = normalizeRankLevel(rankText);
+  if (level == null && value && typeof value === 'object') {
+    level = normalizeRankLevel(value.officialTitle || value.title || value.rank);
+  }
+  if (level == null) return null;
+  for (var i = 0; i < H.length; i++) {
+    if (Number(H[i] && H[i].level) === level) return H[i];
+  }
+  return null;
+}
+
+function _orderedRankHierarchy() {
+  return _activeRankHierarchy().filter(function(meta) {
+    return meta && Number.isFinite(Number(meta.level));
+  }).slice().sort(function(a, b) { return Number(a.level) - Number(b.level); });
+}
+
+/** 官阶资序权重：最高官为表长，最低官为 1；不依赖固定十八级。 */
+function getRankSeniorityScore(value, rankText) {
+  var meta = getRankMeta(value, rankText);
+  if (!meta) return 0;
+  var H = _orderedRankHierarchy();
+  for (var i = 0; i < H.length; i++) {
+    if (Number(H[i].level) === Number(meta.level)) return H.length - i;
+  }
+  return 0;
+}
+
+/** 低阶负担权重：最高官为 1，最低官为表长，用于向上孝敬等明确的低阶负担。 */
+function getRankInferiorityScore(value, rankText) {
+  var meta = getRankMeta(value, rankText);
+  if (!meta) return 0;
+  var H = _orderedRankHierarchy();
+  for (var i = 0; i < H.length; i++) {
+    if (Number(H[i].level) === Number(meta.level)) return i + 1;
+  }
+  return 0;
+}
+
+/** 优先使用本朝 rank metadata 的俸禄；缺少 salary 时按资序给出有限兼容值。 */
+function getRankSalary(value, rankText) {
+  var meta = getRankMeta(value, rankText);
+  if (!meta) return 0;
+  var salary = Number(meta.salary !== undefined ? meta.salary : meta.monthlySalary);
+  if (Number.isFinite(salary) && salary >= 0) return salary;
+  return getRankSeniorityScore(meta) * 8;
+}
+
+function getRankGrainSalary(value, rankText) {
+  var meta = getRankMeta(value, rankText);
+  if (!meta) return 0;
+  var grain = Number(meta.grainSalary !== undefined ? meta.grainSalary : meta.salaryGrain);
+  if (Number.isFinite(grain) && grain >= 0) return grain;
+  return getRankSalary(meta) * 0.2;
+}
+
+/** 默认将当前官阶表最高三分之一视为高官；topCount 可用于更窄的礼遇门槛。 */
+function isHighOfficial(value, topCount) {
+  var meta = getRankMeta(value);
+  if (!meta) return false;
+  var H = _orderedRankHierarchy();
+  var limit = Number(topCount);
+  if (!Number.isFinite(limit) || limit < 1) limit = Math.max(1, Math.ceil(H.length / 3));
+  limit = Math.min(H.length, Math.floor(limit));
+  for (var i = 0; i < limit; i++) {
+    if (Number(H[i].level) === Number(meta.level)) return true;
+  }
+  return false;
+}
+
 /** 计算官员满意度（大材小用/小材大用检测） */
 function calcOfficialSatisfaction(charName, posRank, deptName) {
   var ch = findCharByName(charName);
@@ -568,11 +883,13 @@ function calcOfficialSatisfaction(charName, posRank, deptName) {
   // 能力综合分
   var abilityScore = ((ch.intelligence||50) + (ch.administration||50) + (ch.military||50)) / 3;
   var rankLevel = getRankLevel(posRank);
-  // 品级越高(level越小)→需要越高能力
-  var expectedAbility = Math.max(30, 90 - rankLevel * 3.5);
+  // 品级越高→需要越高能力；按当前朝代实际 hierarchy 长度归一，不硬编码 18/19。
+  var hierarchyLength = Math.max(1, _orderedRankHierarchy().length);
+  var seniority = getRankSeniorityScore(rankLevel);
+  var expectedAbility = hierarchyLength <= 1 ? 60 : 30 + ((seniority - 1) / (hierarchyLength - 1)) * 60;
   var diff = abilityScore - expectedAbility;
   // 野心影响：野心高的人在低品级更不满
-  var ambitionPenalty = rankLevel > 10 ? (ch.ambition||50) * 0.3 : 0;
+  var ambitionPenalty = getRankInferiorityScore(rankLevel) > Math.ceil(hierarchyLength * 0.55) ? (ch.ambition||50) * 0.3 : 0;
   var satisfaction = 50 + diff * 0.8 - ambitionPenalty;
   satisfaction = Math.max(0, Math.min(100, Math.round(satisfaction)));
   var label = satisfaction > 75 ? '志得意满' : satisfaction > 55 ? '安于其位' : satisfaction > 35 ? '郁郁不得志' : '怀才不遇';
@@ -609,7 +926,7 @@ async function _offMaterialize(deptName, posName) {
     if (parsed && parsed.name) {
       if (!GM.chars) GM.chars = [];
       if (!GM.chars.find(function(ch){ return ch.name === parsed.name; })) {
-        (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })({
+        createRuntimeCharacter({
           name: parsed.name, title: posName, officialTitle: posName,
           personality: parsed.personality||'', intelligence: parsed.intelligence||55,
           administration: parsed.administration||55, military: parsed.military||40,
@@ -1117,34 +1434,42 @@ function _offCharInRealm(c, realm) {
   return c.faction.indexOf(realm) >= 0 || realm.indexOf(c.faction) >= 0;
 }
 
-/** 按名去重 chars(应对存档重复人物·保留含officialTitle且alive的最佳条目) */
+/** 按稳定身份去重 chars；同名不同 ID 是两个合法人物，绝不合并。 */
 function _offDedupCharsByName(chars) {
-  var byName = {}, order = [];
+  var out = [], byId = Object.create(null);
   (chars || []).forEach(function(c){
-    if (!c || !c.name) return;
-    var ex = byName[c.name];
+    if (!c || out.indexOf(c) >= 0) return;
+    var id = c.id === undefined || c.id === null ? '' : String(c.id).trim();
+    if (!id) { out.push(c); return; }
+    var at = byId[id];
+    if (at === undefined) { byId[id] = out.length; out.push(c); return; }
+    var ex = out[at];
     var sc = (c.officialTitle ? 2 : 0) + (c.alive !== false ? 1 : 0) + (c.id ? 1 : 0);
     var exsc = ex ? ((ex.officialTitle ? 2 : 0) + (ex.alive !== false ? 1 : 0) + (ex.id ? 1 : 0)) : -1;
-    if (!ex) order.push(c.name);
-    if (!ex || sc > exsc) byName[c.name] = c;
+    if (sc > exsc) out[at] = c;
   });
-  return order.map(function(n){ return byName[n]; });
+  return out;
 }
 
 /**
- * 全局去重 GM.chars(同名重复人物·存档/剧本补全合并的副作用)。
- * 保留最丰富条目为 canonical·把 drop 的非空字段补进 canonical 缺失处(只补不覆盖)·删除多余条目。
- * 重要:dup chars 致 findCharByName 返回残桩(无officialTitle)→AI写官职写错条目、图志显布衣。
+ * 全局去重 GM.chars：只收敛同一对象引用或重复稳定 ID。
+ * 同名不同 ID 是合法实体，必须同时保留；旧档缺 ID 的同名歧义交由存档身份迁移处理。
  */
 function _offDedupGMChars() {
   if (typeof GM === 'undefined' || !GM || !Array.isArray(GM.chars)) return 0;
-  var byName = {}, orderNames = [], anon = [], removed = 0;
+  var out = [], byId = Object.create(null), removed = 0;
   var richness = function(x){ return (x.id ? 4 : 0) + (x.officialTitle ? 2 : 0) + (x.alive !== false ? 1 : 0) + (Object.keys(x).length * 0.01); };
   GM.chars.forEach(function(c){
-    if (!c || !c.name) { anon.push(c); return; }
-    if (!byName[c.name]) { byName[c.name] = c; orderNames.push(c.name); return; }
+    if (!c) return;
+    if (out.indexOf(c) >= 0) { removed++; return; }
+    var id = c.id === undefined || c.id === null ? '' : String(c.id).trim();
+    if (!id || byId[id] === undefined) {
+      if (id) byId[id] = out.length;
+      out.push(c);
+      return;
+    }
     removed++;
-    var ex = byName[c.name], canonical, drop;
+    var at = byId[id], ex = out[at], canonical, drop;
     if (richness(c) > richness(ex)) { canonical = c; drop = ex; } else { canonical = ex; drop = c; }
     Object.keys(drop).forEach(function(k){
       var cv = canonical[k];
@@ -1153,10 +1478,10 @@ function _offDedupGMChars() {
         if (dv !== undefined && dv !== null && dv !== '') canonical[k] = dv;
       }
     });
-    byName[c.name] = canonical;
+    out[at] = canonical;
   });
   if (removed > 0) {
-    GM.chars = orderNames.map(function(n){ return byName[n]; }).concat(anon.filter(Boolean));
+    GM.chars = out;
     try { if (typeof buildIndices === 'function') buildIndices(); } catch (_) {}
   }
   return removed;
@@ -1272,7 +1597,7 @@ function _offSyncHoldersFromChars(opts) {
     var h = 0, src = GM.chars || [];
     for (var _i = 0; _i < src.length; _i++) {
       var _c = src[_i]; if (!_c) continue;
-      var _s = (_c.name || '') + '#' + (_c.officialTitle || '') + '#' + (_c.concurrentTitle || '') + '#' + (_c.alive === false ? 0 : 1) + '#' + (_c.faction || '');
+      var _s = (_c.id || '') + '#' + (_c.name || '') + '#' + (_c.officialTitle || '') + '#' + (_c.concurrentTitle || '') + '#' + (_c.alive === false ? 0 : 1) + '#' + (_c.faction || '');
       for (var _k = 0; _k < _s.length; _k++) { h = ((h << 5) - h + _s.charCodeAt(_k)) | 0; }
     }
     sig += h;
@@ -1298,19 +1623,37 @@ function _offSyncHoldersFromChars(opts) {
       slots.push({
         node: n, pos: p, dept: n.name || '', posName: p.name || '',
         cap: Math.max(1, p.establishedCount || p.headCount || 1),
-        prev: _offAllHolders(p), fill: []
+        prev: _offAllHolderEntries(p).map(function(holder) {
+          return { characterId: holder.characterId || '', name: holder.name || '' };
+        }),
+        fill: []
       });
     });
     return true;
   });
 
-  var findCh = function(nm){ for (var i = 0; i < chars.length; i++) if (chars[i].name === nm) return chars[i]; return null; };
+  var charsById = Object.create(null), charsByName = Object.create(null), charKeys = new Map();
+  chars.forEach(function(ch, index) {
+    if (!ch) return;
+    var id = ch.id === undefined || ch.id === null ? '' : String(ch.id).trim();
+    charKeys.set(ch, id ? 'id:' + id : 'legacy-row:' + index);
+    if (id) charsById[id] = ch;
+    var name = String(ch.name || '');
+    if (name) (charsByName[name] = charsByName[name] || []).push(ch);
+  });
+  var findCh = function(holder) {
+    if (!holder) return null;
+    var id = holder.characterId === undefined || holder.characterId === null ? '' : String(holder.characterId).trim();
+    if (id) return charsById[id] || null;
+    var named = charsByName[String(holder.name || '')] || [];
+    return named.length === 1 ? named[0] : null;
+  };
 
   // ── Pass 0: 导入——树 holder 回填到缺 officialTitle 的人物 ──
   if (opts.importSeats) {
     slots.forEach(function(sl){
-      sl.prev.forEach(function(nm){
-        var ch = findCh(nm);
+      sl.prev.forEach(function(holder){
+        var ch = findCh(holder);
         if (ch && !_offNormalizeTitleName(ch.officialTitle || '')) {
           _offAddCharOfficeTitle(ch, sl.posName, { concurrent: false });
         }
@@ -1319,8 +1662,8 @@ function _offSyncHoldersFromChars(opts) {
   }
 
   // ── 收集本朝活跃官职诉求(每个官职一条 claim) ──
-  var claims = [];               // {name, ch, title, primary}
-  var claimsByChar = {};         // name -> [claim index]
+  var claims = [];               // {key,characterId,name,ch,title,primary}
+  var claimsByChar = {};         // stable identity key -> [claim index]
   chars.forEach(function(c){
     if (!c || c.alive === false) return;
     if (!_offCharInRealm(c, realm)) return;
@@ -1332,8 +1675,10 @@ function _offSyncHoldersFromChars(opts) {
       if (_OFF_RETIRE_RE.test(String(t))) return;
       if (_OFF_HAREM_RE.test(String(t))) return;
       var idx = claims.length;
-      claims.push({ name: c.name, ch: c, title: t, primary: i === 0 });
-      (claimsByChar[c.name] = claimsByChar[c.name] || []).push(idx);
+      var characterId = c.id === undefined || c.id === null ? '' : String(c.id).trim();
+      var claimKey = charKeys.get(c);
+      claims.push({ key: claimKey, characterId: characterId, name: c.name, ch: c, title: t, primary: i === 0 });
+      (claimsByChar[claimKey] = claimsByChar[claimKey] || []).push(idx);
     });
   });
 
@@ -1342,16 +1687,18 @@ function _offSyncHoldersFromChars(opts) {
 
   // ── Pass 1: 硬锁既有座位(既有 holder 活着且仍 claim 兼容→原地保留) ──
   slots.forEach(function(sl){
-    sl.prev.forEach(function(nm){
+    sl.prev.forEach(function(holder){
       if (sl.fill.length >= sl.cap) return;
-      var cis = claimsByChar[nm] || [];
+      var previousChar = findCh(holder);
+      if (!previousChar) return;
+      var cis = claimsByChar[charKeys.get(previousChar)] || [];
       var bestCi = -1, bestSc = 0;
       cis.forEach(function(ci){
         if (used[ci]) return;
         var s = _offTitleSlotScore(claims[ci].title, sl.dept, sl.posName, true);
         if (s >= 40 && s > bestSc) { bestSc = s; bestCi = ci; }
       });
-      if (bestCi >= 0) { used[bestCi] = true; claimSlot[bestCi] = sl; sl.fill.push(claims[bestCi].name); }
+      if (bestCi >= 0) { used[bestCi] = true; claimSlot[bestCi] = sl; sl.fill.push(claims[bestCi]); }
     });
   });
 
@@ -1370,7 +1717,7 @@ function _offSyncHoldersFromChars(opts) {
     if (used[pr.ci]) return;
     var sl = slots[pr.si];
     if (sl.fill.length >= sl.cap) return;
-    used[pr.ci] = true; claimSlot[pr.ci] = sl; sl.fill.push(claims[pr.ci].name);
+    used[pr.ci] = true; claimSlot[pr.ci] = sl; sl.fill.push(claims[pr.ci]);
   });
 
   // ── 同衔重复幽灵清理(治"任命未让位→同一官衔多人持·cap=1 正式座只坐一人·余者被 Pass3 甩进编制外显幽灵同衔·过回合越积越多·图志/树双误显官职掉") ──
@@ -1395,17 +1742,30 @@ function _offSyncHoldersFromChars(opts) {
 
   // ── 应用:把 fill 写回职位的 holder/actualHolders(保结构/编制/元数据) ──
   slots.forEach(function(sl){
-    var p = sl.pos, named = sl.fill;
+    var p = sl.pos, filledClaims = sl.fill;
+    var named = filledClaims.map(function(claim) { return claim.name; });
     var keepPlaceholders = (Array.isArray(p.actualHolders) ? p.actualHolders : []).filter(function(h){ return h && h.generated === false; });
-    var ah = named.map(function(nm){ return { name: nm, generated: true }; });
+    var previousById = Object.create(null);
+    (Array.isArray(p.actualHolders) ? p.actualHolders : []).forEach(function(holder) {
+      if (holder && holder.characterId) previousById[String(holder.characterId)] = holder;
+    });
+    var ah = filledClaims.map(function(claim) {
+      var old = claim.characterId ? previousById[claim.characterId] : null;
+      return {
+        characterId: claim.characterId,
+        name: claim.name,
+        generated: true,
+        appointedTurn: old && old.appointedTurn !== undefined
+          ? old.appointedTurn : ((typeof GM !== 'undefined' && GM.turn) || 0)
+      };
+    });
     var estab = Math.max(named.length, p.establishedCount || p.headCount || 1);
     var ki = 0;
     while (ah.length < estab) {
       ah.push(keepPlaceholders[ki++] || { name: '', generated: false, placeholderId: 'ph_' + Math.random().toString(36).slice(2, 8) });
     }
     p.actualHolders = ah;
-    p.holder = named[0] || '';
-    p.additionalHolders = named.slice(1);
+    _offSyncLegacyHolderFields(p);
     // 保留 office_aggregate 的匿名填充占位(generated:false 且有 filledTurn)计入实有
     var anonFilled = ah.filter(function(h){ return h && h.generated === false && h.filledTurn; }).length;
     p.actualCount = named.length + anonFilled;
@@ -1425,7 +1785,7 @@ function _offSyncHoldersFromChars(opts) {
       var _ssc = _offTitleSlotScore(cl.title, slots[_ssi].dept, slots[_ssi].posName, false);
       if (_ssc > _selfSc) { _selfSc = _ssc; _selfBest = slots[_ssi]; }
     }
-    if (_selfBest && _selfSc >= 40 && _selfBest.fill.indexOf(cl.name) >= 0) { used[ci2] = true; continue; }
+    if (_selfBest && _selfSc >= 40 && _selfBest.fill.some(function(row) { return row && row.key === cl.key; })) { used[ci2] = true; continue; }
     var cls = _offClassifyTitle(cl.title);
     var gkey = cls.court + ':' + cls.group;
     if (!dynByGroup[gkey]) {
@@ -1437,8 +1797,10 @@ function _offSyncHoldersFromChars(opts) {
     }
     dynByGroup[gkey].positions.push({
       name: _offNormalizeTitleName(cl.title) || cl.title, rank: cl.ch.rank || '', holder: cl.name,
-      desc: '', headCount: 1, actualCount: 1, additionalHolders: [],
-      establishedCount: 1, vacancyCount: 0, actualHolders: [{ name: cl.name, generated: true }],
+      holderId: cl.characterId,
+      desc: '', headCount: 1, actualCount: 1, additionalHolders: [], additionalHolderIds: [],
+      establishedCount: 1, vacancyCount: 0,
+      actualHolders: [{ characterId: cl.characterId, name: cl.name, generated: true }],
       _offDynamicPos: true
     });
     used[ci2] = true;
@@ -1456,10 +1818,17 @@ if (typeof window !== 'undefined') {
   window._findPositionByCharName = _findPositionByCharName;
   window._offFindPositionByName = _offFindPositionByName;
   window._offSeatPersonInPosition = _offSeatPersonInPosition;
+  window._offResolveCharacterIdentity = _offResolveCharacterIdentity;
+  window._offMigratePositionHolderIdentities = _offMigratePositionHolderIdentities;
+  window._offAllHolderEntries = _offAllHolderEntries;
+  window._offAppointCharacter = _offAppointCharacter;
+  window._offDismissCharacter = _offDismissCharacter;
+  window._offVacateByCharId = _offVacateByCharId;
   window._offIsConcurrentAppointment = _offIsConcurrentAppointment;
   window._offAddCharOfficeTitle = _offAddCharOfficeTitle;
   window._offRemoveCharOfficeTitle = _offRemoveCharOfficeTitle;
   window._offGetCharOfficeTitles = _offGetCharOfficeTitles;
+  window._offPositionStats = _offPositionStats;
   window._offFormatCharTitles = _offFormatCharTitles;
   window._offSyncHoldersFromChars = _offSyncHoldersFromChars;
   window._offTitleSlotScore = _offTitleSlotScore;
@@ -1494,7 +1863,9 @@ function _engineRetireOfficial(c, reason) {
   // 数组 claim 一并撤(2026-07-04 审查定罪)：officialTitles/concurrentTitles 里未带后缀的旧衔仍是活 claim·
   // 派生同步(claims 过滤只滤带致仕后缀的 officialTitle)会把致仕者原座坐回=致仕自我还原。_preRetireTitle 已留起复凭据。
   c.officialTitles = []; c.concurrentTitles = []; c.concurrentTitle = '';
-  if (typeof _offVacateByCharName === 'function') { try { _offVacateByCharName(c.name, reason); } catch (e) {} }
+  if (typeof _offVacateByCharId !== 'function') throw new Error('致仕缺少稳定 ID 官职注销入口');
+  var vacated = _offVacateByCharId(c.id, reason);
+  if (!vacated || vacated.ok !== true) throw new Error('致仕官职注销失败: ' + ((vacated && vacated.reason) || 'unknown'));
   if (typeof addEB === 'function') addEB('人事', c.name + ' ' + reason + '·致仕去位（官缺待补·可诏起复）');
   _officeChronLink('官制↔人事', c.name + ' ' + reason + '·准致仕去位（新陈代谢·官缺待补）');
 }

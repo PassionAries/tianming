@@ -235,10 +235,10 @@ function _cy_jishiAdd(kind, topic, speaker, line, meta) {
 
 /** 获取玩家当前所在地（可能不是京城） */
 function _getPlayerLocation() {
-  if (P.playerInfo && P.playerInfo.characterName) {
-    var pch = findCharByName(P.playerInfo.characterName);
-    if (pch && pch.location) return pch.location;
-  }
+  var pch = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getCharacter === 'function')
+    ? TM.Player.getCharacter(GM)
+    : (GM.chars || []).find(function(c) { return c && c.isPlayer === true; });
+  if (pch && pch.location) return pch.location;
   return GM._capital || '京城';
 }
 

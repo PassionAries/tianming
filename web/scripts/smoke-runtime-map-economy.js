@@ -92,11 +92,10 @@ const mapContext = {
   },
   _dbg() {}
 };
-mapContext.getLiveMapData = () => mapContext.GM.mapData;
 mapContext.window = mapContext;
 mapContext.globalThis = mapContext;
 vm.createContext(mapContext);
-vm.runInContext(extractFunction(mapSource, 'updateMapColors'), mapContext, { filename: 'updateMapColors.js' });
+vm.runInContext(mapSource, mapContext, { filename: 'tm-map-system.js' });
 mapContext.updateMapColors();
 check(mapContext.GM.mapData.regions[0].color === '#abcdef', 'map color refresh must update the runtime GM region');
 check(mapContext.P.map.regions[0].color === '#111111', 'map color refresh must not mutate or display the scenario template region');
@@ -203,7 +202,7 @@ migrationContext.window = migrationContext;
 migrationContext.globalThis = migrationContext;
 vm.createContext(migrationContext);
 vm.runInContext(mapSource, migrationContext, { filename: 'tm-map-system.js' });
-const migratedMap = migrationContext.getLiveMapData();
+const migratedMap = migrationContext.ensureWritableRuntimeMap();
 check(migratedMap === migrationContext.GM.mapData && migratedMap.regions[0].id === 'legacy', 'empty GM.mapData scaffold must not hide populated legacy GM.map');
 check(migratedMap.mapSchemaVersion === 1, 'legacy runtime map migration must stamp a schema version');
 check(migratedMap !== migrationContext.GM.map, 'legacy map migration must detach the authoritative runtime object');

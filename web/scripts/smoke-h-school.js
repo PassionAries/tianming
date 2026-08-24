@@ -17,6 +17,7 @@ global.findCharByName = function(name) {
   return global.GM.chars.find(c => c && c.name === name);
 };
 
+require('../tm-indices.js');
 require('../tm-qiju-ledger.js');   // 编年史已收口走 TM.Chronicle 写口(2026-07-04)·沙箱须与运行时同形态
 require('../tm-keju-school-network.js');
 

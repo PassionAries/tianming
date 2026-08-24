@@ -20,8 +20,8 @@ function _mapSystemFiniteNumberOr(value, fallback) {
 
 function initMapSystem() {
   // 旧档可能只有 GM.map，而兼容初始化会预先造出一个空 GM.mapData。
-  // 在补脚手架前先让权威选择器完成一次有版本标记的迁移。
-  getLiveMapData();
+  // 在补脚手架前先建立世界拥有的可写运行态；模板只允许作为克隆源。
+  ensureWritableRuntimeMap();
   if (!GM.mapData) {
     GM.mapData = {
       cities: {},
@@ -117,21 +117,30 @@ function hasRuntimeMapContent(mapData) {
 }
 
 function migrateLegacyRuntimeMap(legacyMap) {
-  var migrated = cloneMapValue(legacyMap);
-  normalizeGameMapRuntime(migrated);
-  migrated.mapSchemaVersion = TM_RUNTIME_MAP_SCHEMA_VERSION;
-  if (typeof GM !== 'undefined' && GM) GM.mapData = migrated; // arch-ok: runtime-map owner performs the one-time legacy map migration
-  return migrated;
+  return ensureWritableRuntimeMap({ sourceMap: legacyMap, forceClone: true });
 }
 
-function getLiveMapData() {
+function _scenarioMapSource() {
+  if (typeof GM === 'undefined' || !GM || !GM.sid || typeof findScenarioById !== 'function') return null;
+  var scenario = findScenarioById(GM.sid);
+  if (!scenario || typeof scenario !== 'object') return null;
+  if (scenario.mapData && typeof scenario.mapData === 'object') return scenario.mapData;
+  if (scenario.map && typeof scenario.map === 'object') return scenario.map;
+  return null;
+}
+
+/**
+ * Resolve the best available map for read-only consumers.
+ *
+ * IMPORTANT: this function intentionally performs no migration or normalization.
+ * A returned P/scenario object is a source template and must never be mutated.
+ */
+function peekMapSource() {
   if (typeof GM !== 'undefined' && GM) {
-    if (hasRuntimeMapContent(GM.mapData)) {
-      if (!GM.mapData.mapSchemaVersion) GM.mapData.mapSchemaVersion = TM_RUNTIME_MAP_SCHEMA_VERSION;
-      return GM.mapData;
-    }
-    if (hasRuntimeMapContent(GM.map)) return migrateLegacyRuntimeMap(GM.map);
+    if (hasRuntimeMapContent(GM.mapData)) return GM.mapData;
+    if (hasRuntimeMapContent(GM.map)) return GM.map;
     if (GM.mapData && typeof GM.mapData === 'object') return GM.mapData;
+    if (GM.map && typeof GM.map === 'object') return GM.map;
   }
   if (typeof P !== 'undefined' && P) {
     if (hasRuntimeMapContent(P.mapData)) return P.mapData;
@@ -139,7 +148,54 @@ function getLiveMapData() {
     if (P.mapData && typeof P.mapData === 'object') return P.mapData;
     if (P.map && typeof P.map === 'object') return P.map;
   }
-  return null;
+  return _scenarioMapSource();
+}
+
+function _mapSourceIsTemplate(sourceMap) {
+  if (!sourceMap || typeof sourceMap !== 'object') return false;
+  if (typeof P !== 'undefined' && P && (sourceMap === P.map || sourceMap === P.mapData)) return true;
+  return sourceMap === _scenarioMapSource();
+}
+
+/**
+ * Return the current world's only writable map.
+ * Legacy GM/P/scenario maps are cloned once into GM.mapData before normalization.
+ */
+function ensureWritableRuntimeMap(options) {
+  options = options || {};
+  if (typeof GM === 'undefined' || !GM || typeof GM !== 'object') {
+    throw new Error('writable runtime map requires an active GM world');
+  }
+
+  var existing = GM.mapData;
+  if (!options.forceClone && existing && typeof existing === 'object'
+      && hasRuntimeMapContent(existing)) {
+    if (existing.mapSchemaVersion !== TM_RUNTIME_MAP_SCHEMA_VERSION) {
+      _normalizeGameMapRuntimeInPlace(existing);
+    }
+    return existing;
+  }
+
+  var source = options.sourceMap;
+  if (!source || typeof source !== 'object') {
+    if (hasRuntimeMapContent(GM.map)) source = GM.map;
+    else if (hasRuntimeMapContent(existing)) source = existing;
+    else if (typeof P !== 'undefined' && P && hasRuntimeMapContent(P.mapData)) source = P.mapData;
+    else if (typeof P !== 'undefined' && P && hasRuntimeMapContent(P.map)) source = P.map;
+    else source = _scenarioMapSource();
+  }
+
+  var liveMap = source && typeof source === 'object' ? cloneMapValue(source) : {};
+  if (!liveMap || typeof liveMap !== 'object') liveMap = {};
+  _normalizeGameMapRuntimeInPlace(liveMap);
+  GM.mapData = liveMap; // arch-ok: the current world owns the only writable runtime map
+  return liveMap;
+}
+
+// Compatibility alias for read-only callers. Mutation sites must use
+// ensureWritableRuntimeMap() explicitly.
+function getLiveMapData() {
+  return peekMapSource();
 }
 
 function cloneMapValue(value) {
@@ -231,7 +287,7 @@ function findScenarioFactionByMapValue(value, mapData) {
   return { id: value, key: value, name: value, color: '' };
 }
 
-function normalizeGameMapRuntime(mapData) {
+function _normalizeGameMapRuntimeInPlace(mapData) {
   if (!mapData || typeof mapData !== 'object') return mapData;
   ensureMapDataScaffold(mapData);
   mapData.mapSchemaVersion = TM_RUNTIME_MAP_SCHEMA_VERSION;
@@ -261,7 +317,8 @@ function normalizeGameMapRuntime(mapData) {
     }
     if (!region.terrain) region.terrain = region.data?.terrain || 'plains';
     var ownerValue = region.currentOwner || region.owner || region.factionId || region.ownerKey || '';
-    var resolved = findScenarioFactionByMapValue(ownerValue, mapData);
+    var resolved = findScenarioFactionByMapValue(ownerValue, mapData)
+      || { id: '', key: '', name: '', color: '' };
     region.owner = resolved.id || ownerValue;
     region.currentOwner = region.owner;
     region.controller = region.controller || region.owner;
@@ -306,12 +363,19 @@ function normalizeGameMapRuntime(mapData) {
   return mapData;
 }
 
+function normalizeGameMapRuntime(mapData) {
+  if (!mapData) return ensureWritableRuntimeMap();
+  if (typeof GM !== 'undefined' && GM && mapData === GM.mapData) {
+    return ensureWritableRuntimeMap();
+  }
+  // Public normalization is a runtime mutation boundary. Legacy GM.map and
+  // caller-supplied/template maps are clone sources, never writable targets.
+  return ensureWritableRuntimeMap({ sourceMap: mapData, forceClone: true });
+}
+
 function bindRuntimeMapState(sourceMap) {
   if (!sourceMap || !sourceMap.regions) return null;
-  var liveMap = cloneMapValue(sourceMap);
-  normalizeGameMapRuntime(liveMap);
-  if (typeof GM !== 'undefined' && GM) GM.mapData = liveMap;
-  return liveMap;
+  return ensureWritableRuntimeMap({ sourceMap: sourceMap, forceClone: true });
 }
 
 function findMapRegion(mapData, regionRef) {
@@ -319,7 +383,7 @@ function findMapRegion(mapData, regionRef) {
     regionRef = mapData;
     mapData = null;
   }
-  mapData = mapData || getLiveMapData();
+  mapData = mapData || peekMapSource();
   if (!mapData || !Array.isArray(mapData.regions)) return null;
   return mapData.regions.find(function(region) {
     return region && (region.id === regionRef || region.name === regionRef || region.adminBinding === regionRef || region.mapRegionId === regionRef);
@@ -335,7 +399,7 @@ function pushMapTurnChange(change) {
 
 function setMapRegionOwner(regionRef, newOwner, opts) {
   opts = opts || {};
-  var mapData = opts.mapData || getLiveMapData();
+  var mapData = ensureWritableRuntimeMap({ sourceMap: opts.mapData });
   var region = findMapRegion(mapData, regionRef);
   if (!region) return null;
   var resolved = findScenarioFactionByMapValue(newOwner, mapData);
@@ -372,7 +436,7 @@ function setMapRegionOwner(regionRef, newOwner, opts) {
 
 function updateMapRegionFields(regionRef, patch, opts) {
   opts = opts || {};
-  var mapData = opts.mapData || getLiveMapData();
+  var mapData = ensureWritableRuntimeMap({ sourceMap: opts.mapData });
   var region = findMapRegion(mapData, regionRef);
   if (!region || !patch || typeof patch !== 'object') return null;
   Object.keys(patch).forEach(function(key) {
@@ -390,11 +454,8 @@ function updateMapRegionFields(regionRef, patch, opts) {
 
 function applyRuntimeAIMapChanges(aiResponse, mapData) {
   if (!aiResponse || !aiResponse.map_changes) return;
-  // Once a game has bound its live map, renderer callers must never be able to
-  // steer mutations back into the scenario template by passing P.map.
-  var liveMap = getLiveMapData();
-  if (typeof GM !== 'undefined' && GM && GM.mapData && GM.mapData.regions) mapData = liveMap;
-  else mapData = mapData || liveMap;
+  // A caller-supplied P/scenario map is only a clone source. All writes land in GM.mapData.
+  mapData = ensureWritableRuntimeMap({ sourceMap: mapData });
   var changes = aiResponse.map_changes;
   (changes.ownership_changes || []).forEach(function(change) {
     setMapRegionOwner(change.region_id || change.region_name, change.new_owner, { mapData: mapData, reason: change.reason || 'AI推演领地易主' });
@@ -414,7 +475,17 @@ function applyRuntimeAIMapChanges(aiResponse, mapData) {
 }
 
 function getMapAIContextData(mapData) {
-  mapData = normalizeGameMapRuntime(mapData || getLiveMapData());
+  var sourceMap = mapData || peekMapSource();
+  if (!sourceMap) return null;
+  // AI context is read-only. Normalize a detached compatibility view when the
+  // active world has not yet bound a current-schema runtime map.
+  if (typeof GM !== 'undefined' && GM && sourceMap === GM.mapData
+      && sourceMap.mapSchemaVersion === TM_RUNTIME_MAP_SCHEMA_VERSION) {
+    mapData = sourceMap;
+  } else {
+    mapData = cloneMapValue(sourceMap);
+    _normalizeGameMapRuntimeInPlace(mapData);
+  }
   if (!mapData) return null;
   return {
     id: mapData.id || '',
@@ -444,7 +515,9 @@ function getMapAIContextData(mapData) {
 var TMMapRuntime = {
   bind: bindRuntimeMapState,
   normalize: normalizeGameMapRuntime,
-  getMap: getLiveMapData,
+  getMap: peekMapSource,
+  peekMapSource: peekMapSource,
+  ensureWritableRuntimeMap: ensureWritableRuntimeMap,
   findRegion: findMapRegion,
   setRegionOwner: setMapRegionOwner,
   updateRegion: updateMapRegionFields,
@@ -724,7 +797,7 @@ function createTerrainPattern(ctx, patternType) {
  */
 function updateMapColors(options) {
   options = options || {};
-  var runtimeMap = getLiveMapData();
+  var runtimeMap = ensureWritableRuntimeMap();
   if (!runtimeMap) return;
   var runtimeGM = (typeof GM !== 'undefined' && GM) ? GM : null;
 
@@ -2103,9 +2176,8 @@ function closeMapViewer() {
  * 在doActualStart中调用（地图启用时）
  */
 function buildAdjacencyGraph() {
-  var runtimeMap = getLiveMapData();
+  var runtimeMap = ensureWritableRuntimeMap();
   if (!runtimeMap || !runtimeMap.regions || !runtimeMap.regions.length) return;
-  if (!GM.mapData) GM.mapData = {};
 
   var graph = {};
   var regions = runtimeMap.regions;
@@ -2132,8 +2204,8 @@ function buildAdjacencyGraph() {
 
       // 地形移动消耗
       var terrainCost = 1.0;
-      if (neighbor && neighbor.terrain && GM.mapData.terrains) {
-        var tDef = GM.mapData.terrains[neighbor.terrain];
+      if (neighbor && neighbor.terrain && runtimeMap.terrains) {
+        var tDef = runtimeMap.terrains[neighbor.terrain];
         if (tDef && tDef.movementCost) terrainCost = tDef.movementCost;
       } else if (neighbor && neighbor.terrain && typeof initTerrainTypes !== 'undefined') {
         // fallback: 从默认terrain定义读取
@@ -2154,7 +2226,7 @@ function buildAdjacencyGraph() {
     });
   });
 
-  GM.mapData.adjacencyGraph = graph;
+  runtimeMap.adjacencyGraph = graph;
   _dbg('[Map] 邻接图构建完成:', Object.keys(graph).length, '个节点');
 }
 

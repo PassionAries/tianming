@@ -120,12 +120,10 @@
         }
       }
     }
-    // 2·P.playerInfo.characterName → findCharByName → birthYear
-    var pch = null;
-    if (typeof P !== 'undefined' && P && P.playerInfo && P.playerInfo.characterName &&
-        typeof findCharByName === 'function') {
-      try { pch = findCharByName(P.playerInfo.characterName); } catch(_) {}
-    }
+    // 2·运行态唯一玩家角色 → birthYear（P.playerInfo 是只读剧本模板，不参与运行身份选择）
+    var pch = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getCharacter === 'function')
+      ? TM.Player.getCharacter(GM)
+      : ((GM.chars || []).find(function(c) { return c && c.isPlayer === true; }) || null);
     if (pch && pch.birthYear) return pch.birthYear;
     // 3·BB11·player char.age 反推 (P.playerInfo.startAge / .birthYear 都 grep 0·改用 char.age)
     if (pch && typeof pch.age === 'number' && pch.age > 0) {
@@ -183,14 +181,11 @@
   /** 探 emperor.alive=false (帝崩) → 触发 ReignChange·一次性 */
   function _kjEventCheckReignTransition() {
     if (typeof GM === 'undefined' || !GM) return;
-    if (typeof P === 'undefined' || !P || !P.playerInfo) return;
-    var empName = P.playerInfo.characterName;
-    if (!empName) return;
-    var emp = null;
-    if (typeof findCharByName === 'function') {
-      try { emp = findCharByName(empName); } catch(_) {}
-    }
+    var emp = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getCharacter === 'function')
+      ? TM.Player.getCharacter(GM)
+      : ((GM.chars || []).find(function(c) { return c && c.isPlayer === true; }) || null);
     if (!emp) return;
+    var empName = emp.name;
     // 帝崩 (alive=false)·一次性·按 emperor name guard·防 alive=false 持续状态每年重触
     if (emp.alive === false) {
       if (!GM._reignTransitionFiredFor) GM._reignTransitionFiredFor = {};

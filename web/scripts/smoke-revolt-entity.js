@@ -17,9 +17,13 @@ function assert(cond, msg) {
 }
 
 var ebs = [];
-var sandbox = { console: console };
+var sandbox = { console: console, Date: Date, JSON: JSON, Math: Math, Object: Object, Array: Array, Number: Number, String: String, Boolean: Boolean, RegExp: RegExp, Map: Map, Set: Set, parseInt: parseInt, parseFloat: parseFloat, isNaN: isNaN, isFinite: isFinite };
 sandbox.window = sandbox;
 sandbox.global = sandbox;
+sandbox.globalThis = sandbox;
+sandbox.TM = { errors: { capture: function(){}, captureSilent: function(){} } };
+sandbox.initDataListeners = function() {};
+sandbox.SettlementPipeline = { register: function() {} };
 sandbox.addEB = function (cat, msg) { ebs.push(cat + '·' + msg); };
 sandbox.GM = {
   turn: 10,
@@ -28,8 +32,12 @@ sandbox.GM = {
   armies: [{ id: 'a1', name: '京营', faction: '大明', soldiers: 50000 }],
   minxin: { revolts: [] }
 };
-sandbox.P = { conf: {} };
+sandbox.P = { conf: {}, scenarios: [] };
 vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-utils.js'), 'utf8'), sandbox, { filename: 'tm-utils.js' });
+vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-indices.js'), 'utf8'), sandbox, { filename: 'tm-indices.js' });
+vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-relations.js'), 'utf8'), sandbox, { filename: 'tm-relations.js' });
+vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-faction-membership.js'), 'utf8'), sandbox, { filename: 'tm-faction-membership.js' });
 vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-revolt-entity.js'), 'utf8'), sandbox, { filename: 'tm-revolt-entity.js' });
 
 var GM = sandbox.GM;
@@ -50,6 +58,7 @@ var leader = GM.chars.find(function (c) { return c._revoltEntity; });
 assert(!!fac && fac.name === '陕西义军' && fac.strength === 40, '义军势力入档·strength=40(L3)');
 assert(!!army && army.soldiers === 9000 && army.faction === '陕西义军' && army.location === '陕西', '义军军队入档·9000 兵·驻陕西');
 assert(!!leader && leader.name === '陕西义军渠帅' && leader.officialTitle === '义军渠帅' && leader.faction === '陕西义军', '渠帅人物入档(民变无首领名→造描述性渠帅)');
+assert(!!leader.id && sandbox.findCharById(leader.id) === leader, '渠帅创建当场获得稳定 ID 并进入 ID 索引');
 assert(army.commander === '陕西义军渠帅', '军队主帅=渠帅');
 assert(ebs.some(function (e) { return e.indexOf('陕西民变成势') >= 0; }), '具象化落起居注');
 
@@ -86,7 +95,7 @@ GM.minxin.revolts[0].status = 'suppressed';
 RE.sync(GM);
 assert(!GM.facs.some(function (f) { return f.sourceRevoltId === 'rv1'; }), 'rv1 势力除档');
 var deadArmy = GM.armies.find(function (a) { return a.sourceRevoltId === 'rv1'; });
-assert(deadArmy && deadArmy.disbanded === true && deadArmy.soldiers === 0, 'rv1 军散(disbanded·清员额)');
+assert(!deadArmy, 'rv1 军队由统一势力注销入口清除，不留悬挂归属');
 var fled = GM.chars.find(function (c) { return c.sourceRevoltId === 'rv1'; });
 assert(fled && fled._revoltDefeated === true && fled.alive === true && fled.officialTitle === '溃散流亡', '渠帅溃散流亡·alive 不动(避开死亡系统)');
 assert(ebs.some(function (e) { return e.indexOf('烟消云散') >= 0; }), '覆灭落起居注');

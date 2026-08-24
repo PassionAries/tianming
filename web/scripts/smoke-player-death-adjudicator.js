@@ -15,6 +15,8 @@ function assert(c, m) { N++; if (!c) { console.error('ASSERT FAIL [' + N + ']:',
 function mkCtx(chars) {
   const ctx = { console: { log(){}, warn(){}, error(){} }, Date, JSON, Math, String, Number, Array, Object, parseInt, parseFloat, isNaN, isFinite };
   ctx.window = ctx; ctx.globalThis = ctx; ctx.global = ctx;
+  ctx.TM = { errors: { capture(){}, captureSilent(){} } };
+  ctx.initDataListeners = function() {};
   ctx.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
   ctx.SettlementPipeline = { register: () => {} };
   ctx._ebs = []; ctx.addEB = (cat, txt) => ctx._ebs.push(cat + '|' + txt);
@@ -22,16 +24,19 @@ function mkCtx(chars) {
   ctx._emits = []; ctx.GameEventBus = { emit: (t) => ctx._emits.push(t), on: () => {} };
   ctx.getTSText = () => ''; ctx.escHtml = (s) => String(s == null ? '' : s);
   ctx.findCharByName = (n) => (ctx.GM.chars || []).find(c => c && c.name === n) || null;
-  ctx.GM = { running: true, turn: 40, chars: chars, harem: {}, vars: {}, deptTasks: [], currentIssues: [], playerInfo: { characterName: '天子' } };
-  ctx.P = { conf: {}, playerInfo: { characterName: '天子' } };
+  ctx.GM = { running: true, turn: 40, chars: chars, facs: [], armies: [], parties: [], classes: [], harem: {}, vars: {}, deptTasks: [], currentIssues: [], playerInfo: { characterId: chars[0] && chars[0].id, characterName: '天子' } };
+  ctx.P = { conf: {}, scenarios: [], playerInfo: { characterName: '天子' } };
   vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-utils.js'), 'utf8'), ctx, { filename: 'tm-utils.js' });
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-indices.js'), 'utf8'), ctx, { filename: 'tm-indices.js' });
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-office-system.js'), 'utf8'), ctx, { filename: 'tm-office-system.js' });
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-endturn-helpers.js'), 'utf8'), ctx, { filename: 'tm-endturn-helpers.js' });
   return ctx;
 }
 
 // ── 有嗣(册立太子·真 resolveHeir)→ 世代传承 ──
-var emperor = { id: 'p1', name: '天子', isPlayer: true, faction: '明朝廷', designatedHeirId: '皇长子', childrenIds: ['皇长子'] };
-var heir = { id: 'h1', name: '皇长子', alive: true, faction: '明朝廷' };
+var emperor = { id: 'p1', name: '天子', isPlayer: true, faction: '明朝廷', designatedHeirId: 'h1', childrenIds: ['h1'] };
+var heir = { id: 'h1', name: '皇长子', alive: true, faction: '明朝廷', role: '太子', isCrownPrince: true };
 var c1 = mkCtx([emperor, heir, { name: '权臣', alive: true, faction: '明朝廷', intelligence: 99, valor: 99, loyalty: 99 }]);
 var r1 = c1.adjudicatePlayerDeath(emperor, '为乱兵所弑', { kind: 'regicide' });
 assert(r1.outcome === 'succession' && r1.heir === '皇长子', '① 有储君被弑→继统续玩(owner 裁定①)');
@@ -57,7 +62,7 @@ assert(c3.GM._playerDeathReason === '圣躬不豫，医药罔效', '⑩ deadReas
 
 // ── 继承人已死→不传死人·终局 ──
 var emp4 = { id: 'p4', name: '天子', isPlayer: true, designatedHeirId: '故太子', childrenIds: ['故太子'] };
-var c4 = mkCtx([emp4, { name: '故太子', alive: false, dead: true }]);
+var c4 = mkCtx([emp4, { id: 'h4', name: '故太子', alive: false, dead: true }]);
 var r4 = c4.adjudicatePlayerDeath(emp4, '疾', { kind: 'natural' });
 assert(r4.outcome === 'gameover', '⑪ 储君已殁不传死人→终局');
 
@@ -67,7 +72,7 @@ assert(c5.adjudicatePlayerDeath(null, 'x', {}).outcome === 'noop' && !c5.GM._pla
 
 // ── R1f 合法性门：死于非命+仅兜底继承人(同势力最强者)→不算合法继统 ──
 var emp7 = { id: 'p7', name: '天子', isPlayer: true, faction: '明朝廷' };   // 无储君无子嗣
-var c7 = mkCtx([emp7, { name: '权奸', alive: true, faction: '明朝廷', intelligence: 99, valor: 99, loyalty: 10 }]);
+var c7 = mkCtx([emp7, { id: 'villain7', name: '权奸', alive: true, faction: '明朝廷', intelligence: 99, valor: 99, loyalty: 10 }]);
 var r7 = c7.adjudicatePlayerDeath(emp7, '为权奸所弑', { kind: 'regicide' });
 assert(r7.outcome === 'gameover' && r7.blockedFallback === true, '⑰ 遇弑+仅兜底强臣→无合法继统=终局(防弑君者自继)');
 assert(c7.GM.chars[1].isPlayer !== true, '⑱ 权奸未借兜底自继');
@@ -75,12 +80,12 @@ assert(c7._ebs.some(e => e.indexOf('无合法嗣君') > 0), '⑲ 国祚绝嗣入
 
 // ── 自然死+兜底继承人：照旧继统(既有行为零回归) ──
 var emp8 = { id: 'p8', name: '天子', isPlayer: true, faction: '明朝廷' };
-var c8 = mkCtx([emp8, { name: '贤王', alive: true, faction: '明朝廷', intelligence: 80, valor: 60, loyalty: 90 }]);
+var c8 = mkCtx([emp8, { id: 'heir8', name: '贤王', alive: true, faction: '明朝廷', intelligence: 80, valor: 60, loyalty: 90 }]);
 var r8 = c8.adjudicatePlayerDeath(emp8, '疾', { kind: 'natural' });
 assert(r8.outcome === 'succession' && r8.heir === '贤王', '⑳ 自然死兜底继统照旧(零回归·非命才设门)');
 
 // ── 遇弑+有储君：合法继统不受门拦(owner「被杀有储君=继统续玩」) ──
-var emp9 = { id: 'p9', name: '天子', isPlayer: true, faction: '明朝廷', designatedHeirId: '皇长子', childrenIds: ['皇长子'] };
+var emp9 = { id: 'p9', name: '天子', isPlayer: true, faction: '明朝廷', designatedHeirId: 'h9', childrenIds: ['h9'] };
 var c9 = mkCtx([emp9, { id: 'h9', name: '皇长子', alive: true, faction: '明朝廷' }]);
 var r9 = c9.adjudicatePlayerDeath(emp9, '为乱兵所弑', { kind: 'regicide' });
 assert(r9.outcome === 'succession' && r9.heir === '皇长子', '⑴ 遇弑+储君在→继统续玩不受门拦');

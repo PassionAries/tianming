@@ -35,7 +35,11 @@ const cutoff = scripts.findIndex((s) => path.basename(s) === 'tm-test-harness.js
 
 ok(vm.runInContext('typeof _tickOfficePersonnelTurnover === "function"', sandbox), 'boot 后 _tickOfficePersonnelTurnover 可调');
 
-function mk(name, age, title, isPlayer) { return { name: name, age: age, officialTitle: title, alive: true, isPlayer: !!isPlayer }; }
+var nextCharId = 0;
+function mk(name, age, title, isPlayer) {
+  nextCharId++;
+  return { id: 'retirement-char-' + nextCharId, name: name, age: age, officialTitle: title, alive: true, isPlayer: !!isPlayer };
+}
 function buildTree(chars) { return [{ name: '某部', positions: chars.filter(c => c.officialTitle && !c.isPlayer).map(c => ({ name: c.officialTitle, rank: '正一品', holder: c.name })) }]; }
 function run(chars, flagOn, notYear) {
   sandbox.GM = { turn: 1, chars: chars, officeTree: buildTree(chars), evtLog: [], _chronicle: [], daysPerTurn: 90 };
@@ -75,7 +79,7 @@ run(c3, true);
 ok(by(c3, '已致仕').officialTitle === '原任尚书·致仕', '真码：已含致仕标者 → 跳过（不重复加标·幂等）');
 
 // (e) 无 age 者跳过（不误致仕）
-let c4 = [{ name: '无龄', officialTitle: '尚书', alive: true }];
+let c4 = [{ id: 'retirement-char-no-age', name: '无龄', officialTitle: '尚书', alive: true }];
 run(c4, true);
 ok(!by(c4, '无龄')._retired, '真码：无 age 字段 → 跳过（不误判致仕）');
 

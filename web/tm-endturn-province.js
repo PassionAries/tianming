@@ -384,7 +384,10 @@ function updateProvinceEconomy() {
       faction.money += totalTax; // 省份税收汇入势力
     }
     // 同时更新对应的GM.vars资源（如果有"国库"类变量且属于该势力）
-    if (faction.isPlayer || (P.playerInfo && P.playerInfo.factionName === faction.name)) {
+    var _runtimePlayerInfo = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getInfo === 'function')
+      ? TM.Player.getInfo()
+      : ((GM.playerInfo && typeof GM.playerInfo === 'object') ? GM.playerInfo : {});
+    if (faction.isPlayer || (_runtimePlayerInfo.factionName && _runtimePlayerInfo.factionName === faction.name)) {
       // 玩家势力的税收更新到变量
       var _treasuryVar = GM.vars['\u56FD\u5E93'] || GM.vars['\u8D22\u653F'] || GM.vars['\u91D1\u94B1'];
       if (_treasuryVar) {

@@ -469,9 +469,13 @@ async function main() {
   assert(logBeforeCourtEnd.every((x) => x.ok), 'all pipeline steps should pass before court close');
 
   await vm.runInContext(`_onPostTurnCourtEnd();`, sandbox, { timeout: 20000 });
-  await waitFor('post-turn court render completion', () => {
-    return sandbox.GM && sandbox.GM._pendingShijiModal && sandbox.GM._pendingShijiModal.courtDone === true;
-  }, 10000);
+  try {
+    await waitFor('post-turn court render completion', () => {
+      return sandbox.GM && sandbox.GM._pendingShijiModal && sandbox.GM._pendingShijiModal.courtDone === true;
+    }, 10000);
+  } catch (error) {
+    throw new Error(error.message + '\nstate=' + summarize(sandbox));
+  }
   await delay(80);
 
   const summary = JSON.parse(summarize(sandbox));

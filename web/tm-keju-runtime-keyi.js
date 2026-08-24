@@ -12,6 +12,65 @@
 
 var KEYI_STATE = null;  // { attendees, speakers, round, phase:'discuss'|'vote'|'decide', speeches, stances, support, abort }
 
+function _keyiReportOpenError(error, label) {
+  var manager = (typeof window !== 'undefined' && window.TM && window.TM.errors) || null;
+  if (manager && typeof manager.capture === 'function') {
+    try {
+      manager.capture(error, label);
+      return;
+    } catch (reportError) {
+      console.error('[科议] 错误记录器失败', reportError);
+    }
+  }
+  console.error('[科议] ' + label, error);
+}
+
+function _keyiCaptureOpenTransaction() {
+  if (typeof _captureEnergySnapshot !== 'function' || typeof _restoreEnergySnapshot !== 'function') {
+    throw new Error('科议精力账本不可用');
+  }
+  var hasKeju = Object.prototype.hasOwnProperty.call(GM, 'keju');
+  var keju = hasKeju ? GM.keju : undefined;
+  return {
+    hasKeju: hasKeju,
+    keju: keju,
+    energy: _captureEnergySnapshot(),
+    keyiState: KEYI_STATE,
+    modal: document.getElementById('keyi-modal')
+  };
+}
+
+function _keyiReplaceKeju(hasKeju, value) {
+  if (hasKeju) GM.keju = value; else delete GM.keju;
+}
+
+function _keyiRestoreOpenTransaction(txn) {
+  if (!txn) return;
+  _restoreEnergySnapshot(txn.energy);
+  _keyiReplaceKeju(txn.hasKeju, txn.keju);
+  KEYI_STATE = txn.keyiState;
+
+  var currentModal = document.getElementById('keyi-modal');
+  if (currentModal && currentModal !== txn.modal) currentModal.remove();
+}
+
+function _keyiHandleRunFailure(error, sessionToken) {
+  _keyiReportOpenError(error, '科议异步议论失败');
+  if (!KEYI_STATE || KEYI_STATE._sessionToken !== sessionToken) return;
+  KEYI_STATE._busy = false;
+  KEYI_STATE._busyText = '';
+  KEYI_STATE._runFailed = true;
+  KEYI_STATE._runError = String(error && error.message || error || '科议议论失败');
+  KEYI_STATE.speeches = (KEYI_STATE.speeches || []).filter(function(speech) {
+    return !speech || speech._streaming !== true;
+  });
+  try {
+    _keyiRender();
+  } catch (renderError) {
+    _keyiReportOpenError(renderError, '科议异步失败状态渲染失败');
+  }
+}
+
 function _keyiGetActiveProposal() {
   return (KEYI_STATE && KEYI_STATE._pendingProposal) || (GM.keju && GM.keju._pendingProposal) || null;
 }
@@ -49,6 +108,10 @@ function _keyiDecisionContent(method, topicType) {
 
 /** 入口：打开科议（v2·自动邀请·无选人页） */
 function openKeyiSession(opts) {
+  if (KEYI_STATE || document.getElementById('keyi-modal')) {
+    toast('已有科议正在进行');
+    return false;
+  }
   // v7.1·B3·接参化·支持 9 议题路由·不传 opts 时 fallback 走 kaike (向后兼容)
   opts = opts || {};
   var topicType = opts.topicType || 'kaike';
@@ -57,7 +120,6 @@ function openKeyiSession(opts) {
     ? _kjResolveTopic(topicType, topicData)
     : { topicType: 'kaike', title: '筹办科举', shortLabel: '科议·筹办', threshold: 0.5, callback: null, callbackName: 'startKejuByMethod', sliceOwner: 'B3' };
 
-  if (!GM.keju) GM.keju = {};
   var pendingProposal = {
     proposalId: 'keyi_' + (GM.turn || 0) + '_' + Date.now() + '_' + Math.floor(Math.random() * 100000),
     topic: resolved.title,
@@ -104,14 +166,23 @@ function openKeyiSession(opts) {
     }
     return true;
   });
-  if (attendees.length < 3) { toast('\u4EAC\u4E2D\u5B98\u5458\u4E0D\u8DB3\u4E09\u4EBA\u00B7\u65E0\u6CD5\u5F00\u79D1\u8BAE'); return; }
+  if (attendees.length < 3) { toast('\u4EAC\u4E2D\u5B98\u5458\u4E0D\u8DB3\u4E09\u4EBA\u00B7\u65E0\u6CD5\u5F00\u79D1\u8BAE'); return false; }
 
   // 弹确认窗·不再挑人
-  if (!confirm('\u5F00\u79D1\u8BAE\uFF1F\n\u5C06\u53EC\u96C6 ' + attendees.length + ' \u540D\u5728\u4EAC\u5B98\u5458\u8BAE\u300C' + _keyiTopicTitle(pendingProposal, '\u79D1\u8BAE\u8BAE\u9898') + '\u300D\u00B7\u8017\u7CBE\u529B 15\u3002')) return;
-  if (typeof _spendEnergy === 'function' && !_spendEnergy(15, '\u79D1\u8BAE')) { toast('\u7CBE\u529B\u4E0D\u8DB3'); return; }
-  GM.keju._pendingProposal = pendingProposal;
+  if (!confirm('\u5F00\u79D1\u8BAE\uFF1F\n\u5C06\u53EC\u96C6 ' + attendees.length + ' \u540D\u5728\u4EAC\u5B98\u5458\u8BAE\u300C' + _keyiTopicTitle(pendingProposal, '\u79D1\u8BAE\u8BAE\u9898') + '\u300D\u00B7\u8017\u7CBE\u529B 15\u3002')) return false;
+  var openTxn = null;
+  try {
+    openTxn = _keyiCaptureOpenTransaction();
+    if (typeof _spendEnergy === 'function' && !_spendEnergy(15, '\u79D1\u8BAE')) {
+      _keyiRestoreOpenTransaction(openTxn);
+      toast('\u7CBE\u529B\u4E0D\u8DB3');
+      return false;
+    }
+    var nextKeju = Object.assign({}, (GM.keju && typeof GM.keju === 'object') ? GM.keju : {});
+    nextKeju._pendingProposal = pendingProposal;
+    _keyiReplaceKeju(true, nextKeju);
 
-  KEYI_STATE = {
+    KEYI_STATE = {
     attendees: attendees.map(function(c){ return { name: c.name, title: c.officialTitle || c.title || '', party: c.party || '', loyalty: c.loyalty || 50, _ch: c }; }),
     speakers: [],
     round: 0,
@@ -128,6 +199,7 @@ function openKeyiSession(opts) {
     _topicTitle: resolved.title,
     _topicThreshold: resolved.threshold,
     _callbackName: resolved.callbackName,
+    _sessionToken: pendingProposal.proposalId,
     playerStance: null,
     playerSpeeches: []
   };
@@ -160,9 +232,19 @@ function openKeyiSession(opts) {
   KEYI_STATE.speakers = speakers.slice(0, 6);
   KEYI_STATE.round = 1;
 
-  _renderKeyiModal();
-  // v3·立刻自动跑两轮流式讨论
-  _keyiRunBothRounds();
+    _renderKeyiModal();
+    // v3·立刻自动跑两轮流式讨论。异步错误绑定当前 session；旧会话的
+    // 晚到拒绝只能记错，不得清理或关闭后来打开的新会话。
+    var sessionToken = KEYI_STATE._sessionToken;
+    Promise.resolve(_keyiRunBothRounds()).catch(function(error) {
+      _keyiHandleRunFailure(error, sessionToken);
+    });
+    return true;
+  } catch (error) {
+    if (openTxn) _keyiRestoreOpenTransaction(openTxn);
+    _keyiReportOpenError(error, '打开科议失败');
+    return false;
+  }
 }
 
 /** 创建 modal 容器 */
@@ -1135,7 +1217,7 @@ function showAnswerModal(candidate) {
     + '<div style="flex:1;overflow-y:auto;padding:1.5rem;">'
     // 考生信息
     +   '<div style="background:var(--bg-2);padding:1rem;border-radius:8px;margin-bottom:1rem;">'
-    +     '<p><strong>\u8003\u751F\uFF1A</strong>' + escHtml(candidate.name) + '\uFF08' + (candidate.age||'?') + '\u5C81\uFF0C' + escHtml(candidate.origin||'') + '\uFF09</p>'
+    +     '<p><strong>\u8003\u751F\uFF1A</strong>' + escHtml(candidate.name) + '\uFF08' + (candidate.age !== undefined && candidate.age !== null ? candidate.age : '?') + '\u5C81\uFF0C' + escHtml(candidate.origin||'') + '\uFF09</p>'
     +     '<p><strong>\u6392\u540D\uFF1A</strong>\u7B2C' + candidate.rank + '\u540D'
     +       (candidate.style ? '<span style="color:var(--txt-d);margin-left:10px;">\u98CE\u683C\uFF1A' + escHtml(candidate.style) + '</span>' : '')
     +       (candidate.personalityHint ? '<span style="color:var(--txt-d);margin-left:10px;">\u6027\u60C5\uFF1A' + escHtml(candidate.personalityHint) + '</span>' : '')
@@ -1197,6 +1279,11 @@ function recruitCandidate(index) {
   var exam = P.keju.currentExam;
   var candidate = exam.dianshiResults[index];
   if (!candidate) return;
+  var candidateAge = typeof getValidAge === 'function' ? getValidAge(candidate, 25) : (Number.isFinite(Number(candidate.age)) && Number(candidate.age) >= 0 ? Math.floor(Number(candidate.age)) : 25);
+  if (candidateAge < 20 || candidateAge > 70) {
+    if (typeof toast === 'function') toast('\u8003\u751F\u5E74\u9F84\u4E0D\u7B26\u5408\u53D9\u7528\u5951\u7EA6', 'error');
+    return false;
+  }
 
   // 添加到人物志（完整角色数据）
   var rankTitles = {1:'\u72B6\u5143',2:'\u699C\u773C',3:'\u63A2\u82B1'};
@@ -1204,9 +1291,8 @@ function recruitCandidate(index) {
   // 根据名次推算属性——状元智力更高，但不全是书呆子
   var baseInt = Math.min(98, (candidate.score || 80) + (candidate.rank <= 3 ? 5 : 0));
   var newChar = {
-    id: typeof uid === 'function' ? uid() : 'keju_' + Date.now() + '_' + candidate.rank,
     name: candidate.name,
-    age: candidate.age || 25,
+    age: candidateAge,
     gender: candidate.gender || '\u7537',
     origin: candidate.origin || '',
     ethnicity: candidate.ethnicity || '',
@@ -1244,7 +1330,7 @@ function recruitCandidate(index) {
     children: []
   };
 
-  (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(newChar);
+  createRuntimeCharacter(newChar);
   GM.allCharacters.push({
     name: newChar.name, title: newChar.title, age: newChar.age, gender: newChar.gender,
     personality: newChar.personality, desc: newChar.description, loyalty: newChar.loyalty,
@@ -1272,8 +1358,9 @@ function recruitCandidate(index) {
 
   // 2. 天子门生——殿试前三名对玩家(天子)有特殊感恩
   var isTop3 = candidate.rank <= 3;
-  if (isTop3 && P.playerInfo && P.playerInfo.characterName && typeof AffinityMap !== 'undefined') {
-    var _playerName = P.playerInfo.characterName;
+  var _runtimePlayerInfo = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getInfo === 'function') ? TM.Player.getInfo() : (GM.playerInfo || {});
+  if (isTop3 && _runtimePlayerInfo.characterName && typeof AffinityMap !== 'undefined') {
+    var _playerName = _runtimePlayerInfo.characterName;
     AffinityMap.add(candidate.name, _playerName, 12, '\u5929\u5B50\u95E8\u751F\u4E4B\u6069');
     if (typeof NpcMemorySystem !== 'undefined') {
       var _rankTitle = candidate.rank === 1 ? '\u72B6\u5143' : candidate.rank === 2 ? '\u699C\u773C' : '\u63A2\u82B1';
@@ -1626,13 +1713,14 @@ function _kejuFinalize(exam) {
 function _kejuBasicRecruit(candidate, rankTitle) {
   if (!GM.chars) GM.chars = [];
   if (GM.chars.find(function(c){ return c && c.name === candidate.name; })) return;
+  var candidateAge = typeof getValidAge === 'function' ? getValidAge(candidate, 25) : (Number.isFinite(Number(candidate.age)) && Number(candidate.age) >= 0 ? Math.floor(Number(candidate.age)) : 25);
+  if (candidateAge < 20 || candidateAge > 70) return false;
   var bonus = P.keju.attributeBonus || {};
   var key = rankTitle === '\u72B6\u5143' ? 'zhuangyuan' : rankTitle === '\u699C\u773C' ? 'bangyan' : 'tanhua';
   var b = bonus[key] || {};
-  (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })({
-    id: 'keju_' + Date.now() + '_' + candidate.rank,
+  createRuntimeCharacter({
     name: candidate.name,
-    age: candidate.age || 25,
+    age: candidateAge,
     origin: candidate.origin,
     ethnicity: candidate.ethnicity || '\u6C49',
     class: candidate.class || '\u5BD2\u95E8',
@@ -1664,6 +1752,8 @@ function _kejuBasicRecruit(candidate, rankTitle) {
 
 /** v7.1·D5·AI 全字段生成 (eager·含生平/外貌/家谱/史料出处段 + examiner 4 属性 hint + 4 维度) */
 async function _aiGenerateFullCharacter(candidate, rankKey) {
+  var candidateAge = typeof getValidAge === 'function' ? getValidAge(candidate, 25) : (Number.isFinite(Number(candidate && candidate.age)) && Number(candidate.age) >= 0 ? Math.floor(Number(candidate.age)) : 25);
+  if (candidateAge < 20 || candidateAge > 70) return false;
   if (!P.ai || !P.ai.key) { _kejuBasicRecruit(candidate, rankKey === 'zhuangyuan' ? '\u72B6\u5143' : rankKey === 'bangyan' ? '\u699C\u773C' : rankKey === 'tanhua' ? '\u63A2\u82B1' : '\u8FDB\u58EB'); return; }
 
   var exam = P.keju.currentExam;
@@ -1749,13 +1839,9 @@ async function _aiGenerateFullCharacter(candidate, rankKey) {
       var bonusKey = rankKey || 'erjia';
       var b = bonus[bonusKey] || { fame: 15, virtue: 8 };
 
-      // v7.1·D5·GM._runId 防撞 seed (重启游戏不重名)
-      if (!GM._runId) GM._runId = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
-
       var newChar = {
-        id: 'keju_' + GM._runId + '_' + (exam ? exam.id : 'noexam') + '_' + candidate.rank + '_' + (candidate.name || 'anon'),
         name: candidate.name,
-        age: candidate.age || 25,
+        age: candidateAge,
         gender: '\u7537',
         ethnicity: candidate.ethnicity || '\u6C49',
         origin: candidate.origin,
@@ -1825,7 +1911,7 @@ async function _aiGenerateFullCharacter(candidate, rankKey) {
       if (!GM.chars) GM.chars = [];
       // 去重·避免已存在
       if (!GM.chars.find(function(c){ return c && c.name === newChar.name; })) {
-        (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(newChar);
+        createRuntimeCharacter(newChar);
       }
       return newChar;
     } catch(e) {

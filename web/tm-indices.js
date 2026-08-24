@@ -94,19 +94,38 @@ function _tmWalkOfficeChildren(nodes, visitor) {
 function _tmFindPlayerCharRaw() {
   var G = (typeof GM !== 'undefined' && GM) ? GM : null;
   if (!G || !Array.isArray(G.chars)) return null;
-  var pInfo = (typeof P !== 'undefined' && P && P.playerInfo) ? P.playerInfo : {};
-  var pName = _tmCleanCharLookupName(pInfo.characterName || '');
-  if (pName) {
+  var runtimeInfo = G.playerInfo && typeof G.playerInfo === 'object' ? G.playerInfo : null;
+  var pId = runtimeInfo && runtimeInfo.characterId != null ? String(runtimeInfo.characterId).trim() : '';
+  if (pId) {
     for (var i = 0; i < G.chars.length; i++) {
       var c = G.chars[i];
-      if (c && c.name === pName) return c;
+      if (c && c.id != null && String(c.id).trim() === pId) return c;
+    }
+    return null;
+  }
+  var pName = _tmCleanCharLookupName(runtimeInfo && runtimeInfo.characterName || '');
+  if (pName) {
+    var runtimeNamed = G.chars.filter(function(row) { return row && row.name === pName; });
+    return runtimeNamed.length === 1 ? runtimeNamed[0] : null;
+  }
+  var flagged = G.chars.filter(function(row) { return row && row.isPlayer === true; });
+  if (flagged.length === 1) return flagged[0];
+  // 只在尚未建立运行态 playerInfo/玩家标记的新局初始化阶段读取 P 模板。
+  if (!runtimeInfo && flagged.length === 0) {
+    var templateInfo = (typeof P !== 'undefined' && P && P.playerInfo) ? P.playerInfo : {};
+    var templateName = _tmCleanCharLookupName(templateInfo.characterName || '');
+    for (var k = 0; templateName && k < G.chars.length; k++) {
+      var byTemplateName = G.chars[k];
+      if (byTemplateName && byTemplateName.name === templateName) return byTemplateName;
     }
   }
-  for (var j = 0; j < G.chars.length; j++) {
-    var pc = G.chars[j];
-    if (pc && pc.isPlayer) return pc;
-  }
-  return null;
+  return flagged[0] || null;
+}
+
+function getRuntimePlayerInfo() {
+  if (typeof GM !== 'undefined' && GM && GM.playerInfo && typeof GM.playerInfo === 'object') return GM.playerInfo;
+  if (typeof P !== 'undefined' && P && P.playerInfo && typeof P.playerInfo === 'object') return P.playerInfo;
+  return {};
 }
 
 function _tmGetCurrentScenarioRaw() {
@@ -123,7 +142,9 @@ function _tmGetCurrentScenarioRaw() {
 // 索引是派生缓存；回滚/换局只能通过索引模块统一失效，调用方不得跨模块直删。
 function invalidateGameIndices(gmRef, pRef) {
   var G = gmRef || (typeof GM !== 'undefined' ? GM : null);
-  var scenarioState = pRef || (typeof P !== 'undefined' ? P : null);
+  // 第二参数显式传 null 表示只失效运行态索引；这对继承/回滚很重要，
+  // 否则会在运行期删除剧本模板 P._indices。
+  var scenarioState = arguments.length > 1 ? pRef : (typeof P !== 'undefined' ? P : null);
   if (G) { try { delete G._indices; } catch (_) {} }
   if (scenarioState) { try { delete scenarioState._indices; } catch (_) {} }
 }
@@ -219,7 +240,7 @@ function getTerritoryBuildingsCompat(territory) {
 function _tmPlayerCharAliases() {
   var out = {};
   var ch = _tmFindPlayerCharRaw();
-  var pInfo = (typeof P !== 'undefined' && P && P.playerInfo) ? P.playerInfo : {};
+  var pInfo = getRuntimePlayerInfo();
   if (ch) {
     ['name','zi','haoName','milkName','title','officialTitle','role','occupation'].forEach(function(k) {
       _tmAddCharAlias(out, ch[k]);
@@ -391,7 +412,8 @@ if (typeof window !== 'undefined') {
   window.normalizePlayerCharacterNameLedgers = normalizePlayerCharacterNameLedgers;
 }
 
-function buildIndices() {
+function buildIndices(options) {
+  options = options || {};
   // 初始化索引对象
   if (!GM._indices) {
     GM._indices = {};
@@ -400,13 +422,30 @@ function buildIndices() {
   // 初始化监听系统
   initDataListeners();
 
-  // 1. 角色索引（按名字）
+  // 1. 角色索引（按名字 + 稳定 ID）
   GM._indices.charByName = new Map();
+  GM._indices.charById = new Map();
   if (GM.chars && GM.chars.length > 0) {
     GM.chars.forEach(function(char) {
       if (char && char.name) {
         GM._indices.charByName.set(char.name, char);
       }
+      if (char && char.id !== undefined && char.id !== null && String(char.id).trim()) {
+        GM._indices.charById.set(String(char.id).trim(), char);
+      }
+    });
+  }
+
+  // 运行态玩家身份归一：GM.playerInfo.characterId 为权威，isPlayer 只保留唯一镜像。
+  var _runtimePlayerIdentity = _tmFindPlayerCharRaw();
+  if (_runtimePlayerIdentity) {
+    GM.chars.forEach(function(char) { if (char) char.isPlayer = char === _runtimePlayerIdentity; });
+    GM.playerInfo = Object.assign({}, (GM.playerInfo && typeof GM.playerInfo === 'object' ? GM.playerInfo : {}), {
+      characterId: _runtimePlayerIdentity.id != null ? String(_runtimePlayerIdentity.id) : '',
+      characterName: _runtimePlayerIdentity.name || '',
+      characterTitle: _runtimePlayerIdentity.title || _runtimePlayerIdentity.officialTitle || '',
+      factionId: _runtimePlayerIdentity.factionId || '',
+      factionName: _runtimePlayerIdentity.faction || ''
     });
   }
 
@@ -471,17 +510,19 @@ function buildIndices() {
     });
   }
 
-  // 8. 场景索引（按 ID）- 全局 P 对象
-  if (!P._indices) {
-    P._indices = {};
-  }
-  P._indices.scenarioById = new Map();
-  if (P.scenarios && P.scenarios.length > 0) {
-    P.scenarios.forEach(function(sc) {
-      if (sc && sc.id) {
-        P._indices.scenarioById.set(sc.id, sc);
-      }
-    });
+  // 8. 场景索引（按 ID）- 全局 P 对象。运行态身份切换可明确跳过，避免改写模板缓存。
+  if (!options.skipScenarioIndex) {
+    if (!P._indices) {
+      P._indices = {};
+    }
+    P._indices.scenarioById = new Map();
+    if (P.scenarios && P.scenarios.length > 0) {
+      P.scenarios.forEach(function(sc) {
+        if (sc && sc.id) {
+          P._indices.scenarioById.set(sc.id, sc);
+        }
+      });
+    }
   }
 
   // 9. 岗位索引（按 ID 和领地 ID）
@@ -701,6 +742,24 @@ function findCharByName(name) {
         if (rawName && rawName !== name) try { GM._indices.charByName.set(rawName, c); } catch(_){}
         return c;
       }
+    }
+  }
+  return undefined;
+}
+
+/** @param {string|number} id @returns {Object|undefined} 按稳定 ID 查询角色，绝不按姓名回退。 */
+function findCharById(id) {
+  if (id === undefined || id === null || !String(id).trim()) return undefined;
+  if (!GM._indices || !GM._indices.charById || typeof GM._indices.charById.get !== 'function') buildIndices();
+  var key = String(id).trim();
+  var hit = GM._indices.charById.get(key);
+  if (hit) return hit;
+  if (!Array.isArray(GM.chars)) return undefined;
+  for (var i = 0; i < GM.chars.length; i++) {
+    var ch = GM.chars[i];
+    if (ch && ch.id !== undefined && ch.id !== null && String(ch.id).trim() === key) {
+      GM._indices.charById.set(key, ch);
+      return ch;
     }
   }
   return undefined;
@@ -1208,33 +1267,374 @@ var WorldHelper = {
 // globalThis 优先绑定(沙箱 window mock 劫持之鉴)。
 (function(global) {
   var TM = global.TM = global.TM || {};
-  function addChar(ch) {
-    if (typeof GM === 'undefined' || !GM || !ch || typeof ch !== 'object' || !ch.name) return null;
-    if (!Array.isArray(GM.chars)) GM.chars = [];
-    GM.chars.push(ch);
-    try {
-      if (GM._indices && GM._indices.charByName && typeof GM._indices.charByName.set === 'function') {
-        GM._indices.charByName.set(typeof _tmCleanCharLookupName === 'function' ? _tmCleanCharLookupName(ch.name) : String(ch.name), ch);
-      }
-    } catch (_e) {}
-    try { if (global.TMZhi && typeof global.TMZhi.invalidatePeople === 'function') global.TMZhi.invalidatePeople(); } catch (_e) {}
+  function _hash(text) {
+    var hash = 2166136261;
+    text = String(text || '');
+    for (var i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash = typeof Math.imul === 'function' ? Math.imul(hash, 16777619) : hash * 16777619;
+    }
+    return ('00000000' + (hash >>> 0).toString(16)).slice(-8);
+  }
+  function _worldId(G) {
+    return String((G && (G._campaignId || G.campaignId || G.sid)) || 'world');
+  }
+  function _hasCharId(G, id, except) {
+    var key = String(id || '').trim();
+    return !!key && (G.chars || []).some(function(row) {
+      return row && row !== except && row.id !== undefined && row.id !== null && String(row.id).trim() === key;
+    });
+  }
+  function allocateCharId(G) {
+    if (!G || typeof G !== 'object') throw new Error('角色 ID 分配缺少当前世界');
+    if (!G._entityIdCounters || typeof G._entityIdCounters !== 'object' || Array.isArray(G._entityIdCounters)) {
+      G._entityIdCounters = { version: 1, char: 0 }; // arch-ok: 世界自有实体 ID 序列，随存档/回滚
+    }
+    if (G._entityIdCounters.version !== 1) G._entityIdCounters.version = 1;
+    var counter = Number(G._entityIdCounters.char);
+    if (!Number.isSafeInteger(counter) || counter < 0) counter = 0;
+    var prefix = 'tm_char_' + _hash(_worldId(G));
+    var candidate;
+    do {
+      counter += 1;
+      candidate = prefix + '_' + counter.toString(36);
+    } while (_hasCharId(G, candidate));
+    G._entityIdCounters.char = counter;
+    return candidate;
+  }
+  function _normalizeChar(ch, options) {
+    options = options || {};
+    if (!ch || typeof ch !== 'object' || Array.isArray(ch)) throw new Error('角色数据必须是对象');
+    var name = typeof _tmCleanCharLookupName === 'function' ? _tmCleanCharLookupName(ch.name) : String(ch.name || '').trim();
+    if (!name) throw new Error('角色缺少姓名');
+    ch.name = name;
+    var defaultAge = options.defaultAge !== undefined ? options.defaultAge : 30;
+    ch.age = typeof getValidAge === 'function' ? getValidAge(ch, defaultAge)
+      : (Number.isFinite(ch.age) && ch.age >= 0 ? Math.floor(ch.age) : defaultAge);
+    if (!ch.gender) ch.gender = options.defaultGender || '未知';
+    if (ch.alive === undefined) ch.alive = true;
+    // 构造期默认值，不是运行态转籍；membership provider 此时尚未装载。
+    if (ch.faction === undefined || ch.faction === null) Object.assign(ch, { faction: '' });
     return ch;
   }
-  function removeChar(name) {
-    if (typeof GM === 'undefined' || !GM || !Array.isArray(GM.chars) || !name) return false;
-    var n = typeof _tmCleanCharLookupName === 'function' ? _tmCleanCharLookupName(name) : String(name);
+  function _resolveParent(G, ref) {
+    if (!ref) return null;
+    if (typeof ref === 'object') return G.chars.indexOf(ref) >= 0 ? ref : null;
+    var key = String(ref).trim();
+    if (!key) return null;
+    var byId = (G.chars || []).filter(function(row) {
+      return row && row.id !== undefined && row.id !== null && String(row.id) === key;
+    });
+    if (byId.length === 1) return byId[0];
+    var byName = (G.chars || []).filter(function(row) { return row && row.name === key; });
+    return byName.length === 1 ? byName[0] : null;
+  }
+  function _repairRegisteredChar(G, ch, options) {
+    var first = G.chars.indexOf(ch);
+    if (first < 0) return null;
+    var id = ch.id === undefined || ch.id === null ? '' : String(ch.id).trim();
+    if (!id) throw new Error('已注册角色缺少稳定 ID: ' + (ch.name || '未名'));
+    if (_hasCharId(G, id, ch)) throw new Error('角色稳定 ID 冲突: ' + id);
+
+    // 旧缺陷可能已经把同一对象引用 push 多次；幂等入口顺手收敛为一行。
+    for (var i = G.chars.length - 1; i > first; i--) {
+      if (G.chars[i] === ch) G.chars.splice(i, 1);
+    }
+    if (!G._indices) G._indices = {};
+    if (!G._indices.charByName || typeof G._indices.charByName.set !== 'function') G._indices.charByName = new Map();
+    if (!G._indices.charById || typeof G._indices.charById.set !== 'function') G._indices.charById = new Map();
+    var indexedById = G._indices.charById.get(id);
+    if (indexedById && indexedById !== ch) throw new Error('角色 ID 索引冲突: ' + id);
+    G._indices.charById.set(id, ch);
+    var nameKey = typeof _tmCleanCharLookupName === 'function' ? _tmCleanCharLookupName(ch.name) : ch.name;
+    var indexedByName = G._indices.charByName.get(nameKey);
+    if (!indexedByName || G.chars.indexOf(indexedByName) < 0) G._indices.charByName.set(nameKey, ch);
+
+    var father = _resolveParent(G, (options || {}).father || ch.fatherId || ch.father);
+    var mother = _resolveParent(G, (options || {}).mother || ch.motherId || ch.mother);
+    [father, mother].forEach(function(parent) {
+      if (!parent) return;
+      if (!Array.isArray(parent.childrenIds)) parent.childrenIds = [];
+      var seen = false;
+      parent.childrenIds = parent.childrenIds.filter(function(childId) {
+        if (String(childId) !== id) return true;
+        if (seen) return false;
+        seen = true;
+        return true;
+      });
+      if (!seen) parent.childrenIds.push(id);
+    });
+    if (global.TMZhi && typeof global.TMZhi.invalidatePeople === 'function') global.TMZhi.invalidatePeople();
+    return ch;
+  }
+  function createChar(data, options) {
+    options = options || {};
+    var G = options.world || (typeof GM !== 'undefined' ? GM : null);
+    if (!G) throw new Error('角色创建缺少当前世界');
+    if (!Array.isArray(G.chars)) G.chars = [];
+    var registered = _repairRegisteredChar(G, data, options);
+    if (registered) return registered;
+    var ch = _normalizeChar(data, options);
+    var counterBefore = G._entityIdCounters && G._entityIdCounters.char;
+    var countersExisted = !!G._entityIdCounters;
+    var id = ch.id === undefined || ch.id === null ? '' : String(ch.id).trim();
+    if (id && _hasCharId(G, id, ch)) throw new Error('角色稳定 ID 冲突: ' + id);
+    if (!id) id = allocateCharId(G);
+    ch.id = id;
+
+    var father = _resolveParent(G, options.father || ch.fatherId || ch.father);
+    var mother = _resolveParent(G, options.mother || ch.motherId || ch.mother);
+    var parentSnapshots = [];
+    [father, mother].forEach(function(parent) {
+      if (parent && !parentSnapshots.some(function(row) { return row.parent === parent; })) {
+        parentSnapshots.push({ parent: parent, childrenIds: Array.isArray(parent.childrenIds) ? parent.childrenIds.slice() : null });
+      }
+    });
+    var nameKey = typeof _tmCleanCharLookupName === 'function' ? _tmCleanCharLookupName(ch.name) : ch.name;
+    var priorNameIndex = G._indices && G._indices.charByName && G._indices.charByName.get(nameKey);
+    var priorIdIndex = G._indices && G._indices.charById && G._indices.charById.get(id);
+    var pushed = false;
+    try {
+      if (father) { ch.fatherId = father.id; if (!ch.father) ch.father = father.name; }
+      if (mother) { ch.motherId = mother.id; if (!ch.mother) ch.mother = mother.name; }
+      G.chars.push(ch); pushed = true;
+      [father, mother].forEach(function(parent) {
+        if (!parent) return;
+        if (!Array.isArray(parent.childrenIds)) parent.childrenIds = [];
+        if (parent.childrenIds.indexOf(id) < 0) parent.childrenIds.push(id);
+      });
+      if (!G._indices) G._indices = {};
+      if (!G._indices.charByName || typeof G._indices.charByName.set !== 'function') G._indices.charByName = new Map();
+      if (!G._indices.charById || typeof G._indices.charById.set !== 'function') G._indices.charById = new Map();
+      G._indices.charByName.set(nameKey, ch);
+      G._indices.charById.set(id, ch);
+      if (global.TMZhi && typeof global.TMZhi.invalidatePeople === 'function') global.TMZhi.invalidatePeople();
+      return ch;
+    } catch (error) {
+      if (pushed) {
+        var at = G.chars.indexOf(ch);
+        if (at >= 0) G.chars.splice(at, 1);
+      }
+      parentSnapshots.forEach(function(row) {
+        if (row.childrenIds === null) delete row.parent.childrenIds;
+        else row.parent.childrenIds = row.childrenIds;
+      });
+      if (G._indices && G._indices.charByName) {
+        if (priorNameIndex) G._indices.charByName.set(nameKey, priorNameIndex);
+        else G._indices.charByName.delete(nameKey);
+      }
+      if (G._indices && G._indices.charById) {
+        if (priorIdIndex) G._indices.charById.set(id, priorIdIndex);
+        else G._indices.charById.delete(id);
+      }
+      if (!countersExisted) delete G._entityIdCounters;
+      else G._entityIdCounters.char = counterBefore;
+      throw error;
+    }
+  }
+  function addChar(ch, options) {
+    return createChar(ch, options);
+  }
+  function removeChar(nameOrId) {
+    if (typeof GM === 'undefined' || !GM || !Array.isArray(GM.chars) || !nameOrId) return false;
+    var objectRef = typeof nameOrId === 'object' ? nameOrId : null;
+    var raw = objectRef ? (objectRef.id || objectRef.name) : nameOrId;
+    var n = typeof _tmCleanCharLookupName === 'function' ? _tmCleanCharLookupName(raw) : String(raw);
+    var idMatches = GM.chars.filter(function(c) {
+      return c && c.id !== undefined && c.id !== null && String(c.id) === String(raw);
+    });
+    var nameMatches = GM.chars.filter(function(c) { return c && c.name === raw; });
+    var target = objectRef && GM.chars.indexOf(objectRef) >= 0 ? objectRef
+      : (idMatches.length === 1 ? idMatches[0] : (nameMatches.length === 1 ? nameMatches[0] : null));
+    if (!target) return false;
     var removed = false;
+    var removedIds = [];
     for (var i = GM.chars.length - 1; i >= 0; i--) {
       var c = GM.chars[i];
-      if (c && (c.name === name || (typeof _tmCleanCharLookupName === 'function' && _tmCleanCharLookupName(c.name) === n))) {
+      if (c === target) {
+        if (c.id !== undefined && c.id !== null) removedIds.push(String(c.id));
         GM.chars.splice(i, 1); removed = true;
       }
     }
     if (removed) {
-      try { if (GM._indices && GM._indices.charByName && typeof GM._indices.charByName.delete === 'function') GM._indices.charByName.delete(n); } catch (_e) {}
-      try { if (global.TMZhi && typeof global.TMZhi.invalidatePeople === 'function') global.TMZhi.invalidatePeople(); } catch (_e) {}
+      if (GM._indices && GM._indices.charByName && typeof GM._indices.charByName.delete === 'function') {
+        if (GM._indices.charByName.get(n) === target) GM._indices.charByName.delete(n);
+        var sameName = GM.chars.filter(function(c) { return c && c.name === target.name; });
+        if (sameName.length) GM._indices.charByName.set(target.name, sameName[sameName.length - 1]);
+      }
+      if (GM._indices && GM._indices.charById && typeof GM._indices.charById.delete === 'function') removedIds.forEach(function(id) { GM._indices.charById.delete(id); });
+      if (global.TMZhi && typeof global.TMZhi.invalidatePeople === 'function') global.TMZhi.invalidatePeople();
     }
     return removed;
   }
-  TM.Roster = { addChar: addChar, removeChar: removeChar };
+  TM.Roster = { addChar: addChar, createChar: createChar, removeChar: removeChar, allocateCharId: allocateCharId };
+  global.createRuntimeCharacter = function(data, options) {
+    return createChar(data, options);
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : this));
+
+// ── 玩家身份与权力交接：GM.playerInfo.characterId 为权威，isPlayer 为同步镜像 ──
+(function(global) {
+  var TM = global.TM = global.TM || {};
+  TM.Player = TM.Player || {};
+
+  function cloneValue(value) {
+    if (value === undefined) return undefined;
+    if (typeof deepClone === 'function') return deepClone(value);
+    return JSON.parse(JSON.stringify(value));
+  }
+  function restoreObject(target, snapshot) {
+    Object.keys(target).forEach(function(key) { delete target[key]; });
+    Object.keys(snapshot || {}).forEach(function(key) { target[key] = cloneValue(snapshot[key]); });
+  }
+  function getPlayerCharacter(world) {
+    var G = world || (typeof GM !== 'undefined' ? GM : null);
+    if (!G || !Array.isArray(G.chars)) return null;
+    var info = G.playerInfo && typeof G.playerInfo === 'object' ? G.playerInfo : null;
+    var id = info && info.characterId != null ? String(info.characterId).trim() : '';
+    if (id) {
+      var byId = G.chars.find(function(ch) { return ch && ch.id != null && String(ch.id).trim() === id; });
+      return byId || null;
+    }
+    var name = info && info.characterName ? String(info.characterName).trim() : '';
+    if (name) {
+      var named = G.chars.filter(function(ch) { return ch && ch.name === name; });
+      return named.length === 1 ? named[0] : null;
+    }
+    var flagged = G.chars.filter(function(ch) { return ch && ch.isPlayer === true; });
+    return flagged.length === 1 ? flagged[0] : null;
+  }
+  function resolveChar(G, ref) {
+    if (!ref) return null;
+    if (typeof ref === 'object') return G.chars.indexOf(ref) >= 0 ? ref : null;
+    var key = String(ref).trim();
+    if (!key) return null;
+    var byId = G.chars.filter(function(ch) { return ch && ch.id != null && String(ch.id).trim() === key; });
+    if (byId.length === 1) return byId[0];
+    var byName = G.chars.filter(function(ch) { return ch && ch.name === key; });
+    return byName.length === 1 ? byName[0] : null;
+  }
+  function clearHeirState(G, from, to) {
+    var toId = String(to.id);
+    if (String(from.designatedHeirId || '') === toId) delete from.designatedHeirId;
+    if (String(from.designatedHeir || '') === toId
+      || (!from.designatedHeirId && from.designatedHeir === to.name)) delete from.designatedHeir;
+    ['isCrownPrince','isDesignatedHeir','_designatedHeir','heirAppointedTurn','successionRole'].forEach(function(key) { delete to[key]; });
+    if (to.role === '太子' || to.role === '储君' || to.role === '皇太子') delete to.role;
+    if (G.harem && typeof G.harem === 'object') {
+      if (String(G.harem.crownPrinceId || '') === toId) G.harem.crownPrinceId = '';
+      if (G.harem.crownPrince === toId
+        || (!G.harem.crownPrinceId && G.harem.crownPrince === to.name)) G.harem.crownPrince = '';
+      (Array.isArray(G.harem.heirs) ? G.harem.heirs : []).forEach(function(entry) {
+        if (!entry) return;
+        var entryId = entry.id || entry.characterId || '';
+        var matches = entryId ? String(entryId) === toId : entry.name === to.name;
+        if (matches) {
+          entry.isCrownPrince = false;
+          entry.ascendedTurn = Number.isFinite(Number(G.turn)) ? Number(G.turn) : 0;
+        }
+      });
+    }
+  }
+  function invalidateSuccessionCaches(G) {
+    if (typeof invalidateGameIndices === 'function') invalidateGameIndices(G, null);
+    if (G === (typeof GM !== 'undefined' ? GM : null) && typeof buildIndices === 'function') {
+      buildIndices({ skipScenarioIndex: true });
+    }
+    if (TM.FactionIndex && typeof TM.FactionIndex.rebuild === 'function') TM.FactionIndex.rebuild();
+    if (global.TMZhi && typeof global.TMZhi.invalidatePeople === 'function') global.TMZhi.invalidatePeople();
+  }
+  function transferPlayerControl(options) {
+    options = options || {};
+    var G = options.world || (typeof GM !== 'undefined' ? GM : null);
+    if (!G || !Array.isArray(G.chars)) return { ok: false, reason: 'world-missing' };
+    var from = resolveChar(G, options.from) || getPlayerCharacter(G);
+    var to = resolveChar(G, options.to);
+    if (!from) return { ok: false, reason: 'old-ruler-not-found' };
+    if (!to) return { ok: false, reason: 'heir-not-found' };
+    if (from === to) return { ok: false, reason: 'same-ruler' };
+    if (to.alive === false || to.dead) return { ok: false, reason: 'heir-not-alive' };
+    if (!from.id || !String(from.id).trim()) return { ok: false, reason: 'old-ruler-stable-id-missing' };
+    if (!to.id || !String(to.id).trim()) return { ok: false, reason: 'heir-stable-id-missing' };
+    var current = getPlayerCharacter(G);
+    if (current && current !== from) return { ok: false, reason: 'old-ruler-not-current-player' };
+
+    var charSnapshots = G.chars.map(function(ch) { return { ref: ch, state: cloneValue(ch) }; });
+    var snapshot = {
+      playerInfo: cloneValue(G.playerInfo), playerInfoOwn: Object.prototype.hasOwnProperty.call(G, 'playerInfo'),
+      officeTree: cloneValue(G.officeTree), officeOwn: Object.prototype.hasOwnProperty.call(G, 'officeTree'),
+      harem: cloneValue(G.harem), haremOwn: Object.prototype.hasOwnProperty.call(G, 'harem'),
+      facs: (G.facs || []).map(function(fac) { return { ref: fac, state: cloneValue(fac) }; }),
+      successionEvent: cloneValue(G._successionEvent), successionOwn: Object.prototype.hasOwnProperty.call(G, '_successionEvent')
+    };
+    try {
+      var vacated = { ok: true, vacated: [] };
+      var hasOfficeTree = Array.isArray(G.officeTree) && G.officeTree.length > 0;
+      if (hasOfficeTree) {
+        if (typeof _offVacateByCharId !== 'function') {
+          throw new Error('继承事务缺少稳定 ID 官职注销入口');
+        }
+        vacated = _offVacateByCharId(to.id, 'succession', G.officeTree, { leaveVacancy: true, world: G });
+        if (!vacated || vacated.ok !== true) {
+          throw new Error('继承人原官职注销失败: ' + ((vacated && vacated.reason) || 'unknown'));
+        }
+      }
+      G.chars.forEach(function(ch) { if (ch) ch.isPlayer = ch === to; });
+      clearHeirState(G, from, to);
+      if (!Array.isArray(to.formerTitles)) to.formerTitles = [];
+      [to.title, to.officialTitle].forEach(function(title) {
+        if (title && title !== '皇帝' && to.formerTitles.indexOf(title) < 0) to.formerTitles.push(title);
+      });
+      to._preAccessionOffice = vacated.vacated || [];
+      to.role = '皇帝';
+      to.officialTitle = options.newOfficialTitle || '皇帝';
+      to.title = options.newTitle || '皇帝';
+      if (options.reason === 'abdication') {
+        if (!Array.isArray(from.formerTitles)) from.formerTitles = [];
+        if (from.title && from.title !== '太上皇' && from.formerTitles.indexOf(from.title) < 0) from.formerTitles.push(from.title);
+        from.role = '太上皇';
+        from.officialTitle = '太上皇';
+        from.title = options.oldRulerTitle || '太上皇';
+      }
+      var baseInfo = G.playerInfo && typeof G.playerInfo === 'object' ? G.playerInfo
+        : ((typeof P !== 'undefined' && P && P.playerInfo) ? cloneValue(P.playerInfo) : {});
+      G.playerInfo = Object.assign({}, baseInfo, {
+        characterId: String(to.id), characterName: to.name,
+        characterTitle: to.title || to.officialTitle || '',
+        characterBio: to.bio || '', characterPersonality: to.personality || '',
+        factionId: to.factionId || '', factionName: to.faction || ''
+      });
+      (G.facs || []).forEach(function(fac) {
+        if (!fac) return;
+        var oldMatches = (from.id && String(fac.leaderId || '') === String(from.id))
+          || (!fac.leaderId && fac.leader === from.name)
+          || (fac.isPlayer && to.faction && fac.name === to.faction);
+        if (oldMatches) { fac.leaderId = to.id; fac.leader = to.name; }
+      });
+      G._successionEvent = {
+        fromId: from.id || '', from: from.name, toId: to.id, to: to.name,
+        reason: options.eventReason || options.reason || 'succession',
+        causeKind: options.causeKind || '', turn: Number(G.turn) || 0
+      };
+      invalidateSuccessionCaches(G);
+      return { ok: true, from: from, to: to, vacated: vacated.vacated || [] };
+    } catch (error) {
+      charSnapshots.forEach(function(row) { restoreObject(row.ref, row.state); });
+      snapshot.facs.forEach(function(row) { restoreObject(row.ref, row.state); });
+      if (snapshot.playerInfoOwn) G.playerInfo = snapshot.playerInfo; else delete G.playerInfo;
+      if (snapshot.officeOwn) G.officeTree = snapshot.officeTree; else delete G.officeTree;
+      if (snapshot.haremOwn) G.harem = snapshot.harem; else delete G.harem;
+      if (snapshot.successionOwn) G._successionEvent = snapshot.successionEvent; else delete G._successionEvent;
+      if (typeof invalidateGameIndices === 'function') invalidateGameIndices(G, null);
+      if (TM.errors && typeof TM.errors.capture === 'function') TM.errors.capture(error, 'succession-transfer');
+      else if (global.console && typeof global.console.error === 'function') global.console.error('[succession-transfer]', error);
+      return { ok: false, reason: 'transaction-failed', error: error };
+    }
+  }
+
+  TM.Player.getInfo = getRuntimePlayerInfo;
+  TM.Player.getCharacter = getPlayerCharacter;
+  TM.Succession = TM.Succession || {};
+  TM.Succession.getPlayerCharacter = getPlayerCharacter;
+  TM.Succession.transferPlayerControl = transferPlayerControl;
 })(typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : this));

@@ -10,6 +10,11 @@
   var DEFAULT_AUDIT_LIMIT = 120;
   var state = { open: false, playerSafe: true, GM: null, auditFilter: 'all', auditTarget: '' };
 
+  function bumpEdgeRevision(GM) {
+    var retrieval = root.TM && root.TM.MemoryRetrieval;
+    if (retrieval && typeof retrieval.bumpRevision === 'function') retrieval.bumpRevision(GM, 'edges');
+  }
+
   function toText(value) {
     if (value == null) return '';
     if (typeof value === 'string') return value;
@@ -933,7 +938,10 @@
       if (entry.before == null) delete controls[entry.key];
       else controls[entry.key] = cloneValue(entry.before);
     });
-    if (Array.isArray(undo.edgesBefore)) GM._memEdges = cloneValue(undo.edgesBefore);
+    if (Array.isArray(undo.edgesBefore)) {
+      GM._memEdges = cloneValue(undo.edgesBefore);
+      bumpEdgeRevision(GM);
+    }
     return true;
   }
 

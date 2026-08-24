@@ -103,9 +103,12 @@ assert(/_queuePostTurnSubcall\('compress_ai_memory'/.test(followupSrc), 'AI memo
 assert(/_queuePostTurnSubcall\('compress_foreshadows'/.test(followupSrc), 'foreshadow compression is queued post-turn');
 assert(/_queuePostTurnSubcall\('compress_conversation'/.test(followupSrc), 'conversation compression is queued post-turn');
 assert(!/await\s+fetch\(opts\.url/.test(inferSrc + '\n' + read('tm-endturn-ai.js')), 'JSON repair uses controlled AI queue instead of raw fetch');
-assert(/function\s+_callAIMessagesStreamDirect/.test(infraSrc) && /_aiQueue\.enqueue\(function\(\)\s*\{\s*return _callAIMessagesStreamDirect/.test(infraSrc), 'streaming AI calls are routed through the shared AI queue');
+assert(/function\s+_callAIMessagesStreamDirect/.test(infraSrc)
+  && /_aiQueue\.enqueue\(function\(\)\s*\{\s*return _callAIMessagesStreamDirect/.test(infraSrc)
+  && /function\s+callAIBodyStream[\s\S]*?_aiQueue\.enqueue\(run, opts\.priority \|\| 'normal'\)/.test(infraSrc),
+  'legacy and finalized-body streaming AI calls are routed through the shared AI queue');
 assert(/priority:\s*opts\.priority/.test(infraSrc), 'generic AI helpers forward explicit priority into the queue');
-assert(/callAIMessagesStream\(_sc1Body\.messages[\s\S]*priority:\s*'critical'/.test(aiSubcallSrc), 'SC1 streaming request is queued as critical foreground work');
+assert(/callAIBodyStream\(_sc1Body[\s\S]*priority:\s*'critical'/.test(aiSubcallSrc), 'SC1 finalized-body streaming request is queued as critical foreground work');
 assert(/callAIMessages\(_callABody\.messages[\s\S]*priority:\s*'critical'/.test(aiSubcallSrc), 'SC1 Call A compression is queued as critical foreground work');
 assert(/typeof _callARaw === 'string'/.test(aiSubcallSrc), 'SC1 Call A accepts callAIMessages string results');
 assert(/结构化数据'[\s\S]{0,260}priority:\s*'critical'/.test(aiSubcallSrc), 'SC1 repair fallback remains critical priority');

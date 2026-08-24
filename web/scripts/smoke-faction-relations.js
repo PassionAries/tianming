@@ -155,8 +155,7 @@ function runStaticEndturnChecks() {
   assert(!code.includes('factionRelationsMap[key1]'), 'endturn still writes flat factionRelationsMap[key1]');
   assert(code.includes('setFactionRelation(rs.from, rs.to'), 'faction_relation_shift does not use setFactionRelation');
   assert(code.includes("addToIndex('fac'"), 'faction_create does not update fac index');
-  assert(code.includes("removeFromIndex('fac'"), 'faction_dissolve does not remove fac index');
-  assert(code.includes('removeFactionRelationsForFaction(fd.name)'), 'faction_dissolve does not prune relation map/list through facade');
+  assert(code.includes('TM.Factions') && code.includes('.removeFaction('), 'faction_dissolve does not use the unified lifecycle remover');
 }
 
 function main() {

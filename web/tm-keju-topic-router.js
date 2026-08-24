@@ -86,7 +86,10 @@
       sliceOwner: 'C3'
     },
     scandal: {
-      title: function(td) { return '议·主考弊案' + (td && td.accused ? '·' + td.accused : ''); },
+      title: function(td) {
+        var name = td && (td.examinerName || td.accused);
+        return '议·主考弊案' + (name ? '·' + name : '');
+      },
       shortLabel: '科议·弊案',
       threshold: 0.5,
       callback: '_kjScandalKeyiCallback',  // J4 接

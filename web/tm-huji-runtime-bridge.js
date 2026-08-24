@@ -10,6 +10,22 @@
   var MAX_OPERATIONS = 80;
   var DEFAULT_MOUTHS_PER_HOUSEHOLD = 5;
 
+  function perfCount(name, delta) {
+    var perf = TM && TM.perf;
+    if (perf && typeof perf.count === 'function') perf.count(name, delta == null ? 1 : delta);
+  }
+
+  function perfSpan(name, fn, metadata) {
+    var perf = TM && TM.perf;
+    if (perf && typeof perf.withSpan === 'function') return perf.withSpan(name, fn, metadata);
+    return fn();
+  }
+
+  function safeRevision(value) {
+    var revision = Number(value);
+    return isFinite(revision) && revision >= 0 ? Math.floor(revision) : 0;
+  }
+
   function pickRoot(root) {
     if (root && typeof root === 'object') return root;
     if (global.GM && typeof global.GM === 'object') return global.GM;
@@ -1347,42 +1363,68 @@
   function maintain(root, options) {
     root = pickRoot(root);
     options = options || {};
-    var store = ensureStore(root);
-    var config = getPopulationConfig(root, options);
-    var leaves = getLeafRegions(root);
-    var aggregate = aggregatePopulation(root, config, leaves, {
-      authoritativePlayerPopulation:hasAuthoritativePlayerPopulation(root)
-    });
-    var hukouLedger = syncHukou(root, aggregate, options);
-    var corveeLedger = buildCorveeLedger(root, config, aggregate, options);
-    var militaryServicePool = buildMilitaryPool(root, config, aggregate, options);
-    if (options.includePlayerSignals) scanPlayerSignals(root, store, options);
-    var hardEffects = null;
-    if (options.applyHardEffects !== false) {
-      hardEffects = applyHardEffects(root, {
+    var isSecondPass = /after-hard-links|second/i.test(String(options.source || ''));
+    var spanName = isSecondPass ? 'huji.maintain.second' : 'huji.maintain.first';
+    return perfSpan(spanName, function() {
+      var store = ensureStore(root);
+      var config = getPopulationConfig(root, options);
+      var leaves = getLeafRegions(root);
+      perfCount('huji.fullMaintainCount', 1);
+      perfCount('huji.leafVisits', leaves.length);
+      if (options.incrementalRequested === true) {
+        perfCount('huji.incrementalMaintainCount', 0);
+      }
+      var aggregate = aggregatePopulation(root, config, leaves, {
+        authoritativePlayerPopulation:hasAuthoritativePlayerPopulation(root)
+      });
+      var hukouLedger = syncHukou(root, aggregate, options);
+      var corveeLedger = buildCorveeLedger(root, config, aggregate, options);
+      var militaryServicePool = buildMilitaryPool(root, config, aggregate, options);
+      if (options.includePlayerSignals) scanPlayerSignals(root, store, options);
+      var hardEffects = null;
+      if (options.applyHardEffects !== false) {
+        hardEffects = applyHardEffects(root, {
+          hukou: hukouLedger,
+          corvee: corveeLedger,
+          military: militaryServicePool
+        }, options);
+      }
+      var snap = {
+        turn: Number(options.turn) || Number(root.turn) || 0,
+        source: options.source || 'huji-runtime-bridge',
         hukou: hukouLedger,
-        corvee: corveeLedger,
-        military: militaryServicePool
-      }, options);
-    }
-    var snap = {
-      turn: Number(options.turn) || Number(root.turn) || 0,
-      source: options.source || 'huji-runtime-bridge',
-      hukou: hukouLedger,
-      corvee: {
-        summary: clone(corveeLedger.summary),
-        byRegion: clone(corveeLedger.byRegion)
-      },
-      military: clone(militaryServicePool),
-      hardEffects: clone(hardEffects || store.hardEffects || root._hujiHardEffects || null),
-      operations: store.operations.slice(-8).map(clone),
-      stats: clone(store.stats)
-    };
-    store.turn = snap.turn;
-    store.snapshot = snap;
-    store.stats.maintained = (Number(store.stats.maintained) || 0) + 1;
-    root._hujiRuntimeBridgeSnapshot = snap;
-    return { ok: true, snapshot: clone(snap) };
+        corvee: {
+          summary: clone(corveeLedger.summary),
+          byRegion: clone(corveeLedger.byRegion)
+        },
+        military: clone(militaryServicePool),
+        hardEffects: clone(hardEffects || store.hardEffects || root._hujiHardEffects || null),
+        operations: store.operations.slice(-8).map(clone),
+        stats: clone(store.stats)
+      };
+      store.turn = snap.turn;
+      store.snapshot = snap;
+      store.stats.maintained = (Number(store.stats.maintained) || 0) + 1;
+      root._hujiRuntimeBridgeSnapshot = snap;
+      var regionRevisions = {};
+      leaves.forEach(function(leaf, index) {
+        var id = String(leaf && (leaf.id || leaf.regionId || leaf.name) || ('leaf-' + index));
+        var detail = leaf && (leaf.populationDetail || leaf.population) || {};
+        regionRevisions[id] = safeRevision(detail._revision || leaf._populationRevision);
+      });
+      return {
+        ok: true,
+        sourceRevision: safeRevision(root._hujiSourceRevision),
+        populationRevision: safeRevision(root._populationRevision),
+        regionRevisions: regionRevisions,
+        dirtyDomains: options.dirtyDomains || null,
+        aggregate: aggregate,
+        snapshot: clone(snap),
+        incrementalFallbackReason: options.incrementalRequested === true
+          ? 'full-maintain-required-for-cross-ledger-invariants'
+          : ''
+      };
+    }, { source: options.source || 'huji-runtime-bridge' });
   }
 
   function snapshot(root, options) {
@@ -1394,6 +1436,38 @@
     var limit = Math.max(1, Math.min(40, Number(options.limit || 8) || 8));
     snap.operations = store.operations.slice(-limit).map(clone);
     return snap;
+  }
+
+  function maintainAfterHardLinks(root, firstPass, consumerResult, options) {
+    root = pickRoot(root);
+    options = options || {};
+    var dirty = consumerResult && consumerResult.dirtyDomains;
+    var needsSecondPass = !dirty || !!(
+      dirty.populationChanged ||
+      dirty.hukouChanged ||
+      dirty.corveeChanged ||
+      dirty.militaryPoolChanged ||
+      dirty.fiscalHardEffectChanged ||
+      dirty.globalPopulationChanged ||
+      (Array.isArray(dirty.dirtyRegionIds) && dirty.dirtyRegionIds.length)
+    );
+    if (!needsSecondPass) {
+      perfCount('huji.secondPassSkipped', 1);
+      root._hujiSecondPassDecision = {
+        turn: Number(options.turn) || Number(root.turn) || 0,
+        skipped: true,
+        reason: 'no-huji-dirty-domain',
+        sourceRevision: firstPass && firstPass.sourceRevision,
+        populationRevision: firstPass && firstPass.populationRevision
+      };
+      return { ok: true, skipped: true, reason: 'no-huji-dirty-domain', dirtyDomains: dirty };
+    }
+    return maintain(root, {
+      source: options.source || 'pre-submit-huji-runtime-bridge-after-hard-links',
+      turn: options.turn != null ? options.turn : root.turn,
+      dirtyDomains: dirty || null,
+      incrementalRequested: !!(dirty && Array.isArray(dirty.dirtyRegionIds) && dirty.dirtyRegionIds.length && !dirty.globalPopulationChanged)
+    });
   }
 
   function formatForPrompt(root, options) {
@@ -1475,6 +1549,7 @@
 
   TM.HujiRuntimeBridge = {
     maintain: maintain,
+    maintainAfterHardLinks: maintainAfterHardLinks,
     applyHardEffects: applyHardEffects,
     enforceAfterFiscalTick: enforceAfterFiscalTick,
     recordPlayerOperation: recordPlayerOperation,

@@ -432,7 +432,10 @@
 
     // 4. clanPrestige 缓慢联动（fame 高则族望升）
     if (ch.resources && typeof ch.resources.fame === 'number') {
-      var target = Math.max(0, Math.min(100, 50 + ch.resources.fame * 0.3 + (ch.rankLevel ? (19 - ch.rankLevel) * 2 : 0)));
+      var officePrestige = typeof getRankSeniorityScore === 'function'
+        ? getRankSeniorityScore(ch)
+        : 0;
+      var target = Math.max(0, Math.min(100, 50 + ch.resources.fame * 0.3 + officePrestige * 2));
       ch.clanPrestige = (ch.clanPrestige * 0.97 + target * 0.03);
     }
   }

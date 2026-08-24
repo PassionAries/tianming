@@ -36,27 +36,115 @@
 
   var samples = {};   // name → array of ms
   var marks = {};     // name → start time
+  var counters = Object.create(null); // deterministic workload counters
+  var gauges = Object.create(null);   // latest structural values
+  var activeSpans = Object.create(null);
+  var spanSequence = 0;
   var thresholds = {}; // name → { ms, handler, triggeredCount }
   var MAX_PER_NAME = 500;
-  var enabled = true;
+  var timingEnabled = true;
+  var workloadEnabled = true;
 
   function now() {
     return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   }
 
   function mark(name) {
-    if (!enabled || !name) return;
+    if (!timingEnabled || !name) return;
     marks[name] = now();
   }
 
   function measure(name) {
-    if (!enabled || !name) return 0;
+    if (!timingEnabled || !name) return 0;
     var start = marks[name];
     if (typeof start !== 'number') return 0;
     var dt = now() - start;
     delete marks[name];
     _record(name, dt);
     return dt;
+  }
+
+  function _finiteDelta(value, fallback, label) {
+    if (value === undefined) return fallback;
+    var number = Number(value);
+    if (!Number.isFinite(number)) throw new TypeError('[perf] ' + label + ' must be finite');
+    return number;
+  }
+
+  /** Increment a deterministic unit-of-work counter. */
+  function count(name, delta) {
+    if (!workloadEnabled) return 0;
+    if (!name) throw new TypeError('[perf] counter name is required');
+    var increment = _finiteDelta(delta, 1, 'counter delta');
+    counters[name] = (counters[name] || 0) + increment;
+    return counters[name];
+  }
+
+  /** Record the latest value of a deterministic gauge. */
+  function gauge(name, value) {
+    if (!workloadEnabled) return 0;
+    if (!name) throw new TypeError('[perf] gauge name is required');
+    gauges[name] = _finiteDelta(value, 0, 'gauge value');
+    return gauges[name];
+  }
+
+  function beginSpan(name, metadata) {
+    if (!timingEnabled) return null;
+    if (!name) throw new TypeError('[perf] span name is required');
+    var span = {
+      id: 'span-' + (++spanSequence),
+      name: String(name),
+      startedAt: now(),
+      metadata: metadata && typeof metadata === 'object' ? Object.assign({}, metadata) : {},
+      ended: false
+    };
+    activeSpans[span.id] = span;
+    return span;
+  }
+
+  function endSpan(span, outcome) {
+    if (!span || typeof span !== 'object' || !span.id || span.ended) return 0;
+    var duration = now() - span.startedAt;
+    span.ended = true;
+    span.duration = duration;
+    if (outcome && typeof outcome === 'object') span.outcome = Object.assign({}, outcome);
+    delete activeSpans[span.id];
+    if (timingEnabled) _record(span.name, duration);
+    return duration;
+  }
+
+  function withSpan(name, fn, metadata) {
+    if (typeof fn !== 'function') throw new TypeError('[perf] withSpan requires a function');
+    if (!timingEnabled) return fn(null);
+    var span = beginSpan(name, metadata);
+    try {
+      var result = fn(span);
+      if (result && typeof result.then === 'function') {
+        return result.then(function(value) {
+          endSpan(span, { ok: true });
+          return value;
+        }, function(error) {
+          endSpan(span, { ok: false, error: error && error.message ? error.message : String(error) });
+          throw error;
+        });
+      }
+      endSpan(span, { ok: true });
+      return result;
+    } catch (error) {
+      endSpan(span, { ok: false, error: error && error.message ? error.message : String(error) });
+      throw error;
+    }
+  }
+
+  function workReport() {
+    return {
+      counters: Object.assign({}, counters),
+      gauges: Object.assign({}, gauges),
+      activeSpans: Object.keys(activeSpans).map(function(id) {
+        var span = activeSpans[id];
+        return { id: id, name: span.name, metadata: Object.assign({}, span.metadata) };
+      })
+    };
   }
 
   /** 一次性包装某对象的方法，后续调用自动采样 */
@@ -74,7 +162,7 @@
     obj[key] = orig;
     var tag = sampleName || methodName;
     var wrapped = function() {
-      if (!enabled) return orig.apply(this, arguments);
+      if (!timingEnabled) return orig.apply(this, arguments);
       var t0 = now();
       try {
         var ret = orig.apply(this, arguments);
@@ -178,7 +266,7 @@
 
   /** 手动记录一次时长（用于已经有 start/end 的场景） */
   function record(name, ms) {
-    if (!enabled || !name || typeof ms !== 'number') return;
+    if (!timingEnabled || !name || typeof ms !== 'number') return;
     _record(name, ms);
   }
 
@@ -214,9 +302,14 @@
     if (name) {
       delete samples[name];
       delete marks[name];
+      delete counters[name];
+      delete gauges[name];
     } else {
-      samples = {};
-      marks = {};
+      Object.keys(samples).forEach(function(key) { delete samples[key]; });
+      Object.keys(marks).forEach(function(key) { delete marks[key]; });
+      Object.keys(counters).forEach(function(key) { delete counters[key]; });
+      Object.keys(gauges).forEach(function(key) { delete gauges[key]; });
+      Object.keys(activeSpans).forEach(function(key) { delete activeSpans[key]; });
     }
   }
 
@@ -238,7 +331,8 @@
       when: new Date().toISOString(),
       turn: (typeof GM !== 'undefined' && GM.turn) || 0,
       samples: samples,
-      report: report()
+      report: report(),
+      work: workReport()
     };
     try {
       var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -414,6 +508,12 @@
     wrap: wrap,
     wrapGlobalFunction: wrapGlobalFunction,
     record: record,
+    count: count,
+    gauge: gauge,
+    beginSpan: beginSpan,
+    endSpan: endSpan,
+    withSpan: withSpan,
+    workReport: workReport,
     report: report,
     reportByName: reportByName,
     reset: reset,
@@ -432,10 +532,17 @@
     getBaseline: function(){ return baseline; },
     _renderPanel: renderPanel,
     _closePanel: closePanel,
-    get enabled() { return enabled; },
-    set enabled(v) { enabled = !!v; },
+    get enabled() { return timingEnabled || workloadEnabled; },
+    set enabled(v) { timingEnabled = !!v; workloadEnabled = !!v; },
+    get timingEnabled() { return timingEnabled; },
+    set timingEnabled(v) { timingEnabled = !!v; },
+    get workloadEnabled() { return workloadEnabled; },
+    set workloadEnabled(v) { workloadEnabled = !!v; },
     _samples: samples,
     _marks: marks,
+    _counters: counters,
+    _gauges: gauges,
+    _activeSpans: activeSpans,
     _thresholds: thresholds
   };
 

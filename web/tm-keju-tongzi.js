@@ -314,7 +314,6 @@
       // 历史名臣 75% late_bloomer (历史上确实长寿成大才)·非历史名臣按 mode
       var initArchetype = _kjG5DeriveInitArchetype(isHist, scores);
       var tj = {
-        id:        'tongzi_' + examYear + '_' + i + '_' + Date.now(),
         name:      name,
         age:       age,
         gender:    '男',
@@ -387,7 +386,7 @@
         _tongziArchetype: initArchetype
       };
       _kjG5MarkTongzijinshi(tj, examYear, examiner, td, scores);
-      (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(tj);
+      createRuntimeCharacter(tj);
       pool.push(tj);
     }
     GM._tongziHistory = GM._tongziHistory || [];

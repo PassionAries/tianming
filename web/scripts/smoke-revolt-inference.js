@@ -16,23 +16,31 @@ function assert(cond, msg) {
   else { failures.push(msg); console.log('  FAIL ' + msg); }
 }
 
-var sandbox = { console: console };
+var sandbox = { console: console, Date: Date, JSON: JSON, Math: Math, Map: Map, Set: Set };
 sandbox.window = sandbox;
 sandbox.global = sandbox;
+sandbox.globalThis = sandbox;
+sandbox.deepClone = function (value) { return JSON.parse(JSON.stringify(value)); };
+sandbox.initDataListeners = function () {};
 sandbox._ebs = [];
 sandbox.addEB = function (cat, msg) { sandbox._ebs.push(cat + '·' + msg); };
 var DIVS = {
   '凤阳府': { name: '凤阳府', militaryRecruits: 3000, minxin: 20 },
   '庐州府': { name: '庐州府', militaryRecruits: 40000, minxin: 30 }
 };
-sandbox.TM = { AIChange: { PathUtils: { findDivisionByNameFuzzy: function (G, n) { return DIVS[String(n || '').trim()] || null; } } } };
+sandbox.TM = {
+  errors: { capture: function () {}, captureSilent: function () {} },
+  FactionIndex: { rebuild: function () {} },
+  AIChange: { PathUtils: { findDivisionByNameFuzzy: function (G, n) { return DIVS[String(n || '').trim()] || null; } } }
+};
 sandbox.GM = {
+  _campaignId: 'revolt-inference-smoke',
   turn: 6,
   eraName: '天下将乱',
   mapData: {},
   guoku: { balance: 250000, ledgers: { money: { stock: 250000 } } },
   facs: [{ id: 'f1', name: '大明', strength: 70, economy: 60, playerRelation: 100 }],
-  chars: [{ name: '朱由校', isPlayer: true, alive: true }],
+  chars: [{ id: 'char-player', name: '朱由校', isPlayer: true, alive: true }],
   armies: [],
   minxin: {
     trueIndex: 30,
@@ -41,8 +49,16 @@ sandbox.GM = {
   },
   _edictTracker: []
 };
-sandbox.P = { conf: { revoltEntityEnabled: true } };
+sandbox.P = {
+  conf: { revoltEntityEnabled: true }, playerInfo: { characterName: '朱由校' },
+  scenarios: [], engineConstants: {}, buildings: [], armyTemplates: [], parties: [], classes: [], factions: [],
+  unitSystem: { enabled: false }
+};
 vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-indices.js'), 'utf8'), sandbox, { filename: 'tm-indices.js' });
+sandbox.buildIndices = function () {};
+vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-relations.js'), 'utf8'), sandbox, { filename: 'tm-relations.js' });
+vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-faction-membership.js'), 'utf8'), sandbox, { filename: 'tm-faction-membership.js' });
 vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-revolt-entity.js'), 'utf8'), sandbox, { filename: 'tm-revolt-entity.js' });
 vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-revolt-inference.js'), 'utf8'), sandbox, { filename: 'tm-revolt-inference.js' });
 

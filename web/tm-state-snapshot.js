@@ -17,6 +17,17 @@
   var MAX_SNAPSHOTS = 200;
   var _dbPromise = null;
 
+  function _perfCount(name, delta) {
+    if (global.TM && global.TM.perf && typeof global.TM.perf.count === 'function') global.TM.perf.count(name, delta);
+  }
+
+  function _perfWithSpan(name, fn, metadata) {
+    if (global.TM && global.TM.perf && typeof global.TM.perf.withSpan === 'function') {
+      return global.TM.perf.withSpan(name, fn, metadata);
+    }
+    return fn();
+  }
+
   function _legacyTimelineId(campaignId) {
     try {
       if (typeof global._tmLegacyTimelineId === 'function') return global._tmLegacyTimelineId(campaignId);
@@ -206,7 +217,10 @@
     var builder = global._buildSaveState;
     if (typeof builder !== 'function' && typeof _buildSaveState === 'function') builder = _buildSaveState;
     if (typeof builder !== 'function') throw new Error('完整存档快照构造器未就绪');
-    var state = builder({ format: 'idb', detach: true, gm: gm, p: p || {} });
+    _perfCount('snapshot.captureBuild.count', 1);
+    var state = _perfWithSpan('snapshot.capture', function() {
+      return builder({ format: 'idb', detach: true, gm: gm, p: p || {} });
+    }, { turn: gm && gm.turn });
     if (!state || !state.GM || !state.P || typeof state.GM !== 'object' || typeof state.P !== 'object') {
       throw new Error('完整存档快照构造失败');
     }
@@ -214,18 +228,61 @@
   }
 
   function _putRecord(record) {
-    return _openDB().then(function(db) {
+    return _perfWithSpan('snapshot.write', function() { return _openDB().then(function(db) {
       return new Promise(function(resolve, reject) {
         var tx;
         try {
           tx = db.transaction([STORE, LINEAGE_STORE], 'readwrite');
           tx.objectStore(STORE).put(record);
+          _perfCount('snapshot.payloadWrites', 1);
           var lineage = record && record.state && record.state.GM
             ? _lineageRecordFromGM(record.state.GM, record.campaignId, record.timelineId) : null;
           if (lineage) tx.objectStore(LINEAGE_STORE).put(lineage);
           tx.oncomplete = function() { resolve(record); };
           tx.onerror = function(e) { reject((e.target && e.target.error) || tx.error || new Error('快照写入失败')); };
           tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('快照事务已中止')); };
+        } catch (e) { reject(e); }
+      });
+    }); }, { turn: record && record.turn });
+  }
+
+  function _getTimelineRecordKeys(campaignId, timelineId) {
+    // Keys-only LRU is a hard contract. Register an explicit structural zero
+    // so reports distinguish it from an uninstrumented path.
+    _perfCount('snapshot.lruValueReads', 0);
+    return _openDB().then(function(db) {
+      return new Promise(function(resolve, reject) {
+        var tx;
+        try {
+          tx = db.transaction(STORE, 'readonly');
+          var index = tx.objectStore(STORE).index('campaignTimeline');
+          if (typeof index.getAllKeys === 'function') {
+            var keysReq = index.getAllKeys([campaignId, timelineId]);
+            keysReq.onsuccess = function(e) {
+              var keys = e.target.result || [];
+              _perfCount('snapshot.lruKeyReads', keys.length);
+              resolve(keys);
+            };
+            keysReq.onerror = function(e) { reject(e.target.error || new Error('快照键读取失败')); };
+          } else if (typeof index.openKeyCursor === 'function') {
+            var keys = [];
+            var range = typeof IDBKeyRange !== 'undefined' ? IDBKeyRange.only([campaignId, timelineId]) : [campaignId, timelineId];
+            var cursorReq = index.openKeyCursor(range);
+            cursorReq.onsuccess = function() {
+              var cursor = cursorReq.result;
+              if (!cursor) {
+                _perfCount('snapshot.lruKeyReads', keys.length);
+                resolve(keys);
+                return;
+              }
+              keys.push(cursor.primaryKey);
+              cursor.continue();
+            };
+            cursorReq.onerror = function(e) { reject(e.target.error || new Error('快照键游标失败')); };
+          } else {
+            reject(new Error('浏览器不支持 keys-only 快照 LRU'));
+          }
+          tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('快照键读取事务已中止')); };
         } catch (e) { reject(e); }
       });
     });
@@ -357,9 +414,13 @@
   }
 
   function _enforceLRU(campaignId, timelineId, max) {
-    return _getTimelineRecords(campaignId, timelineId).then(function(own) {
-      own.sort(function(a, b) { return (a.turn - b.turn) || (a.ts - b.ts); });
-      var remove = own.slice(0, Math.max(0, own.length - max));
+    return _perfWithSpan('snapshot.lru', function() { return _getTimelineRecordKeys(campaignId, timelineId).then(function(keys) {
+      keys.sort(function(a, b) {
+        var aTurn = Number(String(a).slice(String(a).lastIndexOf(':') + 1));
+        var bTurn = Number(String(b).slice(String(b).lastIndexOf(':') + 1));
+        return aTurn - bTurn || String(a).localeCompare(String(b));
+      });
+      var remove = keys.slice(0, Math.max(0, keys.length - max));
       if (!remove.length) return;
       return _openDB().then(function(db) {
         return new Promise(function(resolve, reject) {
@@ -367,17 +428,17 @@
           try {
             tx = db.transaction(STORE, 'readwrite');
             var store = tx.objectStore(STORE);
-            remove.forEach(function(r) { store.delete(r.id); });
+            remove.forEach(function(id) { store.delete(id); });
             tx.oncomplete = function() { resolve(); };
             tx.onerror = function(e) { reject((e.target && e.target.error) || tx.error || new Error('快照清理失败')); };
             tx.onabort = function(e) { reject((e.target && e.target.error) || tx.error || new Error('快照清理事务已中止')); };
           } catch (e) { reject(e); }
         });
       });
-    });
+    }); }, { campaignId: campaignId, timelineId: timelineId });
   }
 
-  function _saveSnapshotFrom(gm, p, requestedTurn, requestedCampaignId, requestedTimelineId) {
+  function _saveSnapshotFrom(gm, p, requestedTurn, requestedCampaignId, requestedTimelineId, canonicalState, canonicalPayload) {
     try {
       if (!gm) return Promise.resolve({ ok: false, reason: 'no GM' });
       var campaignId = requestedCampaignId || _ensureCampaignId(gm);
@@ -388,7 +449,8 @@
       if (timelineId !== _ensureTimelineId(gm)) return Promise.resolve({ ok: false, reason: 'timeline mismatch' });
       var turn = _strictTurn(requestedTurn == null ? gm.turn : requestedTurn);
       if (_strictTurn(gm.turn) !== turn) return Promise.resolve({ ok: false, reason: 'turn mismatch' });
-      var state = _captureFullState(gm, p);
+      var state = canonicalState || _captureFullState(gm, p);
+      if (!state || !state.GM || !state.P) return Promise.resolve({ ok: false, reason: 'invalid canonical state' });
       var record = {
         id: _recordId(campaignId, timelineId, turn),
         campaignId: campaignId,
@@ -411,8 +473,17 @@
   }
 
   function saveSnapshot(turn) {
+    var input = turn && typeof turn === 'object' ? turn : null;
     var gm = global.GM || (typeof GM !== 'undefined' ? GM : null);
     var p = global.P || (typeof P !== 'undefined' ? P : null);
+    if (input && input.canonicalState) {
+      gm = input.canonicalState.GM;
+      p = input.canonicalState.P;
+      return _saveSnapshotFrom(
+        gm, p, input.turn, input.campaignId, input.timelineId,
+        input.canonicalState, input.canonicalPayload || null
+      );
+    }
     return _saveSnapshotFrom(gm, p, turn, gm ? _ensureCampaignId(gm) : '', gm ? _ensureTimelineId(gm) : '');
   }
 
@@ -529,8 +600,20 @@
     var sourceLoadGen = _loadGen();
     var keepShiji = opts.keepShijiHistory ? _deepClone(sourceGM.shijiHistory || []) : null;
     var keepEvt = opts.keepEvtLog ? _deepClone(sourceGM.evtLog || []) : null;
+    if (global._tmActiveTimeTravelTransaction) {
+      return Promise.resolve({ ok: false, reason: 'time-travel-active' });
+    }
+    var travelTransaction = {
+      id: 'time-travel-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10),
+      campaignId: campaignId,
+      timelineId: timelineId,
+      fromTurn: currentTurn,
+      toTurn: target,
+      startedAt: Date.now()
+    };
+    global._tmActiveTimeTravelTransaction = travelTransaction;
 
-    return loadSnapshot(target, campaignId, timelineId).then(function(targetRecord) {
+    var travelPromise = loadSnapshot(target, campaignId, timelineId).then(function(targetRecord) {
       if (!targetRecord) return { ok: false, reason: 'no snapshot for turn ' + target };
       if (!targetRecord.state || targetRecord.campaignId !== campaignId || targetRecord.turn !== target
           || (!targetRecord.inherited && targetRecord.timelineId !== timelineId)) {
@@ -596,6 +679,32 @@
         });
       });
     }).catch(function(e) { return { ok: false, error: e }; });
+    var clearTravelTransaction = function() {
+      if (global._tmActiveTimeTravelTransaction === travelTransaction) {
+        global._tmActiveTimeTravelTransaction = null;
+      }
+      try {
+        if (typeof global._tmRequestDeferredDesktopAutoSaveFlush === 'function') {
+          global._tmRequestDeferredDesktopAutoSaveFlush('time-travel-complete');
+        } else if (typeof global._tmFlushDeferredDesktopAutoSave === 'function') {
+          var pendingFlush = global._tmFlushDeferredDesktopAutoSave('time-travel-complete');
+          if (pendingFlush && typeof pendingFlush.catch === 'function') {
+            pendingFlush.catch(function(error) {
+              if (global.console && console.warn) console.warn('[state-snapshot] deferred autosave flush failed:', error);
+            });
+          }
+        }
+      } catch (flushError) {
+        if (global.console && console.warn) console.warn('[state-snapshot] deferred autosave flush failed:', flushError);
+      }
+    };
+    return travelPromise.then(function(result) {
+      clearTravelTransaction();
+      return result;
+    }, function(error) {
+      clearTravelTransaction();
+      throw error;
+    });
   }
 
   function registerAutoSnapshot() {
@@ -604,7 +713,13 @@
       var gm = global.GM || (typeof GM !== 'undefined' ? GM : null);
       var t = gm ? Number(gm.turn) : 0;
       if (!Number.isSafeInteger(t) || t <= 0) return Promise.resolve();
-      // EndTurnHooks.execute 会 await 返回值；失败抛出并由统一 hook 错误通道记录。
+      // Canonical end-turn save owns snapshot persistence so it can reuse the
+      // already detached state. This hook remains as a lifecycle contract only.
+      if (gm && gm._endTurnCommitPending) {
+        return Promise.resolve({ ok: true, deferredToCanonicalSave: true, turn: t });
+      }
+      // Compatibility for explicit/manual hook execution outside an active
+      // end-turn transaction.
       return saveSnapshot(t).then(function(result) {
         if (!result || result.ok !== true) throw (result && result.error) || new Error('回合快照未落库');
         return result;

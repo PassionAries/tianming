@@ -360,6 +360,7 @@ function startKejuExam(opts) {
     preliminaryStats: null,
     preliminaryProvincialStats: null,
     // 考官
+    chiefExaminerId: '',
     chiefExaminer: '',
     examinerParty: '',
     examinerStance: '',
@@ -515,6 +516,23 @@ function _kejuUpgradeExamSchema(exam) {
   if (exam.stageStartTurn == null) exam.stageStartTurn = exam.startTurn || GM.turn;
   if (!exam.launchMethod) exam.launchMethod = 'council';
   if (exam.libuSupport === undefined) exam.libuSupport = null;
+  if (exam.chiefExaminerId == null) exam.chiefExaminerId = '';
+  if (!exam.chiefExaminerId && exam.chiefExaminer && Array.isArray(GM.chars)) {
+    var legacyExaminerMatches = GM.chars.filter(function(character) {
+      return character && character.name === exam.chiefExaminer;
+    });
+    if (legacyExaminerMatches.length === 1 && legacyExaminerMatches[0].id != null
+        && String(legacyExaminerMatches[0].id).trim()) {
+      exam.chiefExaminerId = String(legacyExaminerMatches[0].id);
+    }
+  }
+  if (exam.chiefExaminerId && !exam.chiefExaminer && Array.isArray(GM.chars)) {
+    var examinerById = GM.chars.find(function(character) {
+      return character && character.id != null
+        && String(character.id) === String(exam.chiefExaminerId);
+    });
+    if (examinerById) exam.chiefExaminer = examinerById.name || '';
+  }
   if (!exam.chiefExaminerMemorial) exam.chiefExaminerMemorial = null;
   if (!Array.isArray(exam.subExaminers)) exam.subExaminers = [];
   if (!Array.isArray(exam.huishiTopicCandidates)) exam.huishiTopicCandidates = [];
@@ -826,8 +844,13 @@ function selectExaminer(name) {
     toast('\u4e3b\u8003\u5b98\u5fc5\u987b\u4e3a\u73a9\u5bb6\u540c\u52bf\u529b\u7684\u5728\u4efb\u5b98\u5458');
     return;
   }
+  if (ch.id == null || !String(ch.id).trim()) {
+    toast('\u4E3B\u8003\u5B98\u7F3A\u5C11\u7A33\u5B9A\u4EBA\u7269 ID\uFF0C\u65E0\u6CD5\u4EFB\u547D');
+    return;
+  }
   if (typeof _kejuClearUrgentBanner === 'function') _kejuClearUrgentBanner();
-  exam.chiefExaminer = name;
+  exam.chiefExaminerId = String(ch.id);
+  exam.chiefExaminer = ch.name || name;
   exam.examinerParty = ch.party || '';
   exam.examinerStance = ch.stance || ch.personality || '';
   exam.examinerIntelligence = ch.intelligence || 50;
@@ -1452,7 +1475,8 @@ async function generateDianshiResults() {
       + batch.map(function(c){
           var h = '';
           if (c.isHistorical && c.shiliao) h = '\u2605\u5386\u53F2\u4EBA\u7269\u00B7\u53F2\u6599\uFF1A' + (c.shiliao||'').slice(0, 120);
-          return '\u7B2C' + c.rank + '\u540D\uFF1A' + c.name + '\uFF08' + (c.age||30) + '\u5C81\u00B7' + (c.origin||'') + '\u00B7' + (c.class||'\u5BD2\u95E8') + '\u00B7' + (c.party||'\u65E0\u515A') + '\u00B7\u98CE\u683C' + (c.style||'') + '\u00B7\u6027\u683C' + (c.personalityHint||'') + '\u00B7\u8BC4\u5206' + (c.score||75) + '\uFF09' + h;
+          var _candidateAge = typeof getValidAge === 'function' ? getValidAge(c, 30) : (Number.isFinite(c.age) && c.age >= 0 ? Math.floor(c.age) : 30);
+          return '\u7B2C' + c.rank + '\u540D\uFF1A' + c.name + '\uFF08' + _candidateAge + '\u5C81\u00B7' + (c.origin||'') + '\u00B7' + (c.class||'\u5BD2\u95E8') + '\u00B7' + (c.party||'\u65E0\u515A') + '\u00B7\u98CE\u683C' + (c.style||'') + '\u00B7\u6027\u683C' + (c.personalityHint||'') + '\u00B7\u8BC4\u5206' + (c.score||75) + '\uFF09' + h;
         }).join('\n') + '\n\n'
       + '\u3010\u8981\u6C42\u3011\n'
       + '1. \u4E3A\u6BCF\u540D\u751F\u6210 fullAnswer\uFF1A\u5B8C\u6574\u7B54\u5377 800-1500 \u5B57\uFF08\u624D\u534E\u4F73\u8005 1300-1500\uFF0C\u5BD2\u95E8\u82E6\u8BFB 1000-1200\uFF0C\u5E73\u5EB8 800-1000\uFF0C\u4F46\u4EFB\u4F55\u4EBA\u4E0D\u53EF\u77ED\u4E8E 600 \u5B57\uFF09\n'

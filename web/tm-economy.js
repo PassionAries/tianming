@@ -454,7 +454,10 @@ function updateCharacters(timeRatio) {
       var ageInc = Math.floor(curTotalDays / 365) - Math.floor(prevTotalDays / 365);
 
       if (ageInc > 0) {
-        chr.age = (typeof chr.age === 'number' ? chr.age : parseInt(chr.age) || 0) + ageInc;
+        var currentAge = typeof getValidAge === 'function'
+          ? getValidAge(chr, 30)
+          : (Number.isFinite(Number(chr.age)) && Number(chr.age) >= 0 ? Math.floor(Number(chr.age)) : 30);
+        chr.age = currentAge + ageInc;
         recordChange('characters', chr.name, 'age', oldAge, chr.age, '时间流逝');
 
         // 死亡风险由NaturalDeathSystem计算并报告给AI，由AI通过character_deaths决定
@@ -668,7 +671,7 @@ function applyInheritanceOutcome(inheritanceData, deadChar, deadCharOffices, off
           speechStyle: "",
           rels: []
         };
-        (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(newHeir);
+        createRuntimeCharacter(newHeir);
         // 维护索引
         addToIndex('char', newHeir.name, newHeir);
         addEB('\u4EBA\u7269', heir + '\u51FA\u73B0\uFF0C\u7EE7\u627F' + deadChar.name + '\u7684\u5B98\u804C\u3002');

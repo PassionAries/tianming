@@ -1442,7 +1442,7 @@ function quanxuanInitialScreen(post, context) {
     if (char.isPlayer) return; // 玩家角色不参与铨选
 
     // 年龄检查
-    var age = char.age || 30;
+    var age = typeof getValidAge === 'function' ? getValidAge(char, 30) : (Number.isFinite(char.age) && char.age >= 0 ? Math.floor(char.age) : 30);
     if (age < config.minAge || age > config.maxAge) return;
 
     // 忠诚度检查

@@ -32,8 +32,11 @@ function loadInto(sb, files) {
 
 // ── 民变实体化：真 RevoltEntity.sync ──
 function revoltSandbox(conf) {
-  var sb = { console: console, _ebs: [] };
+  var sb = { console: console, _ebs: [], Date: Date, JSON: JSON, Math: Math, Object: Object, Array: Array, Number: Number, String: String, Boolean: Boolean, RegExp: RegExp, Map: Map, Set: Set, parseInt: parseInt, parseFloat: parseFloat, isNaN: isNaN, isFinite: isFinite };
   sb.addEB = function (cat, msg) { sb._ebs.push(cat + '·' + msg); };
+  sb.TM = { errors: { capture: function(){}, captureSilent: function(){} } };
+  sb.initDataListeners = function() {};
+  sb.SettlementPipeline = { register: function() {} };
   sb.GM = {
     turn: 10,
     facs: [{ id: 'f1', name: '大明', strength: 80, economy: 70, playerRelation: 100 }],
@@ -41,8 +44,8 @@ function revoltSandbox(conf) {
     armies: [{ id: 'a1', name: '京营', faction: '大明', soldiers: 50000 }],
     minxin: { revolts: [] }
   };
-  sb.P = { conf: conf || {} };
-  return loadInto(sb, ['tm-revolt-entity.js']);
+  sb.P = { conf: conf || {}, scenarios: [] };
+  return loadInto(sb, ['tm-utils.js', 'tm-indices.js', 'tm-relations.js', 'tm-faction-membership.js', 'tm-revolt-entity.js']);
 }
 
 // ── 边患真入侵：真 BorderInvasion.tick ──
@@ -191,7 +194,7 @@ try {
   assert(_dirty.apiKey === 'sk-secret' && _dirty.refText.length > 0, 'C⑫·纯函数零副作用(不改入参 conf)');
   // 两个 lite 写口都接净化器（saveP 原路径 + 桌面 autoSave 本批路径·同一 tm_P_lite 键·同一泄露面）
   assert(/conf:\s*_tmLiteSafeConf\(P\.conf\)/.test(utilsSrc), 'C·fix-A(原路径同修)：tm-utils saveP lite 写口 conf 走 _tmLiteSafeConf');
-  assert(/conf:_tmLiteSafeConf\(P\.conf\)/.test(slSrc), 'C·fix-A：tm-save-lifecycle 桌面 autoSave lite 写口 conf 走 _tmLiteSafeConf');
+  assert(/conf:\s*_tmLiteSafeConf\(committedP\.conf\)/.test(slSrc), 'C·fix-A：tm-save-lifecycle 桌面 autoSave lite 只净化 committed snapshot 的 conf');
   assert(slSrc.indexOf("addEventListener('tm:p-restored'") >= 0 && /_tmReconcileFactionLivingWorld\(GM, \(typeof P/.test(slSrc), 'C·fix2：tm:p-restored 自愈监听已挂 + 调单一真源 _tmReconcileFactionLivingWorld');
   assert(/_tmReconcileFactionLivingWorld\(GM, \(typeof P/.test(slSrc) && /_tmReconcileFactionLivingWorld\(GM, P\)/.test(slSrc), 'C·单一真源：normalizer 与自愈监听两处同调 _tmReconcileFactionLivingWorld(无逻辑分叉)');
 

@@ -111,8 +111,10 @@
   }
 
   function rightIssueIsPlayer(p){
-    var playerName = (window.P && P.playerInfo && P.playerInfo.characterName) || '';
-    return !!(p && (p.isPlayer || p.player || personKey(p) === 'player' || (playerName && p.name === playerName)));
+    var player = (window.TM && TM.Player && typeof TM.Player.getCharacter === 'function')
+      ? TM.Player.getCharacter(window.GM)
+      : (window.GM && Array.isArray(GM.chars) ? GM.chars.find(function(c){ return c && c.isPlayer === true; }) : null);
+    return !!(p && (p === player || p.isPlayer || p.player || personKey(p) === 'player' || (player && p.id && p.id === player.id)));
   }
 
   function rightIssueAtCourt(p){

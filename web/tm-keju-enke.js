@@ -678,7 +678,6 @@
       // career·array of {year, title, note, date, desc, milestone}
       var jinshiAge = 28 + Math.floor((Math.sin(seed + i * 13) + 1) * 12);
       var jinshi = {
-        id:            'enke_' + examYear + '_' + i + '_' + Date.now(),
         name:          name,
         alive:         true,
         gender:        '男',
@@ -728,7 +727,7 @@
         isHistorical:  false
       };
       _kjG2MarkEnkeJinshi(jinshi, examYear, examiner, td);
-      (typeof TM !== 'undefined' && TM.Roster ? TM.Roster.addChar : function(_c){ GM.chars.push(_c); })(jinshi);
+      createRuntimeCharacter(jinshi);
       jinshiList.push(jinshi);
     }
     return jinshiList;

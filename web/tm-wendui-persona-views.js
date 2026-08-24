@@ -105,12 +105,13 @@ function _wdConsortContext(ch) {
     if ((ch.ambition||50) > 70) _motiveHints.push('E(权势欲)');
     if (ch.motherClan && /(\u738B|\u516C|\u4FAF|\u5C06|\u4E1E\u76F8|\u5C1A\u4E66)/.test(ch.motherClan)) _motiveHints.push('C(母族谋利)');
     if (ch.children && ch.children.length > 0) _motiveHints.push('D(护子嗣)');
-    if (ch.children && ch.children.length === 0 && (ch.age||25) < 30) _motiveHints.push('D(欲立子嗣)');
+    if (ch.children && ch.children.length === 0 && (typeof getValidAge === 'function' ? getValidAge(ch, 25) : (Number.isFinite(ch.age) && ch.age >= 0 ? ch.age : 25)) < 30) _motiveHints.push('D(欲立子嗣)');
     if (ch.spouseRank === 'attendant' || ch.spouseRank === 'concubine') _motiveHints.push('B(借以自固)');
     if ((ch.loyalty||50) < 40) _motiveHints.push('H(憎恨隐忍)·F(畏惧依附)');
     if ((ch.loyalty||50) > 85 && (ch.ambition||50) < 50) _motiveHints.push('A(真挚恋慕)');
     if ((ch.stress||0) > 70) _motiveHints.push('F(畏惧)·B(自固)');
-    if ((ch.age||30) > 45 && (ch.loyalty||50) > 60) _motiveHints.push('I(忘情工具·或 J 初爱渐疲)');
+    var _personaAge = typeof getValidAge === 'function' ? getValidAge(ch, 30) : (Number.isFinite(ch.age) && ch.age >= 0 ? Math.floor(ch.age) : 30);
+    if (_personaAge > 45 && (ch.loyalty||50) > 60) _motiveHints.push('I(忘情工具·或 J 初爱渐疲)');
     if (_motiveHints.length > 0) {
       _spouseCtx += '\n  【此人可能倾向】' + _motiveHints.slice(0, 4).join('、') + '——可为主导，辅以其他动机混合';
     }
@@ -262,10 +263,13 @@ function _wdBuildPrompt(ch, name) {
   if (ch.traitIds && ch.traitIds.length > 0 && P.traitDefinitions) {
     traitDesc = ch.traitIds.map(function(id) { var d = P.traitDefinitions.find(function(t) { return t.id === id; }); return d ? d.name : id; }).join('、');
   } else if (ch.personality) { traitDesc = ch.personality; }
-  var opinionVal = (typeof OpinionSystem !== 'undefined') ? OpinionSystem.getTotal(ch, findCharByName((P.playerInfo && P.playerInfo.characterName) || '') || { name: '\u73A9\u5BB6' }) : (ch.loyalty || 50);
+  var _wdPlayer = (typeof TM !== 'undefined' && TM.Player && typeof TM.Player.getCharacter === 'function')
+    ? TM.Player.getCharacter(GM)
+    : (GM.chars || []).find(function(c) { return c && c.isPlayer === true; });
+  var opinionVal = (typeof OpinionSystem !== 'undefined') ? OpinionSystem.getTotal(ch, _wdPlayer || { name: '\u73A9\u5BB6' }) : (ch.loyalty || 50);
   var sc = findScenarioById && findScenarioById(GM.sid);
   var eraCtx = sc ? (sc.era || sc.dynasty || '') : '';
-  var ageInfo = ch.age ? '，年' + ch.age : '';
+  var ageInfo = (ch.age !== undefined && ch.age !== null) ? '，年' + ch.age : '';
   var stressInfo = (ch.stress && ch.stress > 30) ? '，当前压力' + ch.stress + '(' + ((ch.stress > 60) ? '濒临崩溃' : '焦虑不安') + ')' : '';
   var arcInfo = '';
   if (GM.characterArcs && GM.characterArcs[ch.name]) {

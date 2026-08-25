@@ -104,6 +104,67 @@ function _tmReconcileFactionLivingWorld(gm, p) {
   }
   gm._factionLivingWorld = (p && p.conf && typeof p.conf.factionLivingWorldDefault === 'boolean') ? p.conf.factionLivingWorldDefault : true;   // 无戳→取跨局镜像·否则翻默认 ON
 }
+
+function _tmNormalizeCoreWorldCollections(gm) {
+  if (!gm || typeof gm !== 'object') {
+    var rootError = new Error('存档 gameState 不是可恢复的对象');
+    rootError.code = 'save-core-schema-invalid';
+    throw rootError;
+  }
+  var diagnostics = [];
+  function normalizeArray(key) {
+    var value = gm[key];
+    if (value === undefined || value === null) {
+      gm[key] = [];
+      diagnostics.push({ field: key, action: 'default-array' });
+      return;
+    }
+    if (Array.isArray(value)) return;
+    if (typeof value === 'object' && Object.keys(value).length === 0) {
+      gm[key] = [];
+      diagnostics.push({ field: key, action: 'repair-empty-object-to-array' });
+      return;
+    }
+    var error = new Error('存档核心集合 GM.' + key + ' 应为数组，且含有无法安全迁移的数据');
+    error.code = 'save-core-schema-invalid';
+    error.field = key;
+    throw error;
+  }
+  function normalizeObject(key) {
+    var value = gm[key];
+    if (value === undefined || value === null) {
+      gm[key] = {};
+      diagnostics.push({ field: key, action: 'default-object' });
+      return;
+    }
+    if (typeof value === 'object' && !Array.isArray(value)) return;
+    if (Array.isArray(value) && value.length === 0) {
+      gm[key] = {};
+      diagnostics.push({ field: key, action: 'repair-empty-array-to-object' });
+      return;
+    }
+    var error = new Error('存档核心集合 GM.' + key + ' 应为对象，且含有无法安全迁移的数据');
+    error.code = 'save-core-schema-invalid';
+    error.field = key;
+    throw error;
+  }
+  normalizeObject('vars');
+  normalizeObject('rels');
+  normalizeArray('chars');
+  normalizeArray('facs');
+  normalizeArray('officeTree');
+  if (diagnostics.length) {
+    if (!Array.isArray(gm._schemaNormalizationDiagnostics)) gm._schemaNormalizationDiagnostics = [];
+    Array.prototype.push.apply(gm._schemaNormalizationDiagnostics, diagnostics.map(function(row) {
+      return { turn: Number(gm.turn) || 0, field: row.field, action: row.action };
+    }));
+    if (gm._schemaNormalizationDiagnostics.length > 50) {
+      gm._schemaNormalizationDiagnostics = gm._schemaNormalizationDiagnostics.slice(-50);
+    }
+  }
+  return { ok: true, diagnostics: diagnostics };
+}
+if (typeof window !== 'undefined') window._tmNormalizeCoreWorldCollections = _tmNormalizeCoreWorldCollections;
 // 启动竞态自愈：桌面端每 5 次自动存档曾把 lite 覆写成无 conf(现已在 saveP/autoSave 两处补 conf)——历史 lite 仍可能无镜像。
 //   完整 P 异步恢复晚到时 tm-utils 派 tm:p-restored·此处按同一真源用刚恢复的 P.conf.factionLivingWorldDefault 重算 GM._factionLivingWorld·
 //   消除「无戳 + 启动时 GM=true 而迟到镜像=false」的永久矛盾(用户显式关闭被翻 ON)。用户本会话显式设过(带戳)则不动。
@@ -118,6 +179,7 @@ function _ensureGMDefaults(GM, P) {
   GM = GM || (typeof window !== 'undefined' ? window.GM : null);
   P = P || (typeof window !== 'undefined' ? window.P : null);
   if (!GM) return;
+  _tmNormalizeCoreWorldCollections(GM);
   _tmEnsureCampaignId(GM);
   _tmEnsureTimelineIdentity(GM);
   _tmMigrateCoreStableIds(GM);
@@ -631,8 +693,9 @@ function _prepareGMForSave(GM, P) {
 }
 
 function _tmDesktopSavePanelRoot(title, maxWidth) {
-  showPanel('<div id="tm-desktop-save-panel"></div>');
-  var root = _$("tm-desktop-save-panel");
+  var root = document.createElement('div');
+  root.id = 'tm-desktop-save-panel';
+  showPanel(root);
   root.style.cssText = 'padding:1.5rem;max-width:' + maxWidth + 'px;margin:auto';
   var heading = document.createElement('h2');
   heading.style.cssText = 'color:var(--gold);margin-bottom:1rem';
@@ -2168,6 +2231,7 @@ if(_tmHasNativeFs()){
 // C (2026-05-23)·叠在 A-1 之上·5s 内有用户输入则 defer 整个 60s tick·避开打字 / 点击窗口
 //   兜底·距上次成功保存超 3 分钟·强制保存 (避免连续打字 5 分钟没存档)
 var _autoSaveInFlight=false;
+var _autoSaveInFlightPromise=null;
 var _autoSaveSkipCount=0;
 var _autoSaveLiteTick=0;
 var _autoSaveLastInputMs=0;   // C·最后一次用户输入时间
@@ -2190,6 +2254,14 @@ var lastCommittedSnapshot=null;
 var lastCommittedTurn=-1;
 var lastCommittedTransactionId='';
 var _lastCommittedSnapshotIdentity=null;
+// Background AI summaries are deliberately outside the critical end-turn path.  Once they
+// mutate the still-current world they request one coalesced canonical save here instead of
+// calling a storage primitive from independent promise callbacks.
+var _backgroundSavePending=null;
+var _backgroundSaveInFlight=null;
+var _backgroundSaveTimer=null;
+var _backgroundSaveSequence=0;
+var _BACKGROUND_SAVE_MAX_ATTEMPTS=2;
 
 function _tmReportDesktopAutoSaveBoundaryError(error, label){
   var normalized = (error && (typeof error === 'object' || typeof error === 'function')) ? error : new Error(String(error));
@@ -2228,6 +2300,198 @@ function isWorldTransactionActive(){
     (root && (root._tmActiveLoadTransaction || root._tmWorldRollbackActive || root._tmActiveTimeTravelTransaction)) ||
     (typeof endTurn !== 'undefined' && endTurn && endTurn._preSubmitInFlight)
   );
+}
+
+function _tmBackgroundSaveLeaseCurrent(request){
+  if (!request || !request.lease) return false;
+  if (typeof _tmWorldLeaseCurrent === 'function') return _tmWorldLeaseCurrent(request.lease);
+  var lease=request.lease;
+  return typeof GM !== 'undefined' && typeof P !== 'undefined'
+    && GM===lease.gmRef && P===lease.pRef
+    && String((GM&&GM._campaignId)||'')===String(lease.campaignId||'')
+    && String((GM&&GM.sid)||'')===String(lease.sid||'')
+    && Number((GM&&GM.turn)||0)===Number(lease.turn||0)
+    && (((typeof window!=='undefined'&&window._tmLoadGen)||0)===Number(lease.loadGen||0));
+}
+
+function _tmBackgroundSaveLeaseSame(a,b){
+  return !!(a&&b)
+    && a.gmRef===b.gmRef && a.pRef===b.pRef
+    && String(a.campaignId||'')===String(b.campaignId||'')
+    && String(a.sid||'')===String(b.sid||'')
+    && Number(a.turn||0)===Number(b.turn||0)
+    && Number(a.loadGen||0)===Number(b.loadGen||0);
+}
+
+function _tmBackgroundSaveMeta(request){
+  var scenario=null;
+  try {
+    scenario=typeof findScenarioById==='function'?findScenarioById(GM.sid):null;
+  } catch (error) {
+    if (typeof console!=='undefined'&&console.warn) console.warn('[background-save] scenario metadata lookup failed',error);
+  }
+  return {
+    name:'自动封存·'+(typeof getTSText==='function'?getTSText(GM.turn):'T'+GM.turn),
+    type:'auto',
+    turn:Number(GM.turn),
+    scenarioName:scenario?String(scenario.name||''):'',
+    eraName:String(GM.eraName||''),
+    backgroundReasons:Array.from(request.reasons).slice(0,8)
+  };
+}
+
+function _tmReportBackgroundSaveFailure(error, request){
+  var normalized=_tmReportDesktopAutoSaveBoundaryError(error,'background canonical save · '+Array.from(request.reasons).join(','));
+  try {
+    if (!Array.isArray(GM._backgroundSaveFailures)) GM._backgroundSaveFailures=[];
+    GM._backgroundSaveFailures.push({
+      turn:Number(GM.turn)||0,
+      reasons:Array.from(request.reasons).slice(0,8),
+      attempts:Number(request.attempts)||0,
+      message:String(normalized&&normalized.message||normalized).slice(0,500),
+      at:Date.now()
+    });
+    if (GM._backgroundSaveFailures.length>20) GM._backgroundSaveFailures=GM._backgroundSaveFailures.slice(-20);
+  } catch (diagnosticError) {
+    if (typeof console!=='undefined'&&console.warn) console.warn('[background-save] failure diagnostic could not be persisted',diagnosticError);
+  }
+  return normalized;
+}
+
+async function _tmCommitBackgroundWorld(request){
+  if (!_tmBackgroundSaveLeaseCurrent(request)) return {ok:false,stale:true,reason:'world-lease-stale'};
+  if (isWorldTransactionActive()) return {ok:false,deferred:true,reason:'world-transaction-active'};
+  if (!(typeof TM_SaveDB!=='undefined'&&TM_SaveDB&&typeof TM_SaveDB.saveManyAtomic==='function')) {
+    throw new Error('background canonical save unavailable');
+  }
+  var writeGuard=function(){
+    return _tmBackgroundSaveLeaseCurrent(request)&&!isWorldTransactionActive();
+  };
+  var state=_buildSaveState({format:'idb',detach:true,gm:request.lease.gmRef,p:request.lease.pRef});
+  if (!state||!state.GM||!state.P) throw new Error('background canonical state build failed');
+  if (!writeGuard()) return {ok:false,stale:true,reason:'world-changed-during-build'};
+  var transactionId='background:'+String(state.GM._campaignId||'')+':'+String(state.GM._timelineId||'')+':'+String(state.GM.turn||0)+':'+String(++_backgroundSaveSequence);
+  var identity={
+    campaignId:String(state.GM._campaignId||''),
+    timelineId:String(state.GM._timelineId||''),
+    turn:Number(state.GM.turn)||0,
+    transactionId:transactionId,
+    schemaVersion:1
+  };
+  var payload=typeof TM_SaveDB.createCanonicalPayload==='function'
+    ?await TM_SaveDB.createCanonicalPayload(state,identity)
+    :null;
+  if (!writeGuard()) return {ok:false,stale:true,reason:'world-changed-before-write'};
+  var meta=_tmBackgroundSaveMeta(request);
+  var saved=await TM_SaveDB.saveManyAtomic([
+    {id:'autosave',gameState:state,canonicalPayload:payload,meta:meta},
+    {id:'slot_0',gameState:state,canonicalPayload:payload,meta:meta}
+  ],{transactionId:transactionId,writeGuard:writeGuard});
+  if (saved!==true) throw new Error('background canonical slots were not committed atomically');
+  if (!writeGuard()) return {ok:false,stale:true,reason:'world-changed-after-write'};
+  if (!_tmAdoptCommittedWorldSnapshot(state,{turn:state.GM.turn,transactionId:transactionId,takeOwnership:true})) {
+    throw new Error('background committed snapshot adoption failed');
+  }
+  _autoSaveDeferred=true;
+  _tmRequestDeferredDesktopAutoSaveFlush('background-canonical-save');
+  return {ok:true,turn:Number(state.GM.turn)||0,transactionId:transactionId,reasons:Array.from(request.reasons)};
+}
+
+function _tmScheduleBackgroundSave(delay){
+  if (_backgroundSaveTimer||_backgroundSaveInFlight) return;
+  _backgroundSaveTimer=setTimeout(function(){
+    _backgroundSaveTimer=null;
+    _tmDrainBackgroundAutosaves().catch(function(error){
+      if (_backgroundSavePending) _tmReportBackgroundSaveFailure(error,_backgroundSavePending);
+    });
+  },Math.max(0,Number(delay)||0));
+}
+
+async function _tmDrainBackgroundAutosaves(){
+  if (_backgroundSaveInFlight) return _backgroundSaveInFlight;
+  if (!_backgroundSavePending) return {ok:false,skipped:true,reason:'no-background-save'};
+  var request=_backgroundSavePending;
+  _backgroundSavePending=null;
+  _backgroundSaveInFlight=(async function(){
+    if (!_tmBackgroundSaveLeaseCurrent(request)) return {ok:false,stale:true,reason:'world-lease-stale'};
+    if (isWorldTransactionActive()) {
+      _backgroundSavePending=request;
+      _tmScheduleBackgroundSave(50);
+      return {ok:false,deferred:true,reason:'world-transaction-active'};
+    }
+    request.attempts++;
+    try {
+      return await _tmCommitBackgroundWorld(request);
+    } catch (error) {
+      if (_tmBackgroundSaveLeaseCurrent(request)&&request.attempts<_BACKGROUND_SAVE_MAX_ATTEMPTS) {
+        _backgroundSavePending=request;
+        _tmScheduleBackgroundSave(100);
+      } else {
+        _tmReportBackgroundSaveFailure(error,request);
+      }
+      return {ok:false,error:error,attempts:request.attempts};
+    }
+  })();
+  try { return await _backgroundSaveInFlight; }
+  finally {
+    _backgroundSaveInFlight=null;
+    if (_backgroundSavePending) _tmScheduleBackgroundSave(0);
+  }
+}
+
+function requestBackgroundAutosave(options){
+  options=options||{};
+  var lease=options.expectedWorldLease;
+  if (!lease&&typeof _tmCaptureWorldLease==='function') lease=_tmCaptureWorldLease();
+  if (!lease) return Promise.resolve({ok:false,skipped:true,reason:'world-lease-unavailable'});
+  if (options.expectedTurn!==undefined&&options.expectedTurn!==null
+    && Number(options.expectedTurn)!==Number(lease.turn)) {
+    return Promise.resolve({ok:false,stale:true,reason:'background-turn-mismatch'});
+  }
+  var request={
+    lease:lease,
+    reasons:new Set([String(options.reason||'background-state-change')]),
+    attempts:0,
+    requestedAt:Date.now()
+  };
+  if (!_tmBackgroundSaveLeaseCurrent(request)) return Promise.resolve({ok:false,stale:true,reason:'world-lease-stale'});
+  if (_backgroundSavePending&&_tmBackgroundSaveLeaseSame(_backgroundSavePending.lease,lease)) {
+    request.reasons.forEach(function(reason){_backgroundSavePending.reasons.add(reason);});
+  } else if (!_backgroundSavePending) {
+    _backgroundSavePending=request;
+  } else {
+    // A pending request for an obsolete world must never be retargeted to the live world.
+    if (!_tmBackgroundSaveLeaseCurrent(_backgroundSavePending)) _backgroundSavePending=request;
+    else return Promise.resolve({ok:false,skipped:true,reason:'different-world-save-pending'});
+  }
+  _tmScheduleBackgroundSave(options.immediate===true?0:25);
+  return Promise.resolve({ok:true,scheduled:true,reasons:Array.from(_backgroundSavePending.reasons)});
+}
+
+async function _tmAwaitBackgroundAutosaves(){
+  if (_backgroundSaveTimer) {
+    clearTimeout(_backgroundSaveTimer);
+    _backgroundSaveTimer=null;
+  }
+  var result={ok:false,skipped:true,reason:'no-background-save'};
+  var drains=0;
+  while (_backgroundSavePending||_backgroundSaveInFlight) {
+    if (_backgroundSaveTimer) {
+      clearTimeout(_backgroundSaveTimer);
+      _backgroundSaveTimer=null;
+    }
+    result=_backgroundSaveInFlight
+      ? await _backgroundSaveInFlight
+      : await _tmDrainBackgroundAutosaves();
+    drains++;
+    // A world transaction cannot be waited out from a close handshake. Keep the
+    // request pending and let the main process cancel this close attempt.
+    if (result&&result.deferred) return result;
+    if (drains>_BACKGROUND_SAVE_MAX_ATTEMPTS+1) {
+      return {ok:false,error:new Error('background save drain exceeded retry limit'),attempts:drains};
+    }
+  }
+  return result;
 }
 
 function _tmNewDesktopAutoSaveSessionToken(){
@@ -2485,7 +2749,7 @@ async function _tmRunDesktopAutoSaveTick(options){
     _autoSaveDeferred = true;
     return { ok: false, deferred: true, reason: 'world-transaction-active' };
   }
-  if (_autoSaveInFlight) {
+  if (_autoSaveInFlightPromise||_autoSaveInFlight) {
     _autoSaveSkipCount++;
     if (_autoSaveSkipCount === 5) console.warn('[autoSave] 连续 5 次被跳·上一次 IPC 尚未完成');
     return { ok: false, skipped: true, reason: 'in-flight' };
@@ -2515,40 +2779,45 @@ async function _tmRunDesktopAutoSaveTick(options){
   var saveData = _tmCommittedSnapshotProjectEnvelope();
   if (!saveData) return { ok: false, skipped: true, reason: 'snapshot-unavailable' };
   _autoSaveInFlight = true;
-  try {
-    _autoSaveSkipCount = 0;
-    var result = await window.tianming.autoSave(saveData);
-    if (!_tmDesktopAutoSaveResultOk(result)) throw _tmDesktopAutoSaveFailure(result);
-    if (lastCommittedSnapshot !== sourceSnapshot || _lastCommittedSnapshotIdentity !== sourceIdentity
-        || !_tmCommittedSnapshotMatchesLive()) {
-      console.warn('[autoSave] 已提交快照在 IPC 期间推进或跨档·本次落盘有效但不推进当前局闲置基线');
-      return { ok: true, stale: true, turn: Number(saveData._saveMeta.turn) };
-    }
-    _autoSaveLastDoneMs = Date.now();
-    _autoSaveLastSavedTurn = Number(saveData._saveMeta.turn);
-    _autoSaveLiteTick++;
-    if (_autoSaveLiteTick >= 5) {
-      _autoSaveLiteTick = 0;
-      try {
-        var committedP = lastCommittedSnapshot.P || {};
-        localStorage.removeItem('tm_P');
-        localStorage.setItem('tm_P_lite', JSON.stringify(_tmStripAiKeyView({
-          scenarios: (committedP.scenarios || []).map(function(s){ return {id:s.id,name:s.name,era:s.era,role:s.role}; }),
-          ai: committedP.ai,
-          conf: _tmLiteSafeConf(committedP.conf),
-          _hasFullData: true
-        })));
-      } catch (liteError) {
-        _tmReportDesktopAutoSaveBoundaryError(liteError, 'desktop autosave lite');
+  var operation=Promise.resolve().then(async function(){
+    try {
+      _autoSaveSkipCount = 0;
+      var result = await window.tianming.autoSave(saveData);
+      if (!_tmDesktopAutoSaveResultOk(result)) throw _tmDesktopAutoSaveFailure(result);
+      if (lastCommittedSnapshot !== sourceSnapshot || _lastCommittedSnapshotIdentity !== sourceIdentity
+          || !_tmCommittedSnapshotMatchesLive()) {
+        console.warn('[autoSave] 已提交快照在 IPC 期间推进或跨档·本次落盘有效但不推进当前局闲置基线');
+        return { ok: true, stale: true, turn: Number(saveData._saveMeta.turn) };
       }
+      _autoSaveLastDoneMs = Date.now();
+      _autoSaveLastSavedTurn = Number(saveData._saveMeta.turn);
+      _autoSaveLiteTick++;
+      if (_autoSaveLiteTick >= 5) {
+        _autoSaveLiteTick = 0;
+        try {
+          var committedP = lastCommittedSnapshot.P || {};
+          localStorage.removeItem('tm_P');
+          localStorage.setItem('tm_P_lite', JSON.stringify(_tmStripAiKeyView({
+            scenarios: (committedP.scenarios || []).map(function(s){ return {id:s.id,name:s.name,era:s.era,role:s.role}; }),
+            ai: committedP.ai,
+            conf: _tmLiteSafeConf(committedP.conf),
+            _hasFullData: true
+          })));
+        } catch (liteError) {
+          _tmReportDesktopAutoSaveBoundaryError(liteError, 'desktop autosave lite');
+        }
+      }
+      return { ok: true, turn: _autoSaveLastSavedTurn, transactionId: lastCommittedTransactionId };
+    } catch (error) {
+      console.warn('[autoSave] 桌面自动存档失败:', error && (error.message || error));
+      return { ok: false, error: error };
+    } finally {
+      _autoSaveInFlight = false;
+      if (_autoSaveInFlightPromise===operation) _autoSaveInFlightPromise=null;
     }
-    return { ok: true, turn: _autoSaveLastSavedTurn, transactionId: lastCommittedTransactionId };
-  } catch (error) {
-    console.warn('[autoSave] 桌面自动存档失败:', error && (error.message || error));
-    return { ok: false, error: error };
-  } finally {
-    _autoSaveInFlight = false;
-  }
+  });
+  _autoSaveInFlightPromise=operation;
+  return operation;
 }
 
 function _tmFlushDeferredDesktopAutoSave(reason, options){
@@ -2596,6 +2865,9 @@ if (typeof window !== 'undefined') {
   window._tmCaptureCommittedWorldSnapshotFromLive = _tmCaptureCommittedWorldSnapshotFromLive;
   window._tmRunDesktopAutoSaveTick = _tmRunDesktopAutoSaveTick;
   window._tmFlushDeferredDesktopAutoSave = _tmFlushDeferredDesktopAutoSave;
+  window.requestBackgroundAutosave = requestBackgroundAutosave;
+  window._tmDrainBackgroundAutosaves = _tmDrainBackgroundAutosaves;
+  window._tmAwaitBackgroundAutosaves = _tmAwaitBackgroundAutosaves;
 }
 if(_tmHasNativeFs()){
   // 每60秒自动存档（仅完整运行局；纯 P 由 project IDB + lite 保存） (timer-leak-ok·文件顶层一次性·桌面端生命周期)
@@ -2639,8 +2911,14 @@ if(!_tmHasNativeFs()){
   setInterval(function(){ try{saveP();}catch(e){try{window.TM&&TM.errors&&TM.errors.captureSilent(e,'tm-audio-theme');}catch(_){}} },120000);
 }
 // 页面关闭/刷新时紧急保存P
-window.addEventListener('beforeunload',function(){
+window.addEventListener('beforeunload',function(event){
   try{
+    if ((_backgroundSavePending||_backgroundSaveInFlight)&&event) {
+      // Browsers/Electron decide the wording; this explicit prompt is preferable to silently
+      // discarding an already generated background chronicle on immediate exit.
+      event.preventDefault();
+      event.returnValue='';
+    }
     if(_tmHasNativeFs()) localStorage.removeItem("tm_P");
     else{
       localStorage.removeItem("tm_P");

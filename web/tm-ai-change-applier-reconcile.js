@@ -28,6 +28,30 @@
     return ch && ch.alive !== false && ch.dead !== true ? ch : null;
   }
 
+  function _tmResolveStableOrUniqueIdentity(list, stableRef, legacyRef) {
+    if (!Array.isArray(list)) return { entity:null, code:'identity-roster-missing' };
+    var stable = String(stableRef == null ? '' : stableRef).trim();
+    var legacy = String(legacyRef == null ? '' : legacyRef).trim();
+    if (stable) {
+      var stableMatches = list.filter(function(entity) {
+        return entity && entity.id != null && String(entity.id).trim() === stable;
+      });
+      if (stableMatches.length === 1) return { entity:stableMatches[0], via:'id' };
+      return { entity:null, code:stableMatches.length > 1 ? 'ambiguous-reference' : 'identity-not-found', ref:stable };
+    }
+    if (!legacy) return { entity:null, code:'missing-required-field', ref:'' };
+    var idMatches = list.filter(function(entity) {
+      return entity && entity.id != null && String(entity.id).trim() === legacy;
+    });
+    if (idMatches.length === 1) return { entity:idMatches[0], via:'id' };
+    if (idMatches.length > 1) return { entity:null, code:'ambiguous-reference', ref:legacy };
+    var nameMatches = list.filter(function(entity) {
+      return entity && entity.name != null && String(entity.name).trim() === legacy;
+    });
+    if (nameMatches.length === 1) return { entity:nameMatches[0], via:'unique-name' };
+    return { entity:null, code:nameMatches.length > 1 ? 'ambiguous-reference' : 'identity-not-found', ref:legacy };
+  }
+
   function normalizeAIWriteBackDeaths(aiOutput, opts) {
     opts = opts || {};
     var G = global.GM;
@@ -508,8 +532,44 @@
   }
   global._applyRegentDecisions = _applyRegentDecisions;
 
-  function _tmGateReason(label, reason, item) {
-    var payload = { label: label || '', reason: reason || '', item: item || null };
+  var _tmPreflightCollector = null;
+  var _tmPreflightContext = null;
+  var _tmPreflightSideEffects = true;
+
+  function _tmGateCode(label, reason) {
+    var text = String(reason || '').toLowerCase();
+    if (/ambiguous|conflicting|歧义/.test(text)) return 'ambiguous-reference';
+    if (/not in active|not active|not found|未找到|不存在|无法解析/.test(text)) return String(label || 'entity') + '-not-found';
+    if (/already dead|is dead|死亡/.test(text)) return 'target-not-living';
+    if (/duplicate/.test(text)) return 'duplicate-entity';
+    if (/missing/.test(text)) return 'missing-required-field';
+    if (/amount|finite|numeric|nan|infinity/.test(text)) return 'invalid-numeric-value';
+    if (/invalid target/.test(text)) return 'invalid-target';
+    if (/invalid kind|unsupported/.test(text)) return 'unsupported-change-type';
+    return 'writeback-preflight-rejected';
+  }
+
+  function _tmGateTarget(item) {
+    if (!item || typeof item !== 'object') return '';
+    return item.characterId || item.charId || item.factionId || item.regionId || item.id ||
+      item.name || item.charName || item.character || item.faction || item.target || item.post || '';
+  }
+
+  function _tmGateReason(label, reason, item, overrideCode, identityFields) {
+    var context = _tmPreflightContext || {};
+    var payload = {
+      label: label || '',
+      field: context.field || label || '',
+      index: Number.isInteger(context.index) ? context.index : null,
+      code: overrideCode || _tmGateCode(label, reason),
+      target: _tmGateTarget(item),
+      reason: reason || '',
+      retryable: /not-found|ambiguous-reference|missing-required-field|invalid-target/.test(overrideCode || _tmGateCode(label, reason)),
+      item: item || null
+    };
+    if (Array.isArray(identityFields) && identityFields.length) payload.identityFields=identityFields.slice();
+    if (Array.isArray(_tmPreflightCollector)) _tmPreflightCollector.push(payload);
+    if (!_tmPreflightSideEffects) return false;
     try { if (typeof global.recordAIDiagnostic === 'function') global.recordAIDiagnostic('write_gate', payload); } catch(_) {}
     _tmPushAIWeakHint(label, reason, item);
     return false;
@@ -651,8 +711,19 @@
   }
 
   function _tmWeakEntityHint(label, reason, item, resolution) {
+    if (Array.isArray(_tmPreflightCollector)) return _tmGateReason(label, reason, item, 'entity-reference-not-found');
     _tmPushAIWeakHint(label, reason, item, resolution);
     return true;
+  }
+
+  function _tmReferencesPendingFaction(aiOutput, ref) {
+    var raw = String(ref == null ? '' : ref).trim();
+    if (!raw) return false;
+    return (Array.isArray(aiOutput && aiOutput.faction_create) ? aiOutput.faction_create : []).some(function(item) {
+      return item && [item.id, item.factionId, item.name].some(function(value) {
+        return value != null && String(value).trim() === raw;
+      });
+    });
   }
 
   // ── fiscal 别名归一(preflight 白名单判定用·落库契约硬化刀②·2026-07-16·居平内帑案悬案) ──
@@ -682,9 +753,15 @@
     function keepArray(field, label, fn) {
       if (!Array.isArray(aiOutput[field])) return;
       var kept = [];
-      aiOutput[field].forEach(function(item) {
-        if (fn(item)) kept.push(item);
-        else blocked++;
+      aiOutput[field].forEach(function(item, index) {
+        var previousContext = _tmPreflightContext;
+        _tmPreflightContext = { field: field, label: label, index: index };
+        try {
+          if (fn(item)) kept.push(item);
+          else blocked++;
+        } finally {
+          _tmPreflightContext = previousContext;
+        }
       });
       aiOutput[field] = kept;
     }
@@ -783,29 +860,38 @@
     });
 
     keepArray('faction_succession', 'faction_succession', function(sc) {
-      if (!sc || !sc.faction || !sc.newLeader) return _tmGateReason('faction_succession', 'missing faction/newLeader', sc);
-      // 继统会在 endturn 主链直接改 leader，必须像死亡一样只接受当前活跃对象的精确 name/id；
-      // 不让模糊名、场景库幽灵人物或已死亡人物穿过后续直写 consumer。
-      var rawFaction = String(sc.faction).trim();
-      var fac = (G.facs || []).find(function(f) {
-        return f && ((f.name != null && String(f.name).trim() === rawFaction) || (f.id != null && String(f.id).trim() === rawFaction));
-      });
-      if (!fac) return _tmGateReason('faction_succession', 'faction not in active roster: ' + sc.faction, sc);
-      var rawLeader = String(sc.newLeader).trim();
-      var leader = (G.chars || []).find(function(c) {
-        return c && ((c.name != null && String(c.name).trim() === rawLeader) || (c.id != null && String(c.id).trim() === rawLeader));
-      });
-      if (!leader) return _tmGateReason('faction_succession', 'newLeader not in active roster: ' + sc.newLeader, sc);
-      if (leader.alive === false || leader.dead === true) return _tmGateReason('faction_succession', 'newLeader is dead: ' + sc.newLeader, sc);
+      var factionRef = sc && (sc.factionId || sc.faction);
+      var leaderRef = sc && (sc.newLeaderId || sc.newLeader);
+      if (!sc || !factionRef || !leaderRef) return _tmGateReason('faction_succession', 'missing factionId/faction or newLeaderId/newLeader', sc,
+        'missing-required-field', ['factionId','faction','newLeaderId','newLeader']);
+      if (_tmReferencesPendingFaction(aiOutput, factionRef)) return _tmGateReason('faction_succession', 'faction succession executes before faction_create; defer it to a later turn', sc, 'batch-dependency-order-unsupported');
+      // 稳定 ID 是权威；旧档只有姓名时仅允许唯一命中一次并立即迁移回 ID。
+      // 显式 *Id 字段绝不降级为姓名匹配，避免同名势力/人物误中数组首项。
+      var facResult = _tmResolveStableOrUniqueIdentity(G.facs || [], sc.factionId, sc.faction);
+      if (!facResult.entity) return _tmGateReason('faction_succession', 'faction identity rejected: ' + factionRef, sc,
+        facResult.code === 'ambiguous-reference' ? 'ambiguous-reference' : 'faction-not-found', ['factionId','faction']);
+      var fac = facResult.entity;
+      if (fac.id == null || !String(fac.id).trim()) return _tmGateReason('faction_succession', 'faction has no stable id: ' + factionRef, sc, 'stable-id-missing', ['factionId','faction']);
+      var leaderResult = _tmResolveStableOrUniqueIdentity(G.chars || [], sc.newLeaderId, sc.newLeader);
+      if (!leaderResult.entity) return _tmGateReason('faction_succession', 'newLeader identity rejected: ' + leaderRef, sc,
+        leaderResult.code === 'ambiguous-reference' ? 'ambiguous-reference' : 'character-not-found', ['newLeaderId','newLeader']);
+      var leader = leaderResult.entity;
+      if (leader.id == null || !String(leader.id).trim()) return _tmGateReason('faction_succession', 'newLeader has no stable id: ' + leaderRef, sc, 'stable-id-missing', ['newLeaderId','newLeader']);
+      if (leader.alive === false || leader.dead === true) return _tmGateReason('faction_succession', 'newLeader is dead: ' + leaderRef, sc);
       // sc 是 AI 的继统事件载荷，不是人物/军队成员关系对象；这里只归一化引用，
       // 不触碰任何运行态 entity.faction（后者必须走 FactionMembership API）。
-      Object.assign(sc, { faction: fac.name || rawFaction });
-      sc.newLeader = leader.name || rawLeader;
+      Object.assign(sc, {
+        factionId:String(fac.id),
+        faction:String(fac.name || fac.id),
+        newLeaderId:String(leader.id),
+        newLeader:String(leader.name || leader.id)
+      });
       return true;
     });
 
     keepArray('faction_dissolve', 'faction_dissolve', function(fd) {
       if (!fd || !fd.name) return _tmGateReason('faction_dissolve', 'missing name', fd);
+      if (_tmReferencesPendingFaction(aiOutput, fd.factionId || fd.id || fd.name)) return _tmGateReason('faction_dissolve', 'faction dissolve executes before faction_create; contradictory same-batch lifecycle', fd, 'batch-dependency-order-unsupported');
       var facRes = _tmResolveFaction(G, fd.name);
       if (!facRes) return _tmWeakEntityHint('faction_dissolve', 'faction seems not in current known lists: ' + fd.name, fd, facRes);
       var fac = facRes.entity;
@@ -853,10 +939,40 @@
 
     if (aiOutput.battleResult) {
       var br = aiOutput.battleResult;
-      if (!br.winnerFactionId || !br.loserFactionId) {
-        _tmGateReason('battleResult', 'missing winnerFactionId/loserFactionId', br);
+      var winnerRef = br.winnerFactionId || br.winnerFaction || br.winner;
+      var loserRef = br.loserFactionId || br.loserFaction || br.loser;
+      if (!winnerRef || !loserRef) {
+        _tmGateReason('battleResult', 'missing winner/loser faction reference', br);
         delete aiOutput.battleResult;
         blocked++;
+      } else if (_tmReferencesPendingFaction(aiOutput, winnerRef) || _tmReferencesPendingFaction(aiOutput, loserRef)) {
+        _tmGateReason('battleResult', 'battleResult executes before faction_create; defer battles involving a newly created faction', br, 'batch-dependency-order-unsupported');
+        delete aiOutput.battleResult;
+        blocked++;
+      } else {
+        var battleFailures = Array.isArray(_tmPreflightCollector) ? _tmPreflightCollector : [];
+        var winner = _tmStrictIdentity(G.facs, winnerRef, 'faction', 'battleResult', null, battleFailures, {
+          identityFields:['winnerFactionId', 'winnerFaction', 'winner']
+        });
+        var loser = _tmStrictIdentity(G.facs, loserRef, 'faction', 'battleResult', null, battleFailures, {
+          identityFields:['loserFactionId', 'loserFaction', 'loser']
+        });
+        if (!winner || !loser || winner === loser) {
+          if (winner && loser && winner === loser) {
+            var sameFailure = { field:'battleResult', index:null, code:'battle-factions-identical', target:String(winner.id || winner.name || ''), retryable:false, reason:'battle winner and loser must be different factions', item:br };
+            if (Array.isArray(_tmPreflightCollector)) _tmPreflightCollector.push(sameFailure);
+            else _tmGateReason('battleResult', sameFailure.reason, br, sameFailure.code);
+          } else if (!Array.isArray(_tmPreflightCollector)) {
+            _tmGateReason('battleResult', 'winner/loser faction must resolve uniquely in the current world', br, 'faction-not-found');
+          }
+          delete aiOutput.battleResult;
+          blocked++;
+        } else {
+          br.winnerFactionId = String(winner.id || winner.name || winnerRef);
+          br.loserFactionId = String(loser.id || loser.name || loserRef);
+          br.winnerFaction = String(winner.name || winner.id || winnerRef);
+          br.loserFaction = String(loser.name || loser.id || loserRef);
+        }
       }
     }
 
@@ -866,6 +982,187 @@
     return aiOutput;
   }
   global.preflightAIWriteBack = preflightAIWriteBack;
+
+  function _tmCloneWriteback(value, seen) {
+    if (value == null || typeof value !== 'object') return value;
+    seen = seen || (typeof WeakMap === 'function' ? new WeakMap() : null);
+    if (seen && seen.has(value)) return seen.get(value);
+    var out = Array.isArray(value) ? [] : {};
+    if (seen) seen.set(value, out);
+    Object.keys(value).forEach(function(key) { out[key] = _tmCloneWriteback(value[key], seen); });
+    return out;
+  }
+
+  function _tmStrictIdentity(rows, ref, kind, field, index, failures, opts) {
+    opts = opts || {};
+    function fail(payload) {
+      if (Array.isArray(opts.identityFields) && opts.identityFields.length) payload.identityFields = opts.identityFields.slice();
+      failures.push(payload);
+    }
+    var raw = String(ref == null ? '' : ref).trim();
+    if (!raw) {
+      fail({ field: field, index: index, code: 'missing-required-field', target: '', retryable: true, reason: kind + ' reference is missing' });
+      return null;
+    }
+    if (!Array.isArray(rows)) {
+      fail({ field: field, index: index, code: kind + '-collection-unavailable', target: raw, retryable: false, reason: kind + ' collection is unavailable' });
+      return null;
+    }
+    var byId = rows.filter(function(row) { return row && row.id != null && String(row.id).trim() === raw; });
+    if (byId.length === 1) return byId[0];
+    if (byId.length > 1) {
+      fail({ field: field, index: index, code: 'ambiguous-reference', target: raw, retryable: true, reason: kind + ' id is not unique' });
+      return null;
+    }
+    var byName = rows.filter(function(row) { return row && row.name != null && String(row.name).trim() === raw; });
+    if (byName.length === 1) return byName[0];
+    fail({
+      field: field,
+      index: index,
+      code: byName.length > 1 ? 'ambiguous-reference' : kind + '-not-found',
+      target: raw,
+      retryable: true,
+      reason: byName.length > 1 ? kind + ' name is ambiguous; use stable id' : kind + ' is not in the current world'
+    });
+    return null;
+  }
+
+  function _tmWalkOfficeNodes(nodes, out) {
+    if (!Array.isArray(nodes)) return;
+    nodes.forEach(function(node) {
+      if (!node || typeof node !== 'object') return;
+      out.push(node);
+      if (Array.isArray(node.subs)) _tmWalkOfficeNodes(node.subs, out);
+      if (Array.isArray(node.children)) _tmWalkOfficeNodes(node.children, out);
+      if (Array.isArray(node.positions)) _tmWalkOfficeNodes(node.positions, out);
+    });
+  }
+
+  function _tmStrictOfficeExists(G, ref) {
+    var raw = String(ref == null ? '' : ref).trim();
+    if (!raw) return false;
+    var nodes = [];
+    _tmWalkOfficeNodes(G && G.officeTree, nodes);
+    return nodes.some(function(node) {
+      return [node.id, node.name, node.title, node.position, node.officialTitle].some(function(value) {
+        return value != null && String(value).trim() === raw;
+      });
+    });
+  }
+
+  function _tmStrictRegionRows(G) {
+    var rows = [];
+    var seen = [];
+    function add(row) {
+      if (!row || typeof row !== 'object' || seen.indexOf(row) >= 0) return;
+      seen.push(row); rows.push(row);
+      if (Array.isArray(row.children)) row.children.forEach(add);
+      if (Array.isArray(row.subs)) row.subs.forEach(add);
+      if (Array.isArray(row.divisions)) row.divisions.forEach(add);
+    }
+    var map = G && (G.mapData || G.map);
+    if (map && Array.isArray(map.regions)) map.regions.forEach(add);
+    if (G && G.regionMap && typeof G.regionMap === 'object') Object.keys(G.regionMap).forEach(function(key) { add(G.regionMap[key]); });
+    if (G && G.adminHierarchy && typeof G.adminHierarchy === 'object') Object.keys(G.adminHierarchy).forEach(function(key) { add(G.adminHierarchy[key]); });
+    return rows;
+  }
+
+  function _tmValidateFiniteFields(root, path, failures, seen) {
+    if (!root || typeof root !== 'object') return;
+    seen = seen || (typeof WeakSet === 'function' ? new WeakSet() : null);
+    if (seen && seen.has(root)) return;
+    if (seen) seen.add(root);
+    Object.keys(root).forEach(function(key) {
+      var value = root[key];
+      var nextPath = path ? path + '.' + key : key;
+      if (typeof value === 'number' && !Number.isFinite(value)) {
+        failures.push({ field: nextPath, index: null, code: 'invalid-numeric-value', target: nextPath, retryable: true, reason: 'numeric writeback value must be finite' });
+      } else if (value && typeof value === 'object') {
+        _tmValidateFiniteFields(value, nextPath, failures, seen);
+      }
+    });
+  }
+
+  /**
+   * 对 detached AI 输出执行严格预检。旧 preflight 的“剔除坏项后继续”仅保留给
+   * 兼容调用；主回合使用本入口，任何剔除或弱引用都转成结构化失败。
+   */
+  function validateAIWriteBackBatch(aiOutput, opts) {
+    opts = opts || {};
+    var G = global.GM;
+    var failures = [];
+    if (!G || typeof G !== 'object' || !aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
+      return { ok: false, output: null, failures: [{ field: '', index: null, code: 'invalid-writeback-batch', target: '', retryable: false, reason: 'GM and AI writeback must be objects' }] };
+    }
+    var detached = _tmCloneWriteback(aiOutput);
+    var previousCollector = _tmPreflightCollector;
+    var previousSideEffects = _tmPreflightSideEffects;
+    var previousContext = _tmPreflightContext;
+    _tmPreflightCollector = failures;
+    _tmPreflightSideEffects = false;
+    _tmPreflightContext = null;
+    try {
+      var deathNormalization = normalizeAIWriteBackDeaths(detached, { source: opts.source || 'strict-preflight', deferDeaths: true });
+      (deathNormalization.failed || []).forEach(function(failure, index) {
+        failures.push({ field: 'char_updates', index: index, code: 'invalid-character-death', target: failure.char_update || '', retryable: true, reason: failure.reason || 'invalid character death' });
+      });
+      preflightAIWriteBack(detached, { source: opts.source || 'strict-preflight' });
+    } finally {
+      _tmPreflightCollector = previousCollector;
+      _tmPreflightSideEffects = previousSideEffects;
+      _tmPreflightContext = previousContext;
+    }
+
+    function validateRefs(field, rows, kind, refOf, extra) {
+      (Array.isArray(detached[field]) ? detached[field] : []).forEach(function(item, index) {
+        var ref = refOf(item || {});
+        var entity = _tmStrictIdentity(rows, ref, kind, field, index, failures);
+        if (entity && extra) extra(item, entity, index);
+      });
+    }
+    validateRefs('appointments', G.chars, 'character', function(item) { return item.characterId || item.charId || item.charName; }, function(item, entity, index) {
+      if (entity.alive === false || entity.dead === true) failures.push({ field: 'appointments', index: index, code: 'target-not-living', target: entity.id || entity.name, retryable: true, reason: 'appointment target is not living' });
+      var action = String(item.action || '').toLowerCase();
+      var post = action === 'transfer' ? item.toPosition : item.position;
+      if ((action === 'appoint' || action === 'transfer') && !_tmStrictOfficeExists(G, post)) failures.push({ field: 'appointments', index: index, code: 'office-not-found', target: post || '', retryable: true, reason: 'office position is not declared in current office tree' });
+    });
+    validateRefs('char_updates', G.chars, 'character', function(item) { return item.characterId || item.charId || item.name; });
+    validateRefs('office_assignments', G.chars, 'character', function(item) { return item.characterId || item.charId || item.name; }, function(item, entity, index) {
+      var action = String(item.action || 'appoint').toLowerCase();
+      if ((action === 'appoint' || action === 'transfer' || action === 'concurrent') && !_tmStrictOfficeExists(G, item.post)) failures.push({ field: 'office_assignments', index: index, code: 'office-not-found', target: item.post || '', retryable: true, reason: 'office position is not declared in current office tree' });
+    });
+    validateRefs('personnel_changes', G.chars, 'character', function(item) { return item.characterId || item.charId || item.name; });
+    (Array.isArray(detached.faction_updates) ? detached.faction_updates : []).forEach(function(item, index) {
+      var ref = item && (item.factionId || item.id || item.name);
+      if (_tmReferencesPendingFaction(detached, ref)) {
+        failures.push({
+          field:'faction_updates', index:index, code:'batch-dependency-order-unsupported', target:String(ref || ''), retryable:false,
+          reason:'faction_updates execute before faction_create; put initial fields in faction_create or defer the update', item:item
+        });
+        return;
+      }
+      _tmStrictIdentity(G.facs, ref, 'faction', 'faction_updates', index, failures);
+    });
+    validateRefs('faction_dissolve', G.facs, 'faction', function(item) { return item.factionId || item.id || item.name; });
+
+    var regionRows = _tmStrictRegionRows(G);
+    ['region_updates', 'population_adjustments', 'central_local_actions', 'environment_actions'].forEach(function(field) {
+      (Array.isArray(detached[field]) ? detached[field] : []).forEach(function(item, index) {
+        var ref = item && (item.regionId || item.region_id || item.region || item.targetRegion || item.target);
+        if (ref) _tmStrictIdentity(regionRows, ref, 'region', field, index, failures);
+      });
+    });
+    _tmValidateFiniteFields(detached, '', failures);
+
+    var unique = [];
+    var seenFailures = Object.create(null);
+    failures.forEach(function(failure) {
+      var key = [failure.field, failure.index, failure.code, failure.target, failure.reason].join('|');
+      if (!seenFailures[key]) { seenFailures[key] = true; unique.push(failure); }
+    });
+    return { ok: unique.length === 0, output: detached, failures: unique };
+  }
+  global.validateAIWriteBackBatch = validateAIWriteBackBatch;
 
   function _applyBattleResult(G, aiOutput, applied) {
     if (!G || !aiOutput || !aiOutput.battleResult) return;
@@ -1149,6 +1446,20 @@
     var G = global.GM;
     var P0 = global.P;
     if (!G || !aiOutput || typeof aiOutput !== 'object') return { ok: false, applied: { failed: [{ reason: 'invalid GM/AI output' }] } };
+    if (aiOutput._strictValidation === true) {
+      var strictPreflight = validateAIWriteBackBatch(aiOutput, { source:'applyAITurnChangesAtomic' });
+      if (!strictPreflight.ok) {
+        return {
+          ok:false,
+          rolledBack:false,
+          preflightRejected:true,
+          applied:{ failed:strictPreflight.failures.map(function(failure) {
+            return Object.assign({ reason:failure.reason || failure.code }, failure);
+          }) }
+        };
+      }
+      aiOutput = strictPreflight.output;
+    }
     var gSnapshot, pSnapshot;
     try {
       gSnapshot = _captureAIStateObject(G, ['_postTurnJobs', '_postTurnDetachedJobs', '_indices']);
@@ -1205,7 +1516,7 @@
   //>>ACA-SPLIT22-RECONCILE-BODY-END
   // ── forward 回填：本片复核/善后族 → bucket（origin 委托 shim 调用期解析）──
   __acaP._processDeathEpitaphs = _processDeathEpitaphs; __acaP._reconcilePlayerMovements = _reconcilePlayerMovements; __acaP._reconcilePlayerFiscalReforms = _reconcilePlayerFiscalReforms; __acaP._applyOfficeDutyTick = _applyOfficeDutyTick; __acaP._applyTaxAuthorityGate = _applyTaxAuthorityGate; __acaP._applyDirectiveCompliance = _applyDirectiveCompliance;
-  __acaP._applyRegentDecisions = _applyRegentDecisions; __acaP.preflightAIWriteBack = preflightAIWriteBack; __acaP._applyBattleResult = _applyBattleResult; __acaP._applyFiscalDeficitPenalties = _applyFiscalDeficitPenalties; __acaP._hasInstantArrivalRule = _hasInstantArrivalRule;
+  __acaP._applyRegentDecisions = _applyRegentDecisions; __acaP.preflightAIWriteBack = preflightAIWriteBack; __acaP.validateAIWriteBackBatch = validateAIWriteBackBatch; __acaP._applyBattleResult = _applyBattleResult; __acaP._applyFiscalDeficitPenalties = _applyFiscalDeficitPenalties; __acaP._hasInstantArrivalRule = _hasInstantArrivalRule;
   __acaP._captureValidatorBaseline = _captureValidatorBaseline; __acaP._collectValidatorFailures = _collectValidatorFailures; __acaP._runConsistencyValidator = _runConsistencyValidator;
   __acaP.applyAITurnChangesAtomic = applyAITurnChangesAtomic; __acaP._syncFiscalScalars = _syncFiscalScalars;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : this));

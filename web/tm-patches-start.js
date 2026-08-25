@@ -824,53 +824,113 @@ function _tmShowOpeningCeremony(sc, sid, requestToken) {
   // 题署印字：剧本朝代字 > 剧本名首字
   var _sealCh = ((sc.dynastyChar || sc.dynasty || '').toString().charAt(0)) || ((sc.name || '天').toString().charAt(0));
 
-  var ov = document.createElement('div');
-  ov.id = 'tm-opening'; ov.className = 'tm-op';
-  var h = '<div class="tm-op-world">';
-  h += '<div class="tm-op-title"><div class="tm-op-seal">' + _esc(_sealCh) + '</div>'
-    + '<div class="tm-op-tcol"><div class="tm-op-name">' + _esc(sc.name || '') + '</div>'
-    + (sc.era ? '<div class="tm-op-sub">' + _esc(sc.era) + '</div>' : '') + '</div></div>';
-  h += '<div class="tm-op-body">';
-  if (_pName) {
-    h += '<div class="tm-op-aside">';
-    var _figInner = (_pPortrait
-      ? '<img src="' + _esc(_pPortrait) + '" alt="" onerror="var f=this.closest(\'.tm-op-fig\');if(f)f.classList.add(\'no-img\');this.remove();">'
-      : '')
-      + '<span class="tm-op-figseal">' + _esc(_pClean.charAt(0) || '帝') + '</span>'
-      + '<div class="tm-op-vig"></div><div class="tm-op-frame"></div><span class="tm-op-rtag">尔之所履</span>';
-    h += '<div class="tm-op-fig' + (_pPortrait ? '' : ' no-img') + '">' + _figInner + '</div>';
-    h += '<div class="tm-op-ident"><div class="tm-op-who">' + _esc(_pClean) + (_pTitle ? '<small>' + _esc(_pTitle) + '</small>' : '') + '</div>'
-      + (_pBio ? '<div class="tm-op-plight">' + _esc(_pBio) + '</div>' : '') + '</div>';
-    if (_eyes.length) {
-      h += '<div class="tm-op-eyes"><div class="tm-op-eyes-h">开 局 戏 眼</div>';
-      _eyes.forEach(function (ey) {
-        h += '<div class="tm-op-eye' + (ey.key ? ' key' : '') + '"><span class="tm-op-eye-dot"></span><span class="tm-op-eye-tx"><b>' + _esc(ey.ti) + '</b>' + (ey.ds ? '<span>' + _esc(ey.ds) + '</span>' : '') + '</span></div>';
-      });
-      h += '</div>';
-    }
-    h += '</div>';
+  function _opEl(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = String(text);
+    return node;
   }
-  h += '<div class="tm-op-scroll' + (_pName ? '' : ' solo') + '"><div class="tm-op-scroll-h"><span class="tm-op-lbl">开 卷</span><span class="tm-op-hint">按 空格 略过逐字</span></div>'
-    + '<div class="tm-op-paper"><div class="tm-op-narr" id="opening-text"></div></div></div>';
-  h += '</div>';
-  h += '<div class="tm-op-foot"><div class="tm-op-fnote">此局为<b>平行时空</b> · 史册由尔亲手改写。</div>'
-    + '<div class="tm-op-btns"><button class="tm-op-skip" id="tm-op-skip">▶ 略过逐字</button>'
-    + '<button class="tm-op-enter" id="tm-op-enter">提 笔 临 朝</button></div></div>';
-  h += '</div>';
-  ov.innerHTML = h;
+  function _safePortraitUrl(value) {
+    var raw = String(value || '').trim();
+    if (!raw) return '';
+    if (/^(?:https?:|blob:)/i.test(raw)) return raw;
+    if (/^data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(raw)) return raw;
+    if (/^(?:\.\.?\/)?(?:assets|scenarios)\//i.test(raw)) return raw;
+    return '';
+  }
+  var ov = _opEl('div', 'tm-op');
+  ov.id = 'tm-opening';
+  var world = _opEl('div', 'tm-op-world');
+  var title = _opEl('div', 'tm-op-title');
+  title.appendChild(_opEl('div', 'tm-op-seal', _sealCh));
+  var titleCol = _opEl('div', 'tm-op-tcol');
+  titleCol.appendChild(_opEl('div', 'tm-op-name', sc.name || ''));
+  if (sc.era) titleCol.appendChild(_opEl('div', 'tm-op-sub', sc.era));
+  title.appendChild(titleCol);
+  world.appendChild(title);
+  var body = _opEl('div', 'tm-op-body');
+  if (_pName) {
+    var aside = _opEl('div', 'tm-op-aside');
+    var portraitUrl = _safePortraitUrl(_pPortrait);
+    var figure = _opEl('div', 'tm-op-fig' + (portraitUrl ? '' : ' no-img'));
+    if (portraitUrl) {
+      var portrait = _opEl('img');
+      portrait.alt = '';
+      portrait.src = portraitUrl;
+      portrait.addEventListener('error', function () {
+        figure.classList.add('no-img');
+        portrait.remove();
+      }, { once: true });
+      figure.appendChild(portrait);
+    }
+    figure.appendChild(_opEl('span', 'tm-op-figseal', _pClean.charAt(0) || '帝'));
+    figure.appendChild(_opEl('div', 'tm-op-vig'));
+    figure.appendChild(_opEl('div', 'tm-op-frame'));
+    figure.appendChild(_opEl('span', 'tm-op-rtag', '尔之所履'));
+    aside.appendChild(figure);
+    var ident = _opEl('div', 'tm-op-ident');
+    var who = _opEl('div', 'tm-op-who', _pClean);
+    if (_pTitle) who.appendChild(_opEl('small', '', _pTitle));
+    ident.appendChild(who);
+    if (_pBio) ident.appendChild(_opEl('div', 'tm-op-plight', _pBio));
+    aside.appendChild(ident);
+    if (_eyes.length) {
+      var eyes = _opEl('div', 'tm-op-eyes');
+      eyes.appendChild(_opEl('div', 'tm-op-eyes-h', '开 局 戏 眼'));
+      _eyes.forEach(function (ey) {
+        var eye = _opEl('div', 'tm-op-eye' + (ey.key ? ' key' : ''));
+        eye.appendChild(_opEl('span', 'tm-op-eye-dot'));
+        var eyeText = _opEl('span', 'tm-op-eye-tx');
+        eyeText.appendChild(_opEl('b', '', ey.ti));
+        if (ey.ds) eyeText.appendChild(_opEl('span', '', ey.ds));
+        eye.appendChild(eyeText);
+        eyes.appendChild(eye);
+      });
+      aside.appendChild(eyes);
+    }
+    body.appendChild(aside);
+  }
+  var scroll = _opEl('div', 'tm-op-scroll' + (_pName ? '' : ' solo'));
+  var scrollHead = _opEl('div', 'tm-op-scroll-h');
+  scrollHead.appendChild(_opEl('span', 'tm-op-lbl', '开 卷'));
+  scrollHead.appendChild(_opEl('span', 'tm-op-hint', '按 空格 略过逐字'));
+  scroll.appendChild(scrollHead);
+  var paper = _opEl('div', 'tm-op-paper');
+  var textEl = _opEl('div', 'tm-op-narr');
+  textEl.id = 'opening-text';
+  paper.appendChild(textEl);
+  scroll.appendChild(paper);
+  body.appendChild(scroll);
+  world.appendChild(body);
+  var foot = _opEl('div', 'tm-op-foot');
+  var footnote = _opEl('div', 'tm-op-fnote');
+  footnote.appendChild(document.createTextNode('此局为'));
+  footnote.appendChild(_opEl('b', '', '平行时空'));
+  footnote.appendChild(document.createTextNode(' · 史册由尔亲手改写。'));
+  foot.appendChild(footnote);
+  var buttons = _opEl('div', 'tm-op-btns');
+  var skipButton = _opEl('button', 'tm-op-skip', '▶ 略过逐字');
+  skipButton.id = 'tm-op-skip';
+  buttons.appendChild(skipButton);
+  var enterButton = _opEl('button', 'tm-op-enter', '提 笔 临 朝');
+  enterButton.id = 'tm-op-enter';
+  buttons.appendChild(enterButton);
+  foot.appendChild(buttons);
+  world.appendChild(foot);
+  ov.appendChild(world);
   document.body.appendChild(ov);
 
   // 逐字浮现（沿用现有 50ms·预渲染 visibility 防重排抖动）
-  var textEl = ov.querySelector('#opening-text');
-  var full = sc.opening || '';
-  var _hh = '';
+  var full = String(sc.opening || '');
+  var spans = [];
   for (var i = 0; i < full.length; i++) {
     var ch = full.charAt(i);
-    if (ch === '\n') { _hh += '<br>'; continue; }
-    _hh += '<span class="_ot-ch" style="opacity:0;">' + (ch === ' ' ? '&nbsp;' : (ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : ch === '&' ? '&amp;' : ch)) + '</span>';
+    if (ch === '\n') { textEl.appendChild(document.createElement('br')); continue; }
+    var glyph = _opEl('span', '_ot-ch', ch === ' ' ? '\u00a0' : ch);
+    glyph.style.opacity = '0';
+    textEl.appendChild(glyph);
+    spans.push(glyph);
   }
-  textEl.innerHTML = _hh;
-  var spans = textEl.querySelectorAll('._ot-ch');
   var idx = 0, allShown = false;
   var timer = setInterval(function () {
     if (idx >= spans.length || !ov.parentElement) { clearInterval(timer); allShown = true; return; }
@@ -1997,7 +2057,14 @@ function doActualStart(sid, requestToken){
     _tmStartSetPrewarmStatus({ state: 'running', sid: sid, turn: GM.turn, startedAt: Date.now() });
     setTimeout(function() { _tmStartLaunchBackgroundPrewarm(sc, _prewarmSession); }, 0);
   }
-  var hd=_$("qiju-history");if(hd&&sc)hd.innerHTML="<div class=\"qiju-record\"><div class=\"qiju-turn\">"+getTS(1)+" \u5F00\u7BC7</div><div class=\"nt\">"+sc.opening+"</div></div>";
+  var hd=_$("qiju-history");
+  if(hd&&sc){
+    var openingRecord=document.createElement('div');openingRecord.className='qiju-record';
+    var openingTurn=document.createElement('div');openingTurn.className='qiju-turn';
+    openingTurn.textContent=(typeof getTSText==='function'?getTSText(1):'T1')+' \u5F00\u7BC7';
+    var openingText=document.createElement('div');openingText.className='nt';openingText.textContent=String(sc.opening||'');
+        openingRecord.appendChild(openingTurn);openingRecord.appendChild(openingText);if(typeof hd.replaceChildren==='function')hd.replaceChildren(openingRecord);else{while(hd.firstChild)hd.removeChild(hd.firstChild);hd.appendChild(openingRecord);}
+  }
 
   // 初始化科举制度（由AI判断是否启用）
   initKejuSystem(sc);

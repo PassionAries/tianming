@@ -63,6 +63,9 @@ const context = {
   },
   addEB(type, text) { context.GM.evtLog.push({ type, text }); },
   preflightAIWriteBack(output) { return output; },
+  validateAIWriteBackBatch(output) {
+    return { ok: true, output: JSON.parse(JSON.stringify(output)), failures: [] };
+  }, // 本 smoke 聚焦忠诚度转移；严格预检本体由 smoke-ai-writeback-integrity 覆盖。
   applyAITurnChanges() { return { ok: true, applied: { failed: [] } }; },
   applyCharacterDeaths() {},
   _dbg() {},

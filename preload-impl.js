@@ -89,6 +89,40 @@ function _subscribeRendererEvent(channel, callback) {
   };
 }
 
+function _subscribeAppCloseFlush(callback) {
+  if (typeof callback !== 'function') throw new TypeError('app-close-flush-request listener must be a function');
+  const listener = (_event, payload) => {
+    const requestId = payload && String(payload.requestId || '');
+    if (!requestId) return;
+    Promise.resolve().then(() => callback(Object.freeze({
+      reason: String(payload && payload.reason || 'app-quit')
+    }))).then(result => {
+      const ok = !(result && result.ok === false);
+      ipcRenderer.send('app-close-flush-complete', {
+        requestId,
+        ok,
+        code: ok ? '' : String(result && result.code || 'background-save-flush-failed'),
+        reason: String(result && result.reason || (ok ? 'background-saves-flushed' : 'background save flush failed'))
+      });
+    }, error => {
+      ipcRenderer.send('app-close-flush-complete', {
+        requestId,
+        ok: false,
+        code: 'background-save-flush-exception',
+        reason: error && error.message || String(error)
+      });
+    });
+  };
+  let active = true;
+  ipcRenderer.on('app-close-flush-request', listener);
+  return function dispose() {
+    if (!active) return false;
+    active = false;
+    ipcRenderer.removeListener('app-close-flush-request', listener);
+    return true;
+  };
+}
+
 // 把这些功能暴露给网页中的 JavaScript
 contextBridge.exposeInMainWorld('tianming', {
 
@@ -144,6 +178,9 @@ contextBridge.exposeInMainWorld('tianming', {
 
   quitApp: () =>
     ipcRenderer.invoke('app-quit'),
+
+  onAppCloseFlushRequest: (callback) =>
+    _subscribeAppCloseFlush(callback),
 
   // === 读 web 目录文本文件（国师源码工具·file:// 下 fetch 不可用的桌面通道）===
   readWebFile: (relPath) =>

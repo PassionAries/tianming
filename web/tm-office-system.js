@@ -259,12 +259,13 @@ function _offPositionStats(pos) {
 }
 
 function _offWalkOfficeTree(nodes, visitor, chain) {
-  for (var i = 0; i < (nodes || []).length; i++) {
+  if (!Array.isArray(nodes)) return true;
+  for (var i = 0; i < nodes.length; i++) {
     var n = nodes[i];
     if (!n) continue;
     var curChain = chain ? (chain + '·' + (n.name || '')) : (n.name || '');
     if (visitor(n, curChain) === false) return false;
-    if (n.subs && _offWalkOfficeTree(n.subs, visitor, curChain) === false) return false;
+    if (Array.isArray(n.subs) && _offWalkOfficeTree(n.subs, visitor, curChain) === false) return false;
   }
   return true;
 }
@@ -310,7 +311,7 @@ function _offNormalizeTreeShape(tree) {
     if (!cn) return;
     flat.push(cn);
     (function _lift(node) {
-      var lifted = (node.subs || []).slice();
+      var lifted = Array.isArray(node.subs) ? node.subs.slice() : [];
       node.subs = [];
       lifted.forEach(function (s) { flat.push(s); _lift(s); });
     })(cn);
@@ -902,7 +903,7 @@ async function _offMaterialize(deptName, posName) {
   if (!P.ai || !P.ai.key) { toast('需要AI密钥'); return; }
   // 找到职位
   var _pos = null, _dept = null;
-  (function _f(ns) { ns.forEach(function(n) { if (n.name === deptName) { (n.positions||[]).forEach(function(p) { if (p.name === posName) { _pos = p; _dept = n; } }); } if (n.subs) _f(n.subs); }); })(GM.officeTree||[]);
+  (function _f(ns) { if (!Array.isArray(ns)) return; ns.forEach(function(n) { if (n.name === deptName) { (n.positions||[]).forEach(function(p) { if (p.name === posName) { _pos = p; _dept = n; } }); } if (Array.isArray(n.subs)) _f(n.subs); }); })(GM.officeTree||[]);
   if (!_pos) { toast('找不到职位'); return; }
   if (typeof _offMigratePosition === 'function') _offMigratePosition(_pos);
   var _m = _offMaterializedCount(_pos);
@@ -962,6 +963,7 @@ function _settleOfficeMourning() {
       // 刚进入丁忧——从官制树中暂离（AI已在office_changes中dismiss）
       // 如果AI没有dismiss，这里补上
       (function _checkMourn(nodes) {
+        if (!Array.isArray(nodes)) return;
         nodes.forEach(function(n) {
           (n.positions||[]).forEach(function(p) {
             if (p.holder === c.name && !c._mourningDismissed) {
@@ -971,7 +973,7 @@ function _settleOfficeMourning() {
               c._mourningDismissed = true;
             }
           });
-          if (n.subs) _checkMourn(n.subs);
+          if (Array.isArray(n.subs)) _checkMourn(n.subs);
         });
       })(GM.officeTree||[]);
     }
@@ -1014,7 +1016,8 @@ function _tickOfficialDisaffection() {
   var mr = _offMonthRatio();
   var seen = {};
   (function walk(nodes) {
-    (nodes || []).forEach(function (n) {
+    if (!Array.isArray(nodes)) return;
+    nodes.forEach(function (n) {
       (n.positions || []).forEach(function (p) {
         var holder = p && p.holder;
         if (!holder || holder === '空缺' || holder === '(空缺)' || seen[holder]) return;
@@ -1048,7 +1051,7 @@ function _tickOfficialDisaffection() {
           c._disaffectTurns = Math.max(0, c._disaffectTurns - 1);
         }
       });
-      if (n.subs) walk(n.subs);
+      if (Array.isArray(n.subs)) walk(n.subs);
     });
   })(GM.officeTree);
 }
@@ -1095,7 +1098,8 @@ function _inferPublicTreasuryByRank(p, deptName) {
 // 官职公库初始化：walk officeTree，从 publicTreasuryInit 建立 live publicTreasury
 // 若无 publicTreasuryInit 则按品级+部门自动推算·保证所有官职都有公库显示
 function _initOfficePublicTreasury(nodes, deptName) {
-  (nodes || []).forEach(function(n) {
+  if (!Array.isArray(nodes)) return;
+  nodes.forEach(function(n) {
     if (!n) return;
     var dn = deptName ? (deptName + '·' + (n.name || '')) : (n.name || '');
     (n.positions || []).forEach(function(p) {
@@ -1117,7 +1121,7 @@ function _initOfficePublicTreasury(nodes, deptName) {
         handoverLog: []
       };
     });
-    if (n.subs) _initOfficePublicTreasury(n.subs, dn);
+    if (Array.isArray(n.subs)) _initOfficePublicTreasury(n.subs, dn);
   });
 }
 

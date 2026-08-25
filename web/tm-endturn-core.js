@@ -830,6 +830,15 @@ async function _endTurnCore(options){
           _memoryTargetGM._aiMemorySummaries.push({ turn: _memoryTurn, summary: txt.substring(0, 400) });
           if (_memoryTargetGM._aiMemorySummaries.length > 10) _memoryTargetGM._aiMemorySummaries = _memoryTargetGM._aiMemorySummaries.slice(-10);
           DebugLog.log('ai', '记忆摘要生成完成:', txt.length, '字');
+          if (typeof requestBackgroundAutosave === 'function') {
+            requestBackgroundAutosave({
+              reason: 'ai-memory-summary-complete',
+              expectedWorldLease: _memoryLease,
+              expectedTurn: _memoryTurn
+            }).catch(function(saveError) {
+              DebugLog.warn('ai', '记忆摘要后台保存调度失败:', saveError && (saveError.message || saveError));
+            });
+          }
         }
       }).catch(function(err) { DebugLog.warn('ai', '记忆摘要生成失败:', err.message); });
     }
@@ -917,6 +926,15 @@ async function _endTurnCore(options){
         // 保留最近24个月
         if (_monthlyTargetGM.monthlyChronicles.length > 24) _monthlyTargetGM.monthlyChronicles = _monthlyTargetGM.monthlyChronicles.slice(-24);
         DebugLog.log('settlement', '月度纪事生成完成:', txt.length, '字');
+        if (typeof requestBackgroundAutosave === 'function') {
+          requestBackgroundAutosave({
+            reason: 'monthly-chronicle-complete',
+            expectedWorldLease: _monthlyLease,
+            expectedTurn: _monthlyTurn
+          }).catch(function(saveError) {
+            DebugLog.warn('settlement', '月度纪事后台保存调度失败:', saveError && (saveError.message || saveError));
+          });
+        }
       }
     }).catch(function(err) {
       if (_monthlyLease && typeof _tmWorldLeaseCurrent === 'function' && !_tmWorldLeaseCurrent(_monthlyLease)) return;
@@ -924,13 +942,16 @@ async function _endTurnCore(options){
       DebugLog.warn('settlement', '月度纪事AI生成失败，使用事件拼接:', err.message);
       if (!_monthlyTargetGM.monthlyChronicles) _monthlyTargetGM.monthlyChronicles = [];
       var fallbackText = _monthEvents.map(function(e) { return e.text; }).join('\u3002') + '\u3002';
-      _monthlyTargetGM.monthlyChronicles.push({
-        turn: _monthlyTurn,
-        date: (typeof getTSText === 'function') ? getTSText(_monthlyTurn) : 'T' + _monthlyTurn,
-        text: fallbackText.substring(0, _wordLimit),
-        generatedAt: Date.now(),
-        isFallback: true
-      });
+      _monthlyTargetGM.monthlyChronicles.push({ turn:_monthlyTurn, date:(typeof getTSText === 'function') ? getTSText(_monthlyTurn) : 'T' + _monthlyTurn, text:fallbackText.substring(0, _wordLimit), generatedAt:Date.now(), isFallback:true }); if (_monthlyTargetGM.monthlyChronicles.length > 24) _monthlyTargetGM.monthlyChronicles = _monthlyTargetGM.monthlyChronicles.slice(-24);
+      if (typeof requestBackgroundAutosave === 'function') {
+        requestBackgroundAutosave({
+          reason: 'monthly-chronicle-fallback-complete',
+          expectedWorldLease: _monthlyLease,
+          expectedTurn: _monthlyTurn
+        }).catch(function(saveError) {
+          DebugLog.warn('settlement', '月度纪事 fallback 后台保存调度失败:', saveError && (saveError.message || saveError));
+        });
+      }
     });
   })();
 
@@ -1001,6 +1022,24 @@ async function _endTurnCore(options){
   } catch (error) {
     console.error('endTurn error:', error);
     if (_turnTxn) _tmRollbackEndTurnTransaction(_turnTxn, error);
+    // 回滚会恢复点击前 GM；严格预检诊断通过既有写主重新附着，避免 core
+    // 直接闯入 _unappliedChanges 子树或新建第二套失败状态。
+    if (error && Array.isArray(error.writebackFailures)) {
+      try {
+        var _writebackDiagnosticWriter = globalThis.TM && globalThis.TM.Endturn && globalThis.TM.Endturn.AI &&
+          globalThis.TM.Endturn.AI.apply && globalThis.TM.Endturn.AI.apply.recordUnappliedChange;
+        if (typeof _writebackDiagnosticWriter === 'function') {
+          error.writebackFailures.slice(0, 12).forEach(function(failure) {
+            _writebackDiagnosticWriter(Object.assign({
+              repairAttempts: Number(error.repairAttempts) || 0,
+              finalRollbackReason: error.code || 'ai-writeback-preflight-failed'
+            }, failure), 'sc1-preflight');
+          });
+        }
+      } catch (diagnosticError) {
+        console.error('[endTurn] failed to persist rolled-back writeback diagnostics:', diagnosticError);
+      }
+    }
     // 失败态人话化（2026-07-02）：认得出的 AI 类故障给「哪坏了+去哪修」，认不出回退原文
     var _ehuman = (typeof _tmAiErrHuman === 'function') ? _tmAiErrHuman(error) : null;
     toast(_ehuman ? ('回合中断 · ' + _ehuman) : ('回合处理出错: ' + error.message));

@@ -59,6 +59,225 @@
     return false;
   }
 
+  function _cloneWritebackValue(value) {
+    if (value == null || typeof value !== 'object') return value;
+    if (typeof structuredClone === 'function') {
+      try { return structuredClone(value); } catch (_) {}
+    }
+    if (typeof deepClone === 'function') return deepClone(value);
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function _collectWritebackRepairCandidates() {
+    var G = typeof GM !== 'undefined' && GM ? GM : {};
+    var offices = [];
+    var regions = [];
+    var seenRegions = [];
+    function walkOffice(nodes) {
+      if (!Array.isArray(nodes)) return;
+      nodes.forEach(function(node) {
+        if (!node || typeof node !== 'object') return;
+        if (node.id || node.name || node.title || node.position) offices.push({ id:node.id || '', name:node.name || node.title || node.position || '' });
+        if (Array.isArray(node.subs)) walkOffice(node.subs);
+        if (Array.isArray(node.children)) walkOffice(node.children);
+        if (Array.isArray(node.positions)) walkOffice(node.positions);
+      });
+    }
+    function addRegion(row) {
+      if (!row || typeof row !== 'object' || seenRegions.indexOf(row) >= 0) return;
+      seenRegions.push(row);
+      if (row.id || row.name) regions.push({ id:row.id || '', name:row.name || '' });
+      if (Array.isArray(row.children)) row.children.forEach(addRegion);
+      if (Array.isArray(row.subs)) row.subs.forEach(addRegion);
+      if (Array.isArray(row.divisions)) row.divisions.forEach(addRegion);
+    }
+    walkOffice(G.officeTree);
+    var map = G.mapData || G.map;
+    if (map && Array.isArray(map.regions)) map.regions.forEach(addRegion);
+    if (G.regionMap && typeof G.regionMap === 'object') Object.keys(G.regionMap).forEach(function(key) { addRegion(G.regionMap[key]); });
+    if (G.adminHierarchy && typeof G.adminHierarchy === 'object') Object.keys(G.adminHierarchy).forEach(function(key) { addRegion(G.adminHierarchy[key]); });
+    return {
+      characters: (Array.isArray(G.chars) ? G.chars : []).slice(0, 160).map(function(ch) { return { id:ch && ch.id || '', name:ch && ch.name || '', alive:!(ch && (ch.alive === false || ch.dead === true)) }; }),
+      factions: (Array.isArray(G.facs) ? G.facs : []).slice(0, 120).map(function(fac) { return { id:fac && fac.id || '', name:fac && fac.name || '' }; }),
+      offices: offices.slice(0, 200),
+      regions: regions.slice(0, 200)
+    };
+  }
+
+  function _parseWritebackRepair(raw) {
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+    var text = String(raw == null ? '' : raw).trim();
+    if (!text) return null;
+    try {
+      return typeof robustParseJSON === 'function' ? robustParseJSON(text) : JSON.parse(text);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function _writebackRepairSlot(field, index) {
+    return String(field || '') + ':' + (Number.isInteger(index) ? String(index) : '$');
+  }
+
+  function _identityFieldsForFailure(failure) {
+    if (!failure || failure.retryable !== true) return [];
+    var field = String(failure.field || '');
+    var code = String(failure.code || '');
+    if (!/(not-found|ambiguous-reference|missing-required-field|invalid-target|office-not-found)/.test(code)) return [];
+    if (Array.isArray(failure.identityFields) && failure.identityFields.length) return failure.identityFields.slice();
+    if (/^(appointments|char_updates|office_assignments|personnel_changes|character_deaths)$/.test(field)) {
+      if (code === 'office-not-found') return ['post', 'position', 'toPosition', 'officeId'];
+      return ['characterId', 'charId', 'charName', 'character', 'name'];
+    }
+    if (/^(faction_updates|faction_dissolve|faction_succession|battleResult)$/.test(field)) {
+      return [
+        'factionId', 'faction', 'id', 'name',
+        'newLeaderId', 'newLeader',
+        'winnerFactionId', 'winnerFaction', 'winner',
+        'loserFactionId', 'loserFaction', 'loser',
+        'targetFactionId', 'targetFaction', 'newFactionId', 'newFaction', 'toFactionId', 'toFaction'
+      ];
+    }
+    if (/^(region_updates|population_adjustments|central_local_actions|environment_actions)$/.test(field)) {
+      return ['regionId', 'region_id', 'region', 'targetRegion', 'target'];
+    }
+    return [];
+  }
+
+  function _buildWritebackRepairAllowlist(failures) {
+    var allowed = Object.create(null);
+    (Array.isArray(failures) ? failures : []).forEach(function(failure) {
+      var fields = _identityFieldsForFailure(failure);
+      if (!fields.length) return;
+      var slot = _writebackRepairSlot(failure.field, failure.index);
+      if (!allowed[slot]) allowed[slot] = { field:String(failure.field || ''), index:Number.isInteger(failure.index) ? failure.index : null, fields:Object.create(null), failures:[] };
+      fields.forEach(function(field) { allowed[slot].fields[field] = true; });
+      allowed[slot].failures.push(failure);
+    });
+    return allowed;
+  }
+
+  function _repairComparable(value, ignoredTopLevelFields, depth) {
+    if (value == null || typeof value !== 'object') return value;
+    if (Array.isArray(value)) return value.map(function(row) { return _repairComparable(row, null, (depth || 0) + 1); });
+    var out = {};
+    Object.keys(value).sort().forEach(function(key) {
+      if ((depth || 0) === 0 && ignoredTopLevelFields && ignoredTopLevelFields[key]) return;
+      out[key] = _repairComparable(value[key], null, (depth || 0) + 1);
+    });
+    return out;
+  }
+
+  function _repairPreservesSemantics(before, after, allowedFields) {
+    try {
+      return JSON.stringify(_repairComparable(before, allowedFields, 0)) === JSON.stringify(_repairComparable(after, allowedFields, 0));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function _applyTargetedWritebackRepairs(batch, response, allowlist) {
+    if (!response || typeof response !== 'object' || !Array.isArray(response.repairs)) {
+      return { ok:false, code:'invalid-repair-response' };
+    }
+    if (response.semanticUnchanged !== true) return { ok:false, code:'repair-semantic-change-requires-regeneration' };
+    if (String(response.narrativePatch || '').trim()) return { ok:false, code:'repair-narrative-patch-not-allowed' };
+    var next = _cloneWritebackValue(batch);
+    var applied = 0;
+    var seen = Object.create(null);
+    for (var repairIndex = 0; repairIndex < response.repairs.length; repairIndex++) {
+      var repair = response.repairs[repairIndex];
+      if (!repair || typeof repair !== 'object' || !repair.field || !repair.item || typeof repair.item !== 'object') {
+        return { ok:false, code:'invalid-repair-item', repairIndex:repairIndex };
+      }
+      var field = String(repair.field);
+      var index = Number.isInteger(repair.index) ? repair.index : null;
+      var slot = _writebackRepairSlot(field, index);
+      var permission = allowlist && allowlist[slot];
+      if (!permission) return { ok:false, code:'repair-target-not-allowed', field:field, index:index };
+      if (seen[slot]) return { ok:false, code:'duplicate-repair-target', field:field, index:index };
+      seen[slot] = true;
+      if (!Object.prototype.hasOwnProperty.call(next, field)) return { ok:false, code:'repair-field-missing', field:field };
+      var before;
+      if (index !== null) {
+        if (!Array.isArray(next[field]) || index < 0 || index >= next[field].length) return { ok:false, code:'repair-index-out-of-range', field:field, index:index };
+        before = next[field][index];
+      } else {
+        if (Array.isArray(next[field]) || !next[field] || typeof next[field] !== 'object') return { ok:false, code:'repair-scalar-shape-invalid', field:field };
+        before = next[field];
+      }
+      if (!_repairPreservesSemantics(before, repair.item, permission.fields)) {
+        return { ok:false, code:'repair-changed-business-semantics', field:field, index:index };
+      }
+      if (index !== null) next[field][index] = _cloneWritebackValue(repair.item);
+      else next[field] = _cloneWritebackValue(repair.item);
+      applied++;
+    }
+    if (!applied) return { ok:false, code:'repair-applied-nothing' };
+    return { ok:true, output:next, applied:applied };
+  }
+
+  async function _validateAndRepairMainWriteback(batch, opts) {
+    opts = opts || {};
+    if (typeof global.validateAIWriteBackBatch !== 'function') {
+      var unavailable = new Error('AI 主写回严格预检器未加载');
+      unavailable.code = 'writeback-preflight-unavailable';
+      throw unavailable;
+    }
+    var current = _cloneWritebackValue(batch);
+    var validation = global.validateAIWriteBackBatch(current, { source:opts.source || 'endturn-full-p1' });
+    var attempts = 0;
+    var lastRepairFailureCode = '';
+    while (!validation.ok && attempts < 2) {
+      if (typeof callAI !== 'function') break;
+      var repairable = validation.failures.filter(function(failure) { return _identityFieldsForFailure(failure).length > 0; }).slice(0, 24);
+      var allowlist = _buildWritebackRepairAllowlist(repairable);
+      if (!Object.keys(allowlist).length) break;
+      attempts++;
+      var failures = repairable.map(function(failure) {
+        var permission = allowlist[_writebackRepairSlot(failure.field, failure.index)];
+        return {
+          field:failure.field,
+          index:failure.index,
+          code:failure.code,
+          target:failure.target,
+          reason:failure.reason,
+          allowedIdentityFields:permission ? Object.keys(permission.fields) : [],
+          item:failure.item || (Array.isArray(current[failure.field]) && Number.isInteger(failure.index) ? current[failure.field][failure.index] : current[failure.field])
+        };
+      });
+      var prompt = '【AI 主写回定向修复】\n' +
+        '只修正下列 retryable 失败槽位中列出的身份引用字段；不得修改动作、数量、方向、效果或任何已通过项目。\n' +
+        '每个槽位最多返回一次 repair；必须 semanticUnchanged=true 且 narrativePatch 为空。无法保持业务语义时不要猜测，本回合将整体重新生成。\n' +
+        '返回唯一 JSON：{"repairs":[{"field":"数组字段","index":0,"item":{完整修正项}}],"semanticUnchanged":true,"narrativePatch":""}\n' +
+        '失败项：' + JSON.stringify(failures) + '\n' +
+        '可用候选：' + JSON.stringify(_collectWritebackRepairCandidates()) + '\n' +
+        '原叙事节选：' + String(current.shizhengji || current.narrative || '').slice(0, 1800);
+      var rawRepair = await callAI(prompt, 2200, undefined, 'secondary', {
+        priority:'critical', timeoutMs:50000, maxRetries:0, temperature:0
+      });
+      var repair = _applyTargetedWritebackRepairs(current, _parseWritebackRepair(rawRepair), allowlist);
+      if (!repair.ok) {
+        lastRepairFailureCode = repair.code || 'repair-rejected';
+        continue;
+      }
+      current = repair.output;
+      validation = global.validateAIWriteBackBatch(current, { source:'endturn-writeback-repair-' + attempts });
+    }
+    if (!validation.ok) {
+      var error = new Error('AI 主写回预检失败；本回合未修改世界状态，可重新生成本回合');
+      error.code = 'ai-writeback-preflight-failed';
+      error.writebackFailures = validation.failures.slice(0, 40).map(function(failure) {
+        return Object.assign({ attempts:attempts, finalRollbackReason:'preflight-failed' }, failure);
+      });
+      error.repairAttempts = attempts;
+      error.lastRepairFailureCode = lastRepairFailureCode;
+      throw error;
+    }
+    return { ok:true, output:validation.output, repairAttempts:attempts };
+  }
+  ns._validateAndRepairMainWriteback = _validateAndRepairMainWriteback;
+
   // 刀丁4·单个 record_conspiracy_event 处理出口(P-QAM 硬门+落库+下狱+regicide→adjudicatePlayerDeath)。
   //   reconcile 补录与 ConspiracyEngine 五级发动出口共用此 sink(抽公共函数两处调)。
   //   opts.fromEngine=true(引擎发动)→落 _fromEngine(与 tick 剪枝握手 R-5)·缺省(AI 补录)→落 _autoFromReconcile(旧行为等价)。
@@ -137,11 +356,13 @@ inst._imprisonedTurn = GM.turn||0;
   // ── AP-1（自 origin writeBack sc1 写回主体逐字节迁出·if(p1) 由 dispatcher 保留·此处 recompute p1）──
   ns.stages._applyCore_reconcile = async function(ctx) {
     var p1 = ctx.results.sc1 || null;
+        var _strictPreflight = await _validateAndRepairMainWriteback(p1, { source:'endturn-full-p1' });
+        p1 = _strictPreflight.output;
+        ctx.results.sc1 = p1;
         // char_updates 的 alive/dead 先在原始 p1 上规范化：后续既有 applyCharacterDeaths(p1)
         // 负责唯一死亡 sink；同时把敏感键从共享 char_update 对象移除，防通用 merge 裸写。
         var _deathNorm1 = { added: [], failed: [], normalized: 0 };
         try { if (p1 && typeof global.normalizeAIWriteBackDeaths === 'function') _deathNorm1 = global.normalizeAIWriteBackDeaths(p1, { source: 'endturn-full-p1', deferDeaths: true }) || _deathNorm1; } catch(_dnE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_dnE, 'endturn] normalizeAIWriteBackDeaths') : console.warn('[endturn] normalizeAIWriteBackDeaths:', _dnE); }
-        try { if (typeof preflightAIWriteBack === 'function') preflightAIWriteBack(p1, { source: 'endturn-full-p1' }); } catch(_pfE) { (window.TM && TM.errors && TM.errors.capture) ? TM.errors.capture(_pfE, 'endturn] preflightAIWriteBack') : console.warn('[endturn] preflightAIWriteBack:', _pfE); }
         // 方案融入：AI 产出的通用变化/任免/机构/区划/事件/NPC行动/关系 → 统一应用
         try {
           if (typeof applyAITurnChanges === 'function') {
@@ -740,9 +961,16 @@ inst._imprisonedTurn = GM.turn||0;
       // 前置 preflight 已将 faction/newLeader 收紧为当前活跃势力与存活人物的精确对象。
       if (p1 && Array.isArray(p1.faction_succession) && global.TM && global.TM.AIChange && global.TM.AIChange.Narrative && typeof global.TM.AIChange.Narrative.setFactionLeader === 'function') {
         p1.faction_succession.forEach(function(sc) {
-          if (!sc || !sc.faction || !sc.newLeader) return;
-          var fac = (GM.facs || []).find(function(f) { return f && f.name === sc.faction; });
-          if (fac) global.TM.AIChange.Narrative.setFactionLeader(fac, sc.newLeader, GM, '势力继统');
+          if (!sc || !(sc.factionId || sc.faction) || !(sc.newLeaderId || sc.newLeader)) return;
+          var factionRef=String(sc.factionId || sc.faction).trim();
+          var fac=(GM.facs || []).find(function(f) {
+            return f && f.id != null && String(f.id).trim()===factionRef;
+          });
+          if (!fac && !sc.factionId) {
+            var matches=(GM.facs || []).filter(function(f) { return f && f.name===sc.faction; });
+            if (matches.length===1) fac=matches[0];
+          }
+          if (fac) global.TM.AIChange.Narrative.setFactionLeader(fac, sc.newLeaderId || sc.newLeader, GM, '势力继统');
         });
       }
       // 1.4: 幻觉防火墙——后验校验（检查AI返回的人名/地名是否在白名单内）

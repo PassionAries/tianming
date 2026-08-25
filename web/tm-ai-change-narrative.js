@@ -149,9 +149,16 @@
     if (!G || !Array.isArray(G.chars) || name == null) return null;
     var nm = String(name).trim();
     if (!nm) return null;
-    var ch = G.chars.find(function(c) {
-      return c && ((c.name != null && String(c.name).trim() === nm) || (c.id != null && String(c.id).trim() === nm));
+    var idMatches = G.chars.filter(function(c) {
+      return c && c.id != null && String(c.id).trim() === nm;
     });
+    var ch = idMatches.length === 1 ? idMatches[0] : null;
+    if (!ch && idMatches.length === 0) {
+      var nameMatches = G.chars.filter(function(c) {
+        return c && c.name != null && String(c.name).trim() === nm;
+      });
+      if (nameMatches.length === 1) ch = nameMatches[0];
+    }
     if (!ch || ch.alive === false || ch.dead) return null;
     return ch;
   }
@@ -631,6 +638,7 @@
   function _setFactionLeader(fac, leader, G, reason) {
     if (!fac || leader == null) return false;
     leader = String(leader).trim();
+    var leaderId = '';
     // 非空首领必须精确解析到当前在册活人；这里是所有 faction leader 写入的最终 sink。
     // 空字符串用于明确出缺，允许同步清空所有镜像。
     if (leader) {
@@ -640,18 +648,21 @@
         return false;
       }
       leader = living.name;
+      leaderId = living.id == null ? '' : String(living.id);
     }
     var old = fac.leader || fac.ruler || (fac.leadership && fac.leadership.ruler) || '';
-    var mirrorsAlreadySynced = old === leader && fac.leader === leader && fac.leaderName === leader && fac.ruler === leader &&
-      fac.leadership && fac.leadership.ruler === leader && fac.leaderInfo && fac.leaderInfo.name === leader;
+    var mirrorsAlreadySynced = old === leader && fac.leader === leader && fac.leaderId === leaderId && fac.leaderName === leader && fac.ruler === leader &&
+      fac.leadership && fac.leadership.ruler === leader && fac.leaderInfo && fac.leaderInfo.name === leader && fac.leaderInfo.id === leaderId;
     if (mirrorsAlreadySynced) return false;
     fac.leader = leader;
+    fac.leaderId = leaderId;
     fac.leaderName = leader;
     fac.ruler = leader;
     if (!fac.leadership || typeof fac.leadership !== 'object') fac.leadership = {};
     fac.leadership.ruler = leader;
     if (!fac.leaderInfo || typeof fac.leaderInfo !== 'object' || Array.isArray(fac.leaderInfo)) fac.leaderInfo = {};
     fac.leaderInfo.name = leader;
+    fac.leaderInfo.id = leaderId;
     if (G && G._turnReport) G._turnReport.push({ type:'faction_update', entity:fac.name || fac.id, field:'leader', old:old, new:leader, reason:reason || '叙事首领补录', turn:G.turn||0 });
     return true;
   }
@@ -984,7 +995,7 @@
         var living = ref ? _narrativeResolveAliveChar(G, ref) : null;
         if (ref && !living) {
           if (Array.isArray(failed)) failed.push({ party_update:pu.name, reason:'party leader must be an existing living character: ' + ref });
-        } else if (_setPartyLeader(party, living ? living.name : '', G, pu.reason || 'AI党派首领变更')) count++;
+        } else if (_setPartyLeader(party, living ? (living.id || living.name) : '', G, pu.reason || 'AI党派首领变更')) count++;
       }
     }
     return count + _mergeUpdatesToEntity(party, updates, 'party_update', party.name, pu.reason || '', failed);

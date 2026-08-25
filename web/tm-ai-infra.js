@@ -584,11 +584,12 @@ async function _aiFetchWithRetryInner(url, body, signal, opts) {
   for (var attempt = 0; attempt <= maxRetries; attempt++) {
     var ctrl = new AbortController();
     var timedOut = false;
-    var aborter = function() { timedOut = true; ctrl.abort(); };
-    var timer = setTimeout(aborter, timeoutMs);
+    var timeoutAborter = function() { timedOut = true; ctrl.abort(); };
+    var externalAborter = function() { ctrl.abort(); };
+    var timer = setTimeout(timeoutAborter, timeoutMs);
     if (signal) {
       if (signal.aborted) { clearTimeout(timer); throw new Error('Aborted'); }
-      signal.addEventListener('abort', aborter);
+      signal.addEventListener('abort', externalAborter);
     }
     try {
       var resp = await fetch(url, {
@@ -688,6 +689,9 @@ async function _aiFetchWithRetryInner(url, body, signal, opts) {
         if (!e.lastRaw) e.lastRaw = _aiLastRaw;
         throw e;
       }
+    } finally {
+      clearTimeout(timer);
+      if (signal && typeof signal.removeEventListener === 'function') signal.removeEventListener('abort', externalAborter);
     }
   }
   throw lastError || new Error('_aiFetchWithRetry: 重试耗尽');
@@ -932,7 +936,8 @@ async function callAIWithTools(prompt, tools, opts) {
     var ctrl = new AbortController();
     var timer = setTimeout(function() { ctrl.abort(); }, (opts.timeoutMs != null ? opts.timeoutMs : 180000));
     if (opts.signal && opts.signal.aborted) { clearTimeout(timer); throw new Error('Aborted'); } // 已置位的 signal 监听器永不触发·排队期被取消的请求曾照常发出白烧token(2026-07-04 审查定罪)
-    if (opts.signal) opts.signal.addEventListener('abort', function() { ctrl.abort(); });
+    var onExternalAbort = function() { ctrl.abort(); };
+    if (opts.signal) opts.signal.addEventListener('abort', onExternalAbort);
     try {
       var resp = await fetch(url, { method: 'POST', headers: headers, body: JSON.stringify(body), signal: ctrl.signal });
       if (!resp.ok) {
@@ -947,6 +952,7 @@ async function callAIWithTools(prompt, tools, opts) {
       return await resp.json();
     } finally {
       clearTimeout(timer);
+      if (opts.signal && typeof opts.signal.removeEventListener === 'function') opts.signal.removeEventListener('abort', onExternalAbort);
     }
   }
   try {
@@ -1205,7 +1211,8 @@ async function _callAIMessagesStreamDirect(messages, maxTok, opts) {
   var ctrl = new AbortController();
   var timer = setTimeout(function() { ctrl.abort(); }, (opts.timeoutMs != null ? opts.timeoutMs : 180000));
   if (opts.signal && opts.signal.aborted) { clearTimeout(timer); throw new Error('Aborted'); } // 同 _toolFetchQueued·已置位预检(2026-07-04 审查定罪)
-  if (opts.signal) opts.signal.addEventListener('abort', function() { ctrl.abort(); });
+  var onExternalAbort = function() { ctrl.abort(); };
+  if (opts.signal) opts.signal.addEventListener('abort', onExternalAbort);
   var _scaledTok = _finalizedBody
     ? maxTok
     : Math.round((maxTok || 500) * ((typeof getCompressionParams === 'function') ? Math.max(1.0, getCompressionParams().scale) : 1.0));
@@ -1279,7 +1286,10 @@ async function _callAIMessagesStreamDirect(messages, maxTok, opts) {
     }
     if (opts.onDone) opts.onDone(full);
     return full;
-  } finally { clearTimeout(timer); }
+  } finally {
+    clearTimeout(timer);
+    if (opts.signal && typeof opts.signal.removeEventListener === 'function') opts.signal.removeEventListener('abort', onExternalAbort);
+  }
 }
 
 async function callAIMessagesStream(messages, maxTok, opts) {
@@ -2094,12 +2104,8 @@ function calcDateFromTurn(turn){
   G.year = Number(di.adYear); G.month = isFinite(Number(di.solarMonth)) ? Number(di.solarMonth) : 1; G.day = isFinite(Number(di.solarDay)) ? Number(di.solarDay) : 1; return { year: G.year, month: G.month, day: G.day };
 }
 
-/**
- * 获取回合时间显示（主显示函数）
- * @returns {string} HTML字符串，包含tooltip
- */
-function getTS(turn){
-  if(!P.time) return '第'+turn+'回合';
+function _tmTimeDisplayParts(turn){
+  if(!P.time) return { main:'第'+turn+'回合', tip:'' };
   var di=calcDateFromTurn(turn);
   var t=P.time;
 
@@ -2134,7 +2140,28 @@ function getTS(turn){
   // 干支年
   tipParts.push(di.gzYearStr+'年');
 
-  return '<span title="'+tipParts.join(' | ')+'" style="cursor:help;border-bottom:1px dotted var(--gold-d);">'+main+'</span>';
+  return { main:main, tip:tipParts.join(' | ') };
+}
+
+function _tmEscapeTimeHtml(value, attribute){
+  var text=String(value==null?'':value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return attribute?text.replace(/"/g,'&quot;').replace(/'/g,'&#39;'):text;
+}
+
+/** 兼容旧渲染器的安全 HTML；新代码优先使用 createTSElement/getTSText。 */
+function getTS(turn){
+  var parts=_tmTimeDisplayParts(turn);
+  return '<span title="'+_tmEscapeTimeHtml(parts.tip,true)+'" style="cursor:help;border-bottom:1px dotted var(--gold-d);">'+_tmEscapeTimeHtml(parts.main,false)+'</span>';
+}
+
+function createTSElement(turn){
+  var parts=_tmTimeDisplayParts(turn);
+  var span=document.createElement('span');
+  span.textContent=parts.main;
+  span.title=parts.tip;
+  span.style.cursor='help';
+  span.style.borderBottom='1px dotted var(--gold-d)';
+  return span;
 }
 
 /**
@@ -2142,17 +2169,7 @@ function getTS(turn){
  * @returns {string}
  */
 function getTSText(turn){
-  if(!P.time) return '第'+turn+'回合';
-  var di=calcDateFromTurn(turn);
-  var t=P.time;
-  var main='';
-  if(di.eraInfo) main+=di.eraInfo.era+di.eraInfo.ryStr;
-  else { var ay=Math.abs(di.adYear); main+=(di.adYear<0?(t.prefix||'')+ay:ay)+(t.suffix||''); }
-  var _mn2=lunarMonthName(di.lunarMonth);
-  if(di.lunarMonth===11||di.lunarMonth===12) main+=_mn2;
-  else main+=di.season+_mn2;
-  main+=di.gzDayStr+'日';
-  return main;
+  return _tmTimeDisplayParts(turn).main;
 }
 function getSE(turn){var si=(P.time.startS+(turn-1))%(P.time.seasons||[]).length;return(P.time.sEffects||[])[si]||"";}
 
@@ -2389,7 +2406,22 @@ function _buildLongTermActionsDigest() {
   }
   return lines.length > 0 ? lines.join('\n') : '';
 }
-function renderEraNamesList(){var t=P.time;var el=_$("t-era-list");if(!el)return;var eraList=(t.eraNames||[]);if(!eraList.length){el.innerHTML="<div style=\"color:var(--txt-d);font-size:12px;\">\u6682\u65E0</div>";return;}el.innerHTML=eraList.map(function(e,i){return "<div style=\"display:flex;gap:6px;align-items:center;margin-bottom:3px;\">"+"<input id=\"t-era-n-"+i+"\" value=\""+((e&&e.name)||"")+"\" placeholder=\"\u5E74\u53F7\u540D\" style=\"width:80px\">"+"<input type=\"number\" id=\"t-era-y-"+i+"\" value=\""+((e&&e.startYear)||0)+"\" placeholder=\"\u5E74\" style=\"width:60px\">"+"<input type=\"number\" id=\"t-era-m-"+i+"\" value=\""+((e&&e.startMonth)||1)+"\" placeholder=\"\u6708\" style=\"width:44px\">"+"<input type=\"number\" id=\"t-era-d-"+i+"\" value=\""+((e&&e.startDay)||1)+"\" placeholder=\"\u65e5\" style=\"width:44px\">"+"<button class=\"bd bsm\" onclick=\"_eraUpd("+i+")\">\u4FDD</button>"+"<button class=\"bd bsm\" onclick=\"_eraDel("+i+")\">\u5220</button>"+"</div>";}).join("");}window._eraAdd=function(){if(!P.time.eraNames)P.time.eraNames=[];P.time.eraNames.push({name:"",startYear:P.time.year,startMonth:1,startDay:1});renderEraNamesList();};window._eraDel=function(i){if(!P.time.eraNames)return;P.time.eraNames.splice(i,1);renderEraNamesList();};window._eraUpd=function(i){var e=P.time.eraNames[i];if(!e)return;var n=document.getElementById("t-era-n-"+i);if(n)e.name=n.value;var y=document.getElementById("t-era-y-"+i);if(y)e.startYear=+y.value||P.time.year;var m=document.getElementById("t-era-m-"+i);if(m)e.startMonth=+m.value||1;var d=document.getElementById("t-era-d-"+i);if(d)e.startDay=+d.value||1;saveT();};function saveT(){var t=P.time;var ids=["t-year","t-prefix","t-suffix","t-per-turn","t-seasons","t-start-s","t-reign","t-reign-y","t-display","t-template","t-start-month","t-start-day"];ids.forEach(function(id){var el=_$(id);if(!el)return;var v=el.value;if(id==="t-year")t.year=+v;else if(id==="t-prefix")t.prefix=v;else if(id==="t-suffix")t.suffix=v;else if(id==="t-per-turn")t.perTurn=v;else if(id==="t-seasons")t.seasons=v.split(",").map(function(s){return s.trim();});else if(id==="t-start-s")t.startS=+v;else if(id==="t-reign")t.reign=v;else if(id==="t-reign-y")t.reignY=+v;else if(id==="t-display")t.display=v;else if(id==="t-template")t.template=v;else if(id==="t-start-month")t.startMonth=+v||1;else if(id==="t-start-day")t.startDay=+v||1;});var egz=_$("t-enable-ganzhi");if(egz)t.enableGanzhi=egz.checked;var egzd=_$("t-enable-ganzhi-day");if(egzd)t.enableGanzhiDay=egzd.checked;var een=_$("t-enable-era-name");if(een)t.enableEraName=een.checked;toast("\u5DF2\u4FDD\u5B58");}
+function renderEraNamesList(){
+  var t=P.time;var el=_$("t-era-list");if(!el)return;var eraList=Array.isArray(t.eraNames)?t.eraNames:[];
+  if(!eraList.length){var empty=document.createElement('div');empty.style.cssText='color:var(--txt-d);font-size:12px';empty.textContent='暂无';if(el.replaceChildren)el.replaceChildren(empty);else{el.textContent='';el.appendChild(empty);}return;}
+  var rows=eraList.map(function(e,i){
+    e=e||{};var row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;margin-bottom:3px';
+    function input(id,type,value,placeholder,width){var node=document.createElement('input');node.id=id;node.type=type;node.value=String(value);node.placeholder=placeholder;node.style.width=width;row.appendChild(node);}
+    input('t-era-n-'+i,'text',e.name==null?'':e.name,'年号名','80px');
+    input('t-era-y-'+i,'number',Number.isFinite(Number(e.startYear))?Number(e.startYear):0,'年','60px');
+    input('t-era-m-'+i,'number',Number.isFinite(Number(e.startMonth))?Number(e.startMonth):1,'月','44px');
+    input('t-era-d-'+i,'number',Number.isFinite(Number(e.startDay))?Number(e.startDay):1,'日','44px');
+    var save=document.createElement('button');save.type='button';save.className='bd bsm';save.textContent='保';save.addEventListener('click',function(){window._eraUpd(i);});row.appendChild(save);
+    var del=document.createElement('button');del.type='button';del.className='bd bsm';del.textContent='删';del.addEventListener('click',function(){window._eraDel(i);});row.appendChild(del);return row;
+  });
+  if(el.replaceChildren)el.replaceChildren.apply(el,rows);else{el.textContent='';rows.forEach(function(row){el.appendChild(row);});}
+}
+window._eraAdd=function(){if(!P.time.eraNames)P.time.eraNames=[];P.time.eraNames.push({name:"",startYear:P.time.year,startMonth:1,startDay:1});renderEraNamesList();};window._eraDel=function(i){if(!P.time.eraNames)return;P.time.eraNames.splice(i,1);renderEraNamesList();};window._eraUpd=function(i){var e=P.time.eraNames[i];if(!e)return;var n=document.getElementById("t-era-n-"+i);if(n)e.name=n.value;var y=document.getElementById("t-era-y-"+i);if(y)e.startYear=+y.value||P.time.year;var m=document.getElementById("t-era-m-"+i);if(m)e.startMonth=+m.value||1;var d=document.getElementById("t-era-d-"+i);if(d)e.startDay=+d.value||1;saveT();};function saveT(){var t=P.time;var ids=["t-year","t-prefix","t-suffix","t-per-turn","t-seasons","t-start-s","t-reign","t-reign-y","t-display","t-template","t-start-month","t-start-day"];ids.forEach(function(id){var el=_$(id);if(!el)return;var v=el.value;if(id==="t-year")t.year=+v;else if(id==="t-prefix")t.prefix=v;else if(id==="t-suffix")t.suffix=v;else if(id==="t-per-turn")t.perTurn=v;else if(id==="t-seasons")t.seasons=v.split(",").map(function(s){return s.trim();});else if(id==="t-start-s")t.startS=+v;else if(id==="t-reign")t.reign=v;else if(id==="t-reign-y")t.reignY=+v;else if(id==="t-display")t.display=v;else if(id==="t-template")t.template=v;else if(id==="t-start-month")t.startMonth=+v||1;else if(id==="t-start-day")t.startDay=+v||1;});var egz=_$("t-enable-ganzhi");if(egz)t.enableGanzhi=egz.checked;var egzd=_$("t-enable-ganzhi-day");if(egzd)t.enableGanzhiDay=egzd.checked;var een=_$("t-enable-era-name");if(een)t.enableEraName=een.checked;toast("已保存");}
 function loadT(){var t=P.time;var map={"t-year":t.year,"t-prefix":t.prefix||"","t-suffix":t.suffix||"","t-per-turn":t.perTurn||"1s","t-seasons":(t.seasons||[]).join(","),"t-start-s":t.startS||0,"t-reign":t.reign||"","t-reign-y":t.reignY||1,"t-display":t.display||"year_season","t-template":t.template||"","t-start-month":t.startMonth||1,"t-start-day":t.startDay||1};Object.keys(map).forEach(function(id){var el=_$(id);if(el)el.value=map[id];});var egz=_$("t-enable-ganzhi");if(egz)egz.checked=!!t.enableGanzhi;var egzd=_$("t-enable-ganzhi-day");if(egzd)egzd.checked=!!t.enableGanzhiDay;var een=_$("t-enable-era-name");if(een)een.checked=!!t.enableEraName;renderEraNamesList();}
 
 // ============================================================
@@ -2569,123 +2601,149 @@ function ensureAIDiagnostics(turn) {
 
 // Phase 7·完整 4 区成本面板·读 GM._costHistory + TokenUsageTracker.getSnapshot + GM._turnAiResults
 // 调用方·设置面板"AI 成本面板"按钮·或 TM.ai.showCostPanel()
-function _escForCostPanel(s) {
-  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function _formatCostMoney(n) { return typeof n !== 'number' || !isFinite(n) ? '$0' : '$' + (n < 0.01 ? n.toFixed(4) : n.toFixed(3)); }
+function _formatCostTime(ms) { return typeof ms !== 'number' || !isFinite(ms) || ms < 0 ? '0ms' : (ms < 1000 ? Math.round(ms) + 'ms' : (ms / 1000).toFixed(1) + 's'); }
+function _costPanelFinite(value, fallback) { var n = Number(value); return Number.isFinite(n) ? n : fallback; }
+function _costPanelCount(value, fallback) { return Math.max(0, Math.floor(_costPanelFinite(value, fallback == null ? 0 : fallback))); }
+function _costPanelNode(tag, text, cssText) {
+  var el = document.createElement(tag);
+  if (text !== undefined && text !== null) el.textContent = String(text);
+  if (cssText) el.style.cssText = cssText; return el;
 }
-function _formatCostMoney(n) {
-  if (typeof n !== 'number' || !isFinite(n)) return '$0';
-  return '$' + (n < 0.01 ? n.toFixed(4) : n.toFixed(3));
+function _costPanelStrong(text) { return _costPanelNode('strong', text); }
+function _costPanelLine(parent, parts) {
+  (Array.isArray(parts) ? parts : [parts]).forEach(function(part) {
+    if (part && typeof part === 'object' && part.nodeType) parent.appendChild(part);
+    else parent.appendChild(document.createTextNode(String(part == null ? '' : part)));
+  });
+  parent.appendChild(document.createElement('br'));
 }
-function _formatCostTime(ms) {
-  if (typeof ms !== 'number' || !isFinite(ms) || ms < 0) return '0ms';
-  if (ms < 1000) return Math.round(ms) + 'ms';
-  return (ms / 1000).toFixed(1) + 's';
+function _costPanelDetails(parent, title, color, borderColor, open, bodyStyle) {
+  var details = _costPanelNode('details', null, 'margin-bottom:0.6rem;border-left:3px solid ' + borderColor + ';padding-left:0.6rem;');
+  details.open = open === true;
+  details.appendChild(_costPanelNode('summary', title, 'cursor:pointer;font-weight:600;color:' + color + ';'));
+  var body = _costPanelNode('div', null, bodyStyle || 'padding:0.4rem 0;line-height:1.6;');
+  details.appendChild(body); parent.appendChild(details); return body;
 }
-function _buildAICostPanelHTML() {
+function _buildAICostPanelElement() {
+  if (typeof document === 'undefined') return null;
   var G = (typeof GM !== 'undefined') ? GM : null;
   var costHistory = (G && Array.isArray(G._costHistory)) ? G._costHistory : [];
   var stats = (typeof TokenUsageTracker !== 'undefined' && TokenUsageTracker.getSnapshot) ? TokenUsageTracker.getSnapshot() : null;
   var d = (typeof ensureAIDiagnostics === 'function') ? ensureAIDiagnostics() : null;
-  var currentTurn = G ? (G.turn || 0) : 0;
+  var currentTurn = _costPanelCount(G && G.turn, 0);
   var P_ = (typeof P !== 'undefined') ? P : null;
   var aiCfg = (P_ && P_.ai) || {};
   var conf = (P_ && P_.conf) || {};
-  var depth = conf.aiCallDepth || 'full';
+  var depth = String(conf.aiCallDepth || 'full');
   var depthCalls = depth === 'lite' ? 8 : (depth === 'standard' ? 11 : 17);
   var depthEst = depth === 'lite' ? 0.10 : (depth === 'standard' ? 0.15 : 0.21);
-  var html = '';
-  html += '<div id="ai-cost-panel-backdrop" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.55);z-index:9998;display:flex;align-items:center;justify-content:center;" onclick="if(event.target===this){var el=document.getElementById(\'ai-cost-panel-backdrop\');if(el)el.remove();}">';
-  html += '<div style="background:var(--ink-900,#1a1812);color:var(--ink-50,#e8e0d0);border:1px solid var(--ink-700,#4a4030);border-radius:6px;padding:1rem 1.2rem;max-width:680px;width:96vw;max-height:88vh;overflow:auto;font-family:inherit;font-size:0.85rem;" onclick="event.stopPropagation();">';
-  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;border-bottom:1px solid var(--ink-700,#4a4030);padding-bottom:0.4rem;"><strong style="font-size:1rem;">AI 成本面板·诊断</strong><button onclick="document.getElementById(\'ai-cost-panel-backdrop\').remove()" style="background:transparent;color:var(--ink-300,#aaa);border:none;cursor:pointer;font-size:1.2rem;">×</button></div>';
-  // ─── 区1·智能档位 ───
-  html += '<details open style="margin-bottom:0.6rem;border-left:3px solid #8b6914;padding-left:0.6rem;"><summary style="cursor:pointer;font-weight:600;color:#d4a843;">区1·智能档位</summary>';
-  html += '<div style="padding:0.4rem 0;line-height:1.6;">';
-  html += '当前深度·<strong>' + _escForCostPanel(depth) + '</strong>·预估 <strong>' + depthCalls + '</strong> 调用·~<strong>' + _formatCostMoney(depthEst) + '</strong>/回合<br/>';
-  html += '模型档位·<strong>' + _escForCostPanel(conf.modelTier || 'auto') + '</strong><br/>';
-  html += '<span style="color:var(--ink-300,#aaa);font-size:0.78rem;">改档位请用设置面板·此面板为只读总览</span>';
-  html += '</div></details>';
-  // ─── 区2·推演深度细调 (折叠) ───
-  html += '<details style="margin-bottom:0.6rem;border-left:3px solid #5a6e3a;padding-left:0.6rem;"><summary style="cursor:pointer;font-weight:600;color:#8fae5a;">区2·推演深度细调 (高级)</summary>';
-  html += '<div style="padding:0.4rem 0;line-height:1.6;font-size:0.78rem;">';
-  html += '· sc1q 对话回看·<strong>' + (conf.dialogueRecallTurns || 3) + '</strong> 回合<br/>';
-  html += '· strictSchema·<strong>' + (conf.strictSchemaEnabled ? '启用' : '关') + '</strong> (P.conf.strictSchemaEnabled)<br/>';
-  html += '· stream_sc1·<strong>' + (aiCfg.stream_sc1 === true ? '开' : '关') + '</strong>·sc1OwnedBySc1b·<strong>' + (aiCfg.sc1OwnedBySc1b !== false ? '开' : '关') + '</strong>·sc1OwnedBySc1c·<strong>' + (aiCfg.sc1OwnedBySc1c !== false ? '开' : '关') + '</strong><br/>';
-  html += '· sc17Skip·<strong>' + (aiCfg.sc17Skip !== false ? '开' : '关') + '</strong>·sc25cEnabled·<strong>' + (aiCfg.sc25cEnabled !== false ? '开' : '关') + '</strong>·sc15nEnabled·<strong>' + (aiCfg.sc15nEnabled === true ? '开' : '关') + '</strong><br/>';
-  html += '· sc16Lite·<strong>' + (aiCfg.sc16Lite === true ? '开' : '关') + '</strong>·sc18Lite·<strong>' + (aiCfg.sc18Lite === true ? '开' : '关') + '</strong>·sc2Pipeline·<strong>' + _escForCostPanel(aiCfg.sc2Pipeline || 'legacy') + '</strong>·openaiStrict·<strong>' + (aiCfg.openaiStrict === true ? '开' : '关') + '</strong>';
-  html += '</div></details>';
-  // ─── 区3·性能成本控制 ───
-  html += '<details open style="margin-bottom:0.6rem;border-left:3px solid #8b3a4a;padding-left:0.6rem;"><summary style="cursor:pointer;font-weight:600;color:#d4768a;">区3·性能成本控制</summary>';
-  html += '<div style="padding:0.4rem 0;line-height:1.7;">';
+  var backdrop = _costPanelNode('div', null, 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.55);z-index:9998;display:flex;align-items:center;justify-content:center;');
+  backdrop.id = 'ai-cost-panel-backdrop';
+  var panel = _costPanelNode('div', null, 'background:var(--ink-900,#1a1812);color:var(--ink-50,#e8e0d0);border:1px solid var(--ink-700,#4a4030);border-radius:6px;padding:1rem 1.2rem;max-width:680px;width:96vw;max-height:88vh;overflow:auto;font-family:inherit;font-size:0.85rem;');
+  backdrop.appendChild(panel);
+  backdrop.addEventListener('click', function(event) { if (event && event.target === backdrop) backdrop.remove(); });
+  panel.addEventListener('click', function(event) { if (event && typeof event.stopPropagation === 'function') event.stopPropagation(); });
+  var header = _costPanelNode('div', null, 'display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;border-bottom:1px solid var(--ink-700,#4a4030);padding-bottom:0.4rem;');
+  header.appendChild(_costPanelNode('strong', 'AI 成本面板·诊断', 'font-size:1rem;'));
+  var closeButton = _costPanelNode('button', '×', 'background:transparent;color:var(--ink-300,#aaa);border:none;cursor:pointer;font-size:1.2rem;');
+  closeButton.type = 'button';
+  closeButton.addEventListener('click', function() { backdrop.remove(); });
+  header.appendChild(closeButton);
+  panel.appendChild(header);
+  var zone1 = _costPanelDetails(panel, '区1·智能档位', '#d4a843', '#8b6914', true);
+  _costPanelLine(zone1, ['当前深度·', _costPanelStrong(depth), '·预估 ', _costPanelStrong(depthCalls), ' 调用·~', _costPanelStrong(_formatCostMoney(depthEst)), '/回合']);
+  _costPanelLine(zone1, ['模型档位·', _costPanelStrong(String(conf.modelTier || 'auto'))]);
+  zone1.appendChild(_costPanelNode('span', '改档位请用设置面板·此面板为只读总览', 'color:var(--ink-300,#aaa);font-size:0.78rem;'));
+  var zone2 = _costPanelDetails(panel, '区2·推演深度细调 (高级)', '#8fae5a', '#5a6e3a', false, 'padding:0.4rem 0;line-height:1.6;font-size:0.78rem;');
+  _costPanelLine(zone2, ['· sc1q 对话回看·', _costPanelStrong(_costPanelCount(conf.dialogueRecallTurns, 3)), ' 回合']);
+  _costPanelLine(zone2, ['· strictSchema·', _costPanelStrong(conf.strictSchemaEnabled ? '启用' : '关'), ' (P.conf.strictSchemaEnabled)']);
+  _costPanelLine(zone2, ['· stream_sc1·', _costPanelStrong(aiCfg.stream_sc1 === true ? '开' : '关'), '·sc1OwnedBySc1b·', _costPanelStrong(aiCfg.sc1OwnedBySc1b !== false ? '开' : '关'), '·sc1OwnedBySc1c·', _costPanelStrong(aiCfg.sc1OwnedBySc1c !== false ? '开' : '关')]);
+  _costPanelLine(zone2, ['· sc17Skip·', _costPanelStrong(aiCfg.sc17Skip !== false ? '开' : '关'), '·sc25cEnabled·', _costPanelStrong(aiCfg.sc25cEnabled !== false ? '开' : '关'), '·sc15nEnabled·', _costPanelStrong(aiCfg.sc15nEnabled === true ? '开' : '关')]);
+  _costPanelLine(zone2, ['· sc16Lite·', _costPanelStrong(aiCfg.sc16Lite === true ? '开' : '关'), '·sc18Lite·', _costPanelStrong(aiCfg.sc18Lite === true ? '开' : '关'), '·sc2Pipeline·', _costPanelStrong(String(aiCfg.sc2Pipeline || 'legacy')), '·openaiStrict·', _costPanelStrong(aiCfg.openaiStrict === true ? '开' : '关')]);
+  var zone3 = _costPanelDetails(panel, '区3·性能成本控制', '#d4768a', '#8b3a4a', true, 'padding:0.4rem 0;line-height:1.7;');
   if (stats) {
-    var alertTh = conf.costAlertThreshold || 0.5;
-    var curUsage = TokenUsageTracker.getTurnUsage ? TokenUsageTracker.getTurnUsage() : 0;
+    var alertTh = Math.max(0, _costPanelFinite(conf.costAlertThreshold, 0.5));
+    var curUsage = _costPanelCount(TokenUsageTracker.getTurnUsage ? TokenUsageTracker.getTurnUsage() : 0, 0);
     var curCost = (curUsage * 5 / 1000000);  // 粗估·avg $5/M
-    var costFlag = curCost > alertTh ? ' <span style="color:#ff7766;">⚠ 超阈值</span>' : '';
-    html += '本回合·<strong>' + curUsage + '</strong> tokens·~<strong>' + _formatCostMoney(curCost) + '</strong>' + costFlag + '<br/>';
-    html += '累计·<strong>' + stats.totalTokens + '</strong> tokens·<strong>' + stats.totalCalls + '</strong> 调用·~<strong>' + _formatCostMoney(stats.estimatedCostUSD) + '</strong><br/>';
-    html += '<span style="color:var(--ink-300,#aaa);font-size:0.78rem;">阈值·' + _formatCostMoney(alertTh) + '/回合</span>';
+    var usageLine = ['本回合·', _costPanelStrong(curUsage), ' tokens·~', _costPanelStrong(_formatCostMoney(curCost))];
+    if (curCost > alertTh) usageLine.push(_costPanelNode('span', ' ⚠ 超阈值', 'color:#ff7766;'));
+    _costPanelLine(zone3, usageLine);
+    _costPanelLine(zone3, ['累计·', _costPanelStrong(_costPanelCount(stats.totalTokens, 0)), ' tokens·', _costPanelStrong(_costPanelCount(stats.totalCalls, 0)), ' 调用·~', _costPanelStrong(_formatCostMoney(_costPanelFinite(stats.estimatedCostUSD, 0)))]);
+    zone3.appendChild(_costPanelNode('span', '阈值·' + _formatCostMoney(alertTh) + '/回合', 'color:var(--ink-300,#aaa);font-size:0.78rem;'));
   } else {
-    html += '<span style="color:var(--ink-300,#aaa);">TokenUsageTracker 未加载</span>';
+    zone3.appendChild(_costPanelNode('span', 'TokenUsageTracker 未加载', 'color:var(--ink-300,#aaa);'));
   }
-  // 成本历史·折叠
   if (costHistory.length > 0) {
-    var maxCalls = costHistory.reduce(function(m, e) { return Math.max(m, e.totalCalls || 0); }, 1);
-    html += '<details style="margin-top:0.5rem;"><summary style="cursor:pointer;color:#d4a843;font-size:0.82rem;">成本历史·最近 ' + costHistory.length + ' 回合 (点开)</summary>';
-    html += '<div style="margin-top:0.3rem;font-family:monospace;font-size:0.74rem;line-height:1.4;">';
+    var maxCalls = costHistory.reduce(function(m, e) { return Math.max(m, _costPanelCount(e && e.totalCalls, 0)); }, 1);
+    var historyDetails = _costPanelNode('details', null, 'margin-top:0.5rem;');
+    historyDetails.appendChild(_costPanelNode('summary', '成本历史·最近 ' + costHistory.length + ' 回合 (点开)', 'cursor:pointer;color:#d4a843;font-size:0.82rem;'));
+    var historyBody = _costPanelNode('div', null, 'margin-top:0.3rem;font-family:monospace;font-size:0.74rem;line-height:1.4;');
     costHistory.slice(-15).forEach(function(e) {
-      var bar = '█'.repeat(Math.max(1, Math.round(((e.totalCalls || 0) / maxCalls) * 12)));
-      var costEst = e.tokenUsage ? (e.tokenUsage.totalTokens * 5 / 1000000) : 0;
-      html += 'T' + (e.turn || '?') + '·' + bar.padEnd(13) + '·' + (e.totalCalls || 0) + ' 调用·' + _formatCostTime(e.totalTimeMs || 0) + (costEst > 0 ? '·~' + _formatCostMoney(costEst) : '') + (e.errors ? '·错' + e.errors : '') + (e.sc1StrictFallback ? '·strict↓' : '') + '<br/>';
+      e = e && typeof e === 'object' ? e : {};
+      var calls = _costPanelCount(e.totalCalls, 0);
+      var bar = '█'.repeat(Math.max(1, Math.min(12, Math.round((calls / maxCalls) * 12))));
+      var tokenTotal = _costPanelCount(e.tokenUsage && e.tokenUsage.totalTokens, 0);
+      var costEst = tokenTotal * 5 / 1000000;
+      var turn = _costPanelFinite(e.turn, null);
+      var line = 'T' + (turn === null ? '?' : Math.floor(turn)) + '·' + bar.padEnd(13) + '·' + calls + ' 调用·' + _formatCostTime(Math.max(0, _costPanelFinite(e.totalTimeMs, 0)));
+      if (costEst > 0) line += '·~' + _formatCostMoney(costEst);
+      var errors = _costPanelCount(e.errors, 0);
+      if (errors) line += '·错' + errors;
+      if (e.sc1StrictFallback) line += '·strict↓';
+      _costPanelLine(historyBody, line);
     });
-    html += '</div></details>';
+    historyDetails.appendChild(historyBody);
+    zone3.appendChild(historyDetails);
   }
-  // 按 subcall 拆分
   if (stats && stats.byId && Object.keys(stats.byId).length > 0) {
-    html += '<details style="margin-top:0.4rem;"><summary style="cursor:pointer;color:#d4a843;font-size:0.82rem;">按 subcall 拆分</summary>';
-    html += '<div style="margin-top:0.3rem;font-family:monospace;font-size:0.74rem;line-height:1.4;">';
-    var sortedIds = Object.keys(stats.byId).sort(function(a, b) { return (stats.byId[b].estimatedCostUSD || 0) - (stats.byId[a].estimatedCostUSD || 0); });
+    var splitDetails = _costPanelNode('details', null, 'margin-top:0.4rem;');
+    splitDetails.appendChild(_costPanelNode('summary', '按 subcall 拆分', 'cursor:pointer;color:#d4a843;font-size:0.82rem;'));
+    var splitBody = _costPanelNode('div', null, 'margin-top:0.3rem;font-family:monospace;font-size:0.74rem;line-height:1.4;');
+    var sortedIds = Object.keys(stats.byId).sort(function(a, b) { return _costPanelFinite(stats.byId[b] && stats.byId[b].estimatedCostUSD, 0) - _costPanelFinite(stats.byId[a] && stats.byId[a].estimatedCostUSD, 0); });
     sortedIds.slice(0, 15).forEach(function(id) {
-      var b = stats.byId[id];
-      html += _escForCostPanel(id).padEnd(20) + ' ' + (b.calls || 0) + '次·' + (b.promptTokens + b.completionTokens) + ' tok·' + _formatCostMoney(b.estimatedCostUSD) + '<br/>';
+      var b = stats.byId[id] && typeof stats.byId[id] === 'object' ? stats.byId[id] : {};
+      var tokens = _costPanelCount(b.promptTokens, 0) + _costPanelCount(b.completionTokens, 0);
+      _costPanelLine(splitBody, String(id).padEnd(20) + ' ' + _costPanelCount(b.calls, 0) + '次·' + tokens + ' tok·' + _formatCostMoney(_costPanelFinite(b.estimatedCostUSD, 0)));
     });
-    html += '</div></details>';
+    splitDetails.appendChild(splitBody);
+    zone3.appendChild(splitDetails);
   }
-  // 导出按钮
-  html += '<div style="margin-top:0.6rem;"><button onclick="if(window.TM&&TM.ai&&TM.ai.exportDiagnostics){TM.ai.exportDiagnostics();}else if(typeof exportAIDiagnosticsJSON===\'function\'){exportAIDiagnosticsJSON();}" style="background:#5a3520;color:#e8e0d0;border:1px solid #8b5028;padding:0.3rem 0.8rem;border-radius:3px;cursor:pointer;font-size:0.82rem;">↓ 导出 AI 诊断 JSON</button></div>';
-  html += '</div></details>';
-  // ─── 区4·诊断 (debug) ───
-  html += '<details style="margin-bottom:0.3rem;border-left:3px solid #4a5a8a;padding-left:0.6rem;"><summary style="cursor:pointer;font-weight:600;color:#8aa8d8;">区4·诊断 (debug·错误日志)</summary>';
-  html += '<div style="padding:0.4rem 0;font-size:0.78rem;line-height:1.5;">';
-  // GM 状态摘要
+  var exportWrap = _costPanelNode('div', null, 'margin-top:0.6rem;');
+  var exportButton = _costPanelNode('button', '↓ 导出 AI 诊断 JSON', 'background:#5a3520;color:#e8e0d0;border:1px solid #8b5028;padding:0.3rem 0.8rem;border-radius:3px;cursor:pointer;font-size:0.82rem;');
+  exportButton.type = 'button';
+  exportButton.addEventListener('click', function() {
+    if (window.TM && window.TM.ai && typeof window.TM.ai.exportDiagnostics === 'function') window.TM.ai.exportDiagnostics();
+    else if (typeof exportAIDiagnosticsJSON === 'function') exportAIDiagnosticsJSON();
+  });
+  exportWrap.appendChild(exportButton);
+  zone3.appendChild(exportWrap);
+  var zone4 = _costPanelDetails(panel, '区4·诊断 (debug·错误日志)', '#8aa8d8', '#4a5a8a', false, 'padding:0.4rem 0;font-size:0.78rem;line-height:1.5;');
   if (G) {
-    html += 'sc28 snapshot·' + (G._lastSc28Snapshot ? 'T' + G._lastSc28Snapshot.turn : '无') + '<br/>';
-    html += 'sc25c·' + (G._turnAiResults && G._turnAiResults.subcall25c ? (G._turnAiResults.subcall25c._dualCallSucceeded ? '双调用成功' : '部分') : '无') + '<br/>';
-    html += 'sc1q·' + (G._turnAiResults && G._turnAiResults.subcall1q ? ((G._turnAiResults.subcall1q.dialogue_commitments||[]).length + ' 承诺') : '无') + '·missed·' + ((G._sc1qMissedLastTurn||[]).length) + '<br/>';
-    html += 'strict fallback·' + (G._turnAiResults && G._turnAiResults._sc1StrictFallback ? '本回合触发' : '未触发') + '<br/>';
-    html += 'sysP cache·' + _escForCostPanel(G._sysCacheMode || 'none') + '<br/>';
+    var snapshotTurn = G._lastSc28Snapshot ? _costPanelFinite(G._lastSc28Snapshot.turn, null) : null;
+    _costPanelLine(zone4, 'sc28 snapshot·' + (snapshotTurn === null ? '无' : 'T' + Math.floor(snapshotTurn)));
+    _costPanelLine(zone4, 'sc25c·' + (G._turnAiResults && G._turnAiResults.subcall25c ? (G._turnAiResults.subcall25c._dualCallSucceeded ? '双调用成功' : '部分') : '无'));
+    _costPanelLine(zone4, 'sc1q·' + (G._turnAiResults && G._turnAiResults.subcall1q ? (_costPanelCount(G._turnAiResults.subcall1q.dialogue_commitments && G._turnAiResults.subcall1q.dialogue_commitments.length, 0) + ' 承诺') : '无') + '·missed·' + _costPanelCount(G._sc1qMissedLastTurn && G._sc1qMissedLastTurn.length, 0));
+    _costPanelLine(zone4, 'strict fallback·' + (G._turnAiResults && G._turnAiResults._sc1StrictFallback ? '本回合触发' : '未触发'));
+    _costPanelLine(zone4, 'sysP cache·' + String(G._sysCacheMode || 'none'));
   }
-  // 错误日志
   if (d && Array.isArray(d.subcallErrors) && d.subcallErrors.length > 0) {
-    html += '<div style="margin-top:0.5rem;color:#d4a843;font-weight:600;font-size:0.78rem;">subcall 错误 (最近 ' + Math.min(10, d.subcallErrors.length) + '·共 ' + d.subcallErrors.length + ')·</div>';
-    html += '<div style="margin-top:0.2rem;font-family:monospace;font-size:0.72rem;line-height:1.4;max-height:120px;overflow:auto;">';
+    zone4.appendChild(_costPanelNode('div', 'subcall 错误 (最近 ' + Math.min(10, d.subcallErrors.length) + '·共 ' + d.subcallErrors.length + ')·', 'margin-top:0.5rem;color:#d4a843;font-weight:600;font-size:0.78rem;'));
+    var errorBody = _costPanelNode('div', null, 'margin-top:0.2rem;font-family:monospace;font-size:0.72rem;line-height:1.4;max-height:120px;overflow:auto;');
     d.subcallErrors.slice(-10).forEach(function(e) {
-      html += '[' + _escForCostPanel(e.subcall) + ':' + _escForCostPanel(e.phase) + '] ' + _escForCostPanel(String(e.err).slice(0, 150)) + '<br/>';
+      _costPanelLine(errorBody, '[' + String(e && e.subcall || '') + ':' + String(e && e.phase || '') + '] ' + String(e && e.err || '').slice(0, 150));
     });
-    html += '</div>';
+    zone4.appendChild(errorBody);
   }
-  html += '</div></details>';
-  html += '<div style="text-align:right;margin-top:0.5rem;font-size:0.72rem;color:var(--ink-400,#888);">T' + currentTurn + ' · ' + new Date().toLocaleString() + '</div>';
-  html += '</div></div>';
-  return html;
+  panel.appendChild(_costPanelNode('div', 'T' + currentTurn + ' · ' + new Date().toLocaleString(), 'text-align:right;margin-top:0.5rem;font-size:0.72rem;color:var(--ink-400,#888);'));
+  return backdrop;
 }
 function showAICostPanel() {
   if (typeof document === 'undefined') return;
   var prev = document.getElementById('ai-cost-panel-backdrop');
   if (prev) prev.remove();
-  var html = _buildAICostPanelHTML();
-  var div = document.createElement('div');
-  div.innerHTML = html;
-  document.body.appendChild(div.firstChild);
+  var panel = _buildAICostPanelElement();
+  if (panel) document.body.appendChild(panel);
 }
 
 // Phase 7.5 D·sysP cache 失效·P.ai.prompt / P.ai.rules / summaryRule 改后清 GM._lastSysPHash

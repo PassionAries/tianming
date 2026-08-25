@@ -68,14 +68,15 @@
     try { if (typeof global.recordAIDiagnostic === 'function') global.recordAIDiagnostic('write_gate', { label:kind, ref:ref, reason:reason }); } catch (_) {}
     return false;
   }
-  function _tmExactChar(ref) {
-    var G = global.GM;
-    var raw = String(ref == null ? '' : ref).trim();
-    if (!raw || !G || !Array.isArray(G.chars)) return null;
-    return G.chars.find(function(ch) {
-      return ch && ((ch.name != null && String(ch.name).trim() === raw) || (ch.id != null && String(ch.id).trim() === raw));
-    }) || null;
+  function _tmExactEntity(rows, ref) {
+    var raw = String(ref == null ? '' : ref).trim(); if (!raw || !Array.isArray(rows)) return null;
+    var matches=rows.filter(function(entity) { return entity && entity.id != null && String(entity.id).trim()===raw; });
+    if (matches.length) return matches.length===1 ? matches[0] : null;
+    matches=rows.filter(function(entity) { return entity && entity.name != null && String(entity.name).trim()===raw; });
+    return matches.length===1 ? matches[0] : null;
   }
+  function _tmExactChar(ref) { var G=global.GM; return G ? _tmExactEntity(G.chars,ref) : null; }
+  function _tmExactFaction(ref) { var G=global.GM; return G ? _tmExactEntity(G.facs,ref) : null; }
   function _tmExactLivingChar(ref) {
     var ch = _tmExactChar(ref);
     return ch && ch.alive !== false && ch.dead !== true ? ch : null;
@@ -99,15 +100,15 @@
     if (!living) return _tmRecordSemanticFailure(kind || 'faction_leader', ref, 'leader must be an existing living character');
     var sink = global.TM && global.TM.AIChange && global.TM.AIChange.Narrative && global.TM.AIChange.Narrative.setFactionLeader;
     if (typeof sink !== 'function') return _tmRecordSemanticFailure(kind || 'faction_leader', ref, 'faction leader sink unavailable');
-    sink(fac, living.name, global.GM, reason || '势力首领变更');
-    return fac && fac.leader === living.name ? true : _tmRecordSemanticFailure(kind || 'faction_leader', ref, 'faction leader sink rejected write');
+    sink(fac, living.id || living.name, global.GM, reason || '势力首领变更');
+    return fac && fac.leader === living.name && (!living.id || String(fac.leaderId || '')===String(living.id)) ? true : _tmRecordSemanticFailure(kind || 'faction_leader', ref, 'faction leader sink rejected write');
   }
   function _tmSetPartyLeaderCanonical(party, ref, reason, kind) {
     var living = _tmExactLivingChar(ref);
     if (!living) return _tmRecordSemanticFailure(kind || 'party_leader', ref, 'leader must be an existing living character');
     var sink = global.TM && global.TM.AIChange && global.TM.AIChange.Narrative && global.TM.AIChange.Narrative.setPartyLeader;
     if (typeof sink !== 'function') return _tmRecordSemanticFailure(kind || 'party_leader', ref, 'party leader sink unavailable');
-    sink(party, living.name, global.GM, reason || '党派首领变更');
+    sink(party, living.id || living.name, global.GM, reason || '党派首领变更');
     return party && party.leader === living.name && party.head === living.name ? true : _tmRecordSemanticFailure(kind || 'party_leader', ref, 'party leader sink rejected write');
   }
   function _tmApplyLoyaltyDelta(ch, delta, reason, source, opts) {
@@ -429,7 +430,7 @@
                         else p.holder = '';
                       }
                     });
-                    if (n.subs) _rmHolder(n.subs);
+                    if (Array.isArray(n.subs)) _rmHolder(n.subs);
                   });
                 })(GM.officeTree);
               }
@@ -1523,7 +1524,7 @@
                   var found = n.positions.find(function(p){ return p && p.name === sp.position; });
                   if (found && !targetPos) { targetPos = found; targetDept = n; }
                 }
-                if (n.subs) walk(n.subs, chain);
+                if (Array.isArray(n.subs)) walk(n.subs, chain);
               });
             })(GM.officeTree, '');
             if (!targetPos) {
@@ -1664,18 +1665,18 @@
         // ── 势力继承事件 ──
         if (p1.faction_succession && Array.isArray(p1.faction_succession) && GM.facs) {
           p1.faction_succession.forEach(function(sc) {
-            if (!sc || !sc.faction || !sc.newLeader) return;
-            var fObj = GM.facs.find(function(f){return f.name === sc.faction;});
+            if (!sc || !(sc.factionId || sc.faction) || !(sc.newLeaderId || sc.newLeader)) return;
+            var fObj = _tmExactFaction(sc.factionId || sc.faction);
             if (!fObj) return;
             var oldLeader = fObj.leader;
-            if (!_tmSetFactionLeaderCanonical(fObj, sc.newLeader, sc.narrative || '势力继统', 'faction_succession.newLeader')) return;
+            if (!_tmSetFactionLeaderCanonical(fObj, sc.newLeaderId || sc.newLeader, sc.narrative || '势力继统', 'faction_succession.newLeader')) return;
             if (!fObj.succession) fObj.succession = { rule: 'primogeniture', designatedHeir: '', stability: 60 };
             fObj.succession.stability = Math.max(0, Math.min(100, (fObj.succession.stability||60) + (parseInt(sc.stability_delta)||0)));
             if (!Array.isArray(fObj.historicalEvents)) fObj.historicalEvents = [];
-            fObj.historicalEvents.push({ turn: GM.turn, event: sc.disputeType || '继承', impact: oldLeader + '→' + sc.newLeader });
-            addEB('\u7EE7\u627F', '\u3010' + sc.faction + '\u3011' + (oldLeader||'?') + '\u2192' + sc.newLeader + '(' + ({forced_abdication:'逼宫禅位',contested_succession:'争立',usurpation:'篡位',coup:'政变夺位',regency:'摄政',peaceful:'平稳承袭'}[sc.disputeType]||sc.disputeType||'\u6B63\u5E38\u7EE7\u627F') + ')' + (sc.narrative ? '\uFF1A' + sc.narrative.slice(0,80) : ''));
+            fObj.historicalEvents.push({ turn: GM.turn, event: sc.disputeType || '继承', impact: oldLeader + '→' + fObj.leader });
+            addEB('\u7EE7\u627F', '\u3010' + (fObj.name || sc.faction) + '\u3011' + (oldLeader||'?') + '\u2192' + fObj.leader + '(' + ({forced_abdication:'逼宫禅位',contested_succession:'争立',usurpation:'篡位',coup:'政变夺位',regency:'摄政',peaceful:'平稳承袭'}[sc.disputeType]||sc.disputeType||'\u6B63\u5E38\u7EE7\u627F') + ')' + (sc.narrative ? '\uFF1A' + sc.narrative.slice(0,80) : ''));
             if (GM.qijuHistory) {
-              if (typeof TM !== 'undefined' && TM.Qiju) TM.Qiju.recordEntry({ turn: GM.turn, date: typeof getTSText==='function'?getTSText(GM.turn):'', content: '\u3010\u7EE7\u627F\u4E8B\u3011' + sc.faction + '\uFF1A' + sc.narrative, category: '\u52BF\u529B' });
+              if (typeof TM !== 'undefined' && TM.Qiju) TM.Qiju.recordEntry({ turn: GM.turn, date: typeof getTSText==='function'?getTSText(GM.turn):'', content: '\u3010\u7EE7\u627F\u4E8B\u3011' + (fObj.name || sc.faction) + '\uFF1A' + sc.narrative, category: '\u52BF\u529B' });
             }
           });
         }
@@ -2896,7 +2897,7 @@
                                   }
                                 });
                               }
-                              if (nd.subs) _findNewPos(nd.subs);
+                              if (Array.isArray(nd.subs)) _findNewPos(nd.subs);
                             });
                           })(GM.officeTree);
                         }
@@ -2936,7 +2937,7 @@
                                 }
                               });
                             }
-                            if (nd2.subs) _findTP(nd2.subs);
+                            if (Array.isArray(nd2.subs)) _findTP(nd2.subs);
                           });
                         })(GM.officeTree);
                         var _tch = findCharByName(_tPerson);
@@ -3037,7 +3038,7 @@
                     }
                   });
                 }
-                if (node.subs) walkTree(node.subs);
+                if (Array.isArray(node.subs)) walkTree(node.subs);
               });
             })(GM.officeTree);
             // 单一真相源:树无精确匹配的人事变动·仍把意图写入人物 officialTitle(派生据此落座/卸座)·
@@ -3073,7 +3074,7 @@
                       };
                       n.positions.push(_newPos);
                     }
-                    if (n.subs) _addPos(n.subs);
+                    if (Array.isArray(n.subs)) _addPos(n.subs);
                   });
                 })(GM.officeTree);
                 addEB('官制改革', oc.dept + '增设' + oc.position + (oc.reason ? '（' + oc.reason + '）' : ''));
@@ -3084,10 +3085,10 @@
                   (function _addSub(ns) {
                     ns.forEach(function(n) {
                       if (n.name === oc.dept) {
-                        if (!n.subs) n.subs = [];
+                        if (!Array.isArray(n.subs)) n.subs = [];
                         n.subs.push({ name: oc.newDept, desc: oc.reason||'', positions: [], subs: [], functions: [] });
                       }
-                      if (n.subs) _addSub(n.subs);
+                      if (Array.isArray(n.subs)) _addSub(n.subs);
                     });
                   })(GM.officeTree);
                   addEB('官制改革', oc.dept + '下增设' + oc.newDept);
@@ -3110,38 +3111,38 @@
                         });
                         n.positions = n.positions.filter(function(p) { return p.name !== oc.position; });
                       }
-                      if (n.subs) _delPos(n.subs);
+                      if (Array.isArray(n.subs)) _delPos(n.subs);
                     });
                   })(GM.officeTree);
                   addEB('官制改革', '裁撤' + oc.dept + oc.position);
                 } else {
                   // 裁撤部门
                   GM.officeTree = GM.officeTree.filter(function(d) { return d.name !== oc.dept; });
-                  (function _delSub(ns) { ns.forEach(function(n) { if (n.subs) { n.subs = n.subs.filter(function(s) { return s.name !== oc.dept; }); _delSub(n.subs); } }); })(GM.officeTree);
+                  (function _delSub(ns) { if (!Array.isArray(ns)) return; ns.forEach(function(n) { if (Array.isArray(n.subs)) { n.subs = n.subs.filter(function(s) { return s.name !== oc.dept; }); _delSub(n.subs); } }); })(GM.officeTree);
                   addEB('官制改革', '裁撤' + oc.dept + (oc.reason ? '（' + oc.reason + '）' : ''));
                 }
               } else if (_rd.indexOf('改名') >= 0 || _rd.indexOf('更名') >= 0) {
-                (function _rename(ns) { ns.forEach(function(n) { if (n.name === oc.dept && oc.newDept) n.name = oc.newDept; if (n.subs) _rename(n.subs); }); })(GM.officeTree);
+                (function _rename(ns) { if (!Array.isArray(ns)) return; ns.forEach(function(n) { if (n.name === oc.dept && oc.newDept) n.name = oc.newDept; if (Array.isArray(n.subs)) _rename(n.subs); }); })(GM.officeTree);
                 addEB('官制改革', oc.dept + '更名为' + (oc.newDept||''));
               } else if (_rd.indexOf('合并') >= 0) {
                 // 合并：将oc.dept合并入oc.newDept（职位转移）
                 var _srcDept = null;
-                (function _findSrc(ns) { ns.forEach(function(n) { if (n.name === oc.dept) _srcDept = n; if (n.subs) _findSrc(n.subs); }); })(GM.officeTree);
+                (function _findSrc(ns) { if (!Array.isArray(ns)) return; ns.forEach(function(n) { if (n.name === oc.dept) _srcDept = n; if (Array.isArray(n.subs)) _findSrc(n.subs); }); })(GM.officeTree);
                 if (_srcDept) {
                   (function _findDst(ns) {
                     ns.forEach(function(n) {
                       if (n.name === oc.newDept) {
                         if (!n.positions) n.positions = [];
                         (_srcDept.positions||[]).forEach(function(p) { n.positions.push(p); });
-                        if (!n.subs) n.subs = [];
-                        (_srcDept.subs||[]).forEach(function(s) { n.subs.push(s); });
+                        if (!Array.isArray(n.subs)) n.subs = [];
+                        (Array.isArray(_srcDept.subs) ? _srcDept.subs : []).forEach(function(s) { n.subs.push(s); });
                       }
-                      if (n.subs) _findDst(n.subs);
+                      if (Array.isArray(n.subs)) _findDst(n.subs);
                     });
                   })(GM.officeTree);
                   // 删除源部门
                   GM.officeTree = GM.officeTree.filter(function(d) { return d.name !== oc.dept; });
-                  (function _delMerged(ns) { ns.forEach(function(n) { if (n.subs) { n.subs = n.subs.filter(function(s) { return s.name !== oc.dept; }); _delMerged(n.subs); } }); })(GM.officeTree);
+                  (function _delMerged(ns) { if (!Array.isArray(ns)) return; ns.forEach(function(n) { if (Array.isArray(n.subs)) { n.subs = n.subs.filter(function(s) { return s.name !== oc.dept; }); _delMerged(n.subs); } }); })(GM.officeTree);
                   addEB('官制改革', oc.dept + '并入' + oc.newDept);
                 }
               } else if (_rd.indexOf('拆分') >= 0 && Array.isArray(oc.splitInto) && oc.splitInto.length > 0) {
@@ -3150,7 +3151,7 @@
                 (function _findSp(ns, parent) {
                   ns.forEach(function(n) {
                     if (n.name === oc.dept) { _splitSrc = n; _splitParent = parent; }
-                    if (n.subs) _findSp(n.subs, n);
+                    if (Array.isArray(n.subs)) _findSp(n.subs, n);
                   });
                 })(GM.officeTree, null);
                 if (_splitSrc) {
@@ -3203,14 +3204,14 @@
                           establishedCount: 1, vacancyCount: 1, actualHolders: []
                         });
                       }
-                      if (n.subs) _ap(n.subs);
+                      if (Array.isArray(n.subs)) _ap(n.subs);
                     }); })(GM.officeTree);
                     _restructureCount++;
                   } else if (atom.action === '裁撤' && subOC.position && subOC.dept) {
-                    (function _dp(ns) { ns.forEach(function(n) { if (n.name === subOC.dept && n.positions) n.positions = n.positions.filter(function(p) { return p.name !== subOC.position; }); if (n.subs) _dp(n.subs); }); })(GM.officeTree);
+                    (function _dp(ns) { if (!Array.isArray(ns)) return; ns.forEach(function(n) { if (n.name === subOC.dept && n.positions) n.positions = n.positions.filter(function(p) { return p.name !== subOC.position; }); if (Array.isArray(n.subs)) _dp(n.subs); }); })(GM.officeTree);
                     _restructureCount++;
                   } else if (atom.action === '改名' && subOC.dept && subOC.newDept) {
-                    (function _rn(ns) { ns.forEach(function(n) { if (n.name === subOC.dept) n.name = subOC.newDept; if (n.subs) _rn(n.subs); }); })(GM.officeTree);
+                    (function _rn(ns) { if (!Array.isArray(ns)) return; ns.forEach(function(n) { if (n.name === subOC.dept) n.name = subOC.newDept; if (Array.isArray(n.subs)) _rn(n.subs); }); })(GM.officeTree);
                     _restructureCount++;
                   }
                 });
@@ -3235,7 +3236,7 @@
                       }
                     });
                   }
-                  if (n.subs) _recHistory(n.subs);
+                  if (Array.isArray(n.subs)) _recHistory(n.subs);
                 });
               })(GM.officeTree);
             }
@@ -3280,7 +3281,7 @@
             if (!oa.dept) return;
             // 找到对应部门
             var _targetDept = null;
-            (function _fd(ns) { ns.forEach(function(n) { if (n.name === oa.dept) _targetDept = n; if (n.subs) _fd(n.subs); }); })(GM.officeTree);
+            (function _fd(ns) { if (!Array.isArray(ns)) return; ns.forEach(function(n) { if (n.name === oa.dept) _targetDept = n; if (Array.isArray(n.subs)) _fd(n.subs); }); })(GM.officeTree);
             if (!_targetDept) return;
             // actualCount变动（递补/离职）
             if (oa.actualCount_delta) {
@@ -3664,7 +3665,7 @@
                         }
                       });
                     }
-                    if (nd.subs) _syncOffPos(nd.subs);
+                    if (Array.isArray(nd.subs)) _syncOffPos(nd.subs);
                   });
                 })(GM.officeTree);
               }
@@ -3680,7 +3681,7 @@
                   (function _clrOffPos(nodes) {
                     nodes.forEach(function(nd) {
                       if (nd.positions) nd.positions.forEach(function(p) { if (p.name === _targetDiv.officialPosition && p.holder === _removedGov) p.holder = ''; });
-                      if (nd.subs) _clrOffPos(nd.subs);
+                      if (Array.isArray(nd.subs)) _clrOffPos(nd.subs);
                     });
                   })(GM.officeTree);
                 }

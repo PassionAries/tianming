@@ -50,10 +50,14 @@ assert(/async function\s+_callFollowupAI\s*\(/.test(followup), 'followup AI stat
 assert(/function\s+preflightAIWriteBack\s*\(/.test(apply), 'write preflight helper exists');
 assert(/global\.preflightAIWriteBack\s*=\s*preflightAIWriteBack/.test(apply), 'write preflight exported globally');
 assert(/preflightAIWriteBack\(aiOutput/.test(apply), 'applyAITurnChanges invokes preflight');
+assert(/function\s+validateAIWriteBackBatch\s*\(/.test(apply), 'strict detached writeback validator exists');
+assert(/global\.validateAIWriteBackBatch\s*=\s*validateAIWriteBackBatch/.test(apply), 'strict validator exported globally');
 assert(/character_deaths/.test(apply) && /faction_dissolve/.test(apply) && /battleResult/.test(apply), 'high impact fields covered');
 assert(/function\s+_tmResolveChar\s*\(/.test(apply) && /function\s+_tmResolveFaction\s*\(/.test(apply), 'weak entity resolvers exist');
 assert(/_tmWeakEntityHint/.test(apply) && /_aiWeakWriteHints/.test(apply), 'weak write hints are recorded');
-assert(/preflightAIWriteBack\(p1/.test(endApply), 'full p1 preflight runs before field writeback');
+assert(/function\s+_validateAndRepairMainWriteback\s*\(/.test(endApply), 'main writeback validates before field application');
+assert(/await\s+_validateAndRepairMainWriteback\(/.test(endApply), 'main writeback awaits bounded repair before atomic apply');
+assert(/_strictValidation\s*:\s*true/.test(endApply), 'atomic applier is invoked in strict validation mode');
 
 assert(/GM\._lastAIDiagnostics/.test(render), 'render reads diagnostics');
 assert(/hidden summary/.test(render), 'render keeps diagnostics hidden from player feed');

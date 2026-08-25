@@ -6,6 +6,7 @@ const path = require('path');
 const vm = require('vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'tm-save-lifecycle.js'), 'utf8');
+const closeSource = fs.readFileSync(path.join(__dirname, '..', 'tm-save-close-flush.js'), 'utf8');
 const coreSource = fs.readFileSync(path.join(__dirname, '..', 'tm-endturn-core.js'), 'utf8');
 const start = source.indexOf('var _autoSaveInFlight=false;');
 const end = source.indexOf('if(_tmHasNativeFs()){', start);
@@ -25,10 +26,12 @@ function clone(value) { return JSON.parse(JSON.stringify(value)); }
 async function main() {
   const writes = [];
   const preEndturnWrites = [];
+  const backgroundTransactions = [];
   const localValues = new Map();
   let sessionToken = 'session-a';
   let delayedWriteResolve = null;
   let delayNextWrite = false;
+  let closeFlushCallback = null;
   const context = {
     console,
     Date,
@@ -54,6 +57,14 @@ async function main() {
           }
           writes.push(clone(payload));
           return { success: true };
+        },
+        onAppCloseFlushRequest(callback) {
+          closeFlushCallback = callback;
+          return function dispose() {
+            if (closeFlushCallback !== callback) return false;
+            closeFlushCallback = null;
+            return true;
+          };
         }
       }
     },
@@ -72,6 +83,26 @@ async function main() {
           throw new Error('pre_endturn write guard rejected click-state');
         }
         preEndturnWrites.push({ id, state: clone(state), meta: clone(meta) });
+        return true;
+      },
+      async createCanonicalPayload(state, identity) {
+        return { state: clone(state), identity: clone(identity), json: JSON.stringify(state), checksum: 'background-test' };
+      },
+      async saveManyAtomic(entries, options) {
+        if (context.__backgroundSaveFailuresRemaining > 0) {
+          context.__backgroundSaveFailuresRemaining--;
+          throw new Error('injected background atomic failure');
+        }
+        if (!options || typeof options.writeGuard !== 'function' || options.writeGuard() !== true) {
+          throw new Error('background write guard rejected world');
+        }
+        backgroundTransactions.push({
+          ids: entries.map(entry => entry.id),
+          states: entries.map(entry => clone(entry.gameState)),
+          payloads: entries.map(entry => entry.canonicalPayload),
+          meta: clone(entries[0].meta),
+          transactionId: options.transactionId
+        });
         return true;
       }
     },
@@ -102,8 +133,10 @@ async function main() {
   };
   vm.createContext(context);
   vm.runInContext(source.slice(start, end), context, { filename: 'tm-save-lifecycle-autosave-slice.js' });
+  vm.runInContext(closeSource, context, { filename: 'tm-save-close-flush.js' });
   vm.runInContext(coreSource.slice(coreStart, coreEnd), context, { filename: 'tm-endturn-core-transaction-slice.js' });
 
+  check('桌面存档生命周期安装关闭前 flush 回调', typeof closeFlushCallback === 'function');
   check('统一世界事务判定函数可用', typeof context.isWorldTransactionActive === 'function');
   const cyclicGM = Object.assign({}, context.GM);
   cyclicGM._postTurnJobs = { pending: [{ id: 'critical', gmRef: cyclicGM }] };
@@ -219,6 +252,111 @@ async function main() {
   const newWorldWrite = await context._tmRunDesktopAutoSaveTick({ force: true });
   check('新世界只写入本战役已提交快照', newWorldWrite.ok === true
     && writes[writes.length - 1].gameState._campaignId === 'campaign-b');
+
+  const backgroundLease = {
+    gmRef: context.GM,
+    pRef: context.P,
+    campaignId: context.GM._campaignId,
+    sid: context.GM.sid,
+    turn: context.GM.turn,
+    loadGen: context.window._tmLoadGen
+  };
+  context.GM._aiMemorySummary = '后台摘要已完成';
+  context.GM._monthlyChronicle = [{ turn: context.GM.turn, text: '本月纪事' }];
+  await context.requestBackgroundAutosave({ reason: 'ai-memory-summary-complete', expectedWorldLease: backgroundLease, expectedTurn: context.GM.turn });
+  await context.requestBackgroundAutosave({ reason: 'monthly-chronicle-complete', expectedWorldLease: backgroundLease, expectedTurn: context.GM.turn });
+  await context._tmAwaitBackgroundAutosaves();
+  check('摘要与月度纪事保存请求合并为一个 canonical 双槽事务', backgroundTransactions.length === 1
+    && backgroundTransactions[0].ids.join(',') === 'autosave,slot_0'
+    && backgroundTransactions[0].meta.backgroundReasons.length === 2);
+  check('双槽共享同一 canonical payload 且保存后台完成后的最新状态', backgroundTransactions[0].payloads[0] === backgroundTransactions[0].payloads[1]
+    && backgroundTransactions[0].states[0].GM._aiMemorySummary === '后台摘要已完成'
+    && backgroundTransactions[0].states[1].GM._monthlyChronicle.length === 1);
+  check('后台 canonical 提交后推进 committed snapshot', context.lastCommittedSnapshot.GM._aiMemorySummary === '后台摘要已完成');
+
+  const staleLease = Object.assign({}, backgroundLease);
+  context.GM._campaignId = 'campaign-c';
+  const staleSave = await context.requestBackgroundAutosave({ reason: 'stale-world-result', expectedWorldLease: staleLease, expectedTurn: staleLease.turn });
+  await context._tmAwaitBackgroundAutosaves();
+  check('切档后的旧后台结果不会写入新世界', staleSave.stale === true && backgroundTransactions.length === 1);
+
+  context.GM._campaignId = 'campaign-b';
+  const retryLease = Object.assign({}, backgroundLease, { gmRef: context.GM, pRef: context.P });
+  context.__backgroundSaveFailuresRemaining = 1;
+  await context.requestBackgroundAutosave({ reason: 'retry-once', expectedWorldLease: retryLease, expectedTurn: retryLease.turn });
+  await context._tmAwaitBackgroundAutosaves();
+  await context._tmAwaitBackgroundAutosaves();
+  check('后台保存失败只做有限重试并最终原子成功', backgroundTransactions.length === 2
+    && backgroundTransactions[1].meta.backgroundReasons[0] === 'retry-once');
+
+  const mismatch = await context.requestBackgroundAutosave({ reason: 'wrong-turn', expectedWorldLease: retryLease, expectedTurn: retryLease.turn + 1 });
+  check('后台保存拒绝与 lease 不一致的回合身份', mismatch.stale === true && mismatch.reason === 'background-turn-mismatch');
+
+  context.GM._aiMemorySummary = '退出前刚完成的后台摘要';
+  const beforeCloseFlush = backgroundTransactions.length;
+  const beforeCloseMirrorWrites = writes.length;
+  delayedWriteResolve = null;
+  delayNextWrite = true;
+  await context.requestBackgroundAutosave({
+    reason: 'summary-complete-before-exit',
+    expectedWorldLease: retryLease,
+    expectedTurn: retryLease.turn
+  });
+  let closeFlushSettled = false;
+  const closeFlushPromise = Promise.resolve(closeFlushCallback({ reason: 'renderer-quit' })).then((result) => {
+    closeFlushSettled = true;
+    return result;
+  });
+  for (let spin = 0; !delayedWriteResolve && spin < 20; spin++) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  check('关闭握手会等待桌面自动档 IPC 而非仅等待 canonical 双槽', typeof delayedWriteResolve === 'function' && closeFlushSettled === false);
+  const firstCloseMirrorResolve = delayedWriteResolve;
+  context.GM._aiMemorySummary = '关闭等待期间新完成的后台摘要';
+  const duringCloseSave = await context.requestBackgroundAutosave({
+    reason: 'summary-complete-during-close',
+    expectedWorldLease: retryLease,
+    expectedTurn: retryLease.turn
+  });
+  check('桌面镜像在途时新摘要仍进入独立 canonical 保存队列', duringCloseSave.ok === true
+    && closeFlushSettled === false);
+  delayNextWrite = true;
+  firstCloseMirrorResolve();
+  for (let spin = 0; delayedWriteResolve === firstCloseMirrorResolve && spin < 40; spin++) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  check('首次镜像完成后关闭握手继续等待新 canonical 对应的第二个桌面镜像',
+    typeof delayedWriteResolve === 'function' && delayedWriteResolve !== firstCloseMirrorResolve
+    && closeFlushSettled === false && backgroundTransactions.length === beforeCloseFlush + 2);
+  delayedWriteResolve();
+  const closeFlush = await closeFlushPromise;
+  check('立即退出握手会实际 drain 后台保存而非只提示', closeFlush.ok === true
+    && closeFlush.quiescencePasses === 2
+    && backgroundTransactions.length === beforeCloseFlush + 2
+    && backgroundTransactions[backgroundTransactions.length - 1].states[0].GM._aiMemorySummary === '关闭等待期间新完成的后台摘要');
+  check('关闭握手把最新后台摘要同步到桌面恢复镜像', writes.length === beforeCloseMirrorWrites + 2
+    && writes[writes.length - 1].gameState._aiMemorySummary === '关闭等待期间新完成的后台摘要');
+  check('关闭握手成功后 canonical 与桌面镜像都不存在待保存或在途任务',
+    !context._backgroundSavePending && !context._backgroundSaveInFlight
+    && !context._autoSaveDeferred && !context._autoSaveFlushTimer
+    && !context._autoSaveInFlight && !context._autoSaveInFlightPromise);
+
+  context.GM.busy = true;
+  context.GM._endTurnCommitPending = true;
+  const blockedClose = await closeFlushCallback({ reason: 'window-close' });
+  check('世界事务活跃时关闭握手明确拒绝退出', blockedClose.ok === false
+    && blockedClose.code === 'world-transaction-active');
+  context.GM.busy = false;
+  context.GM._endTurnCommitPending = false;
+
+  const memoryStart = coreSource.indexOf('(function _aiMemoryCompress()');
+  const chronicleStart = coreSource.indexOf('(function _monthlyChronicle()');
+  const chronicleEnd = coreSource.indexOf('\n  })();', chronicleStart);
+  const memoryBlock = coreSource.slice(memoryStart, chronicleStart);
+  const chronicleBlock = coreSource.slice(chronicleStart, chronicleEnd);
+  check('后台摘要和月度纪事都请求正式串行保存队列', /requestBackgroundAutosave/.test(memoryBlock) && /requestBackgroundAutosave/.test(chronicleBlock));
+  check('月度纪事关闭时在任何 AI 调用前退出', chronicleBlock.indexOf('if (!_mCfg.monthlyEnabled) return;') >= 0
+    && chronicleBlock.indexOf('if (!_mCfg.monthlyEnabled) return;') < chronicleBlock.indexOf('callAIMessages'));
 
   console.log('[smoke-desktop-autosave-committed-world] pass=' + pass);
 }

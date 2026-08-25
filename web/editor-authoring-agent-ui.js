@@ -1142,6 +1142,44 @@
 
   function setStatus(t) { if (ui.els) ui.els.status.textContent = t || ''; }
 
+  // 用户主动写操作必须先确认底层持久化成功，再更新按钮或显示成功。
+  function _reportUserWriteFailure(error, operation, target) {
+    var err = error && typeof error === 'object' ? error : new Error(String(error || '未知错误'));
+    var reported = false;
+    try {
+      if (global.TM && global.TM.errors && typeof global.TM.errors.capture === 'function') {
+        global.TM.errors.capture(err, 'authoring-agent.user-write', { operation: operation || 'unknown', target: target || '' });
+        reported = true;
+      }
+    } catch (captureError) {
+      if (global.console && typeof global.console.error === 'function') global.console.error('[authoring-agent] 写失败诊断记录异常', captureError);
+    }
+    if (!reported && global.console && typeof global.console.error === 'function') {
+      global.console.error('[authoring-agent] 用户写操作失败', operation || 'unknown', target || '', err);
+    }
+    return err;
+  }
+  function _commitUserWrite(opts) {
+    opts = opts || {};
+    var result;
+    try {
+      if (typeof opts.run !== 'function') throw new Error('缺少写操作处理器');
+      result = opts.run();
+      if (!(result === true || (result && result.ok === true))) {
+        var rejected = new Error(String((result && (result.error || result.reason || result.code)) || '操作未完成'));
+        rejected.code = (result && result.code) || 'authoring-user-write-failed';
+        throw rejected;
+      }
+    } catch (error) {
+      var err = _reportUserWriteFailure(error, opts.operation, opts.target);
+      setStatus((opts.failureLabel || '操作') + '失败：' + String((err && err.message) || err));
+      return false;
+    }
+    if (typeof opts.onSuccess === 'function') opts.onSuccess(result);
+    if (opts.successMessage) setStatus(typeof opts.successMessage === 'function' ? opts.successMessage(result) : opts.successMessage);
+    return true;
+  }
+
   // 方向I · 可观测性：运行中实时 token / 耗时 / 轮次计量条。
   function _fmtTok(n) { n = n || 0; return n >= 1000 ? (Math.round(n / 100) / 10) + 'k' : String(n); }
   function _renderMeter(done) {
@@ -1482,7 +1520,12 @@
     var cur = _loadScenConv(), lines = cur ? cur.split('\n') : [];
     if (lines.indexOf(conv) >= 0) return true;
     lines.push(conv);
-    return _saveScenConv(lines.join('\n'));
+    return _commitUserWrite({
+      operation: 'convention-save',
+      target: _fileKey(),
+      failureLabel: '记住本剧本约定',
+      run: function () { return _saveScenConv(lines.join('\n')); }
+    });
   }
   // S11 · 审阅报告尾追加「发现的约定」记住签（复用本剧本层落点）
   function _renderConvSuggest(sug) {
@@ -1553,7 +1596,16 @@
         + (s ? '<button type="button" class="tm-aa-conv-clear">清空本剧本约定</button>' : '') + '</div>';
       ui.els.summary.style.display = '';
       var cb = ui.els.summary.querySelector('.tm-aa-conv-clear');
-      if (cb) cb.addEventListener('click', function () { _saveScenConv(''); cb.textContent = '已清空 ✓'; cb.disabled = true; setStatus('本剧本约定已清空'); });
+      if (cb) cb.addEventListener('click', function () {
+        _commitUserWrite({
+          operation: 'convention-clear',
+          target: _fileKey(),
+          failureLabel: '清空本剧本约定',
+          run: function () { return _saveScenConv(''); },
+          onSuccess: function () { cb.textContent = '已清空 ✓'; cb.disabled = true; },
+          successMessage: '本剧本约定已清空'
+        });
+      });
     }
     _freezeLastReply();
     setStatus('约定两层：全局' + (g ? ' ' + g.split('\n').filter(Boolean).length + ' 条' : '空') + ' · 本剧本' + (s ? ' ' + s.split('\n').filter(Boolean).length + ' 条' : '空'));
@@ -1583,7 +1635,15 @@
       : '<div style="color:var(--tx3)">（空 · 国师在共事中了解到推导不出的背景时会自动存；也可让它「把XX记住」）</div>';
     var host = _mgmtCard('记忆册（跨会话背景 · 按需求召回注入 · 存 ' + ms.length + ' 条）', body, '记忆 ' + ms.length + ' 条');
     if (host) host.querySelectorAll('[data-mem-del]').forEach(function (b) {
-      b.addEventListener('click', function () { try { AA.memories.remove(b.getAttribute('data-mem-del')); } catch (e) {} b.closest('div').style.opacity = '.35'; b.textContent = '已删 ✓'; b.disabled = true; });
+      b.addEventListener('click', function () {
+        var name = b.getAttribute('data-mem-del');
+        _commitUserWrite({
+          operation: 'memory-remove', target: name, failureLabel: '删除记忆',
+          run: function () { return AA.memories.remove(name); },
+          onSuccess: function () { b.closest('div').style.opacity = '.35'; b.textContent = '已删 ✓'; b.disabled = true; },
+          successMessage: '已删除记忆「' + name + '」'
+        });
+      });
     });
   }
   function showSkillsUI() {   // /技能册 · ≈CC Skill 目录
@@ -1600,7 +1660,15 @@
       : '<div style="color:var(--tx3)">（空）</div>';
     var host = _mgmtCard('技能册（打磨过的操作指令包 · 国师做对应事时自动展开照做 · ' + sk.length + ' 项）', body, '技能 ' + sk.length + ' 项');
     if (host) host.querySelectorAll('[data-skill-del]').forEach(function (b) {
-      b.addEventListener('click', function () { try { AA.skills.remove(b.getAttribute('data-skill-del')); } catch (e) {} b.closest('div').style.opacity = '.35'; b.textContent = '已删 ✓'; b.disabled = true; });
+      b.addEventListener('click', function () {
+        var name = b.getAttribute('data-skill-del');
+        _commitUserWrite({
+          operation: 'skill-remove', target: name, failureLabel: '删除技能',
+          run: function () { return AA.skills.remove(name); },
+          onSuccess: function () { b.closest('div').style.opacity = '.35'; b.textContent = '已删 ✓'; b.disabled = true; },
+          successMessage: '已删除技能「' + name + '」'
+        });
+      });
     });
   }
   function showPacksUI() {   // /能力包 · ≈CC /plugin（启停/导入/导出）
@@ -1617,8 +1685,12 @@
     host.querySelectorAll('[data-pack-tg]').forEach(function (b) {
       b.addEventListener('click', function () {
         var n = b.getAttribute('data-pack-tg'), now = b.textContent === '停用' ? false : true;
-        try { AA.packs.setEnabled(n, now); } catch (e) {}
-        b.textContent = now ? '停用' : '启用'; setStatus('「' + n + '」已' + (now ? '启用' : '停用') + '（下轮生效）');
+        _commitUserWrite({
+          operation: 'pack-set-enabled', target: n, failureLabel: now ? '启用能力包' : '停用能力包',
+          run: function () { return AA.packs.setEnabled(n, now); },
+          onSuccess: function () { b.textContent = now ? '停用' : '启用'; },
+          successMessage: '「' + n + '」已' + (now ? '启用' : '停用') + '（下轮生效）'
+        });
       });
     });
     host.querySelectorAll('[data-pack-exp]').forEach(function (b) {
@@ -1629,15 +1701,26 @@
       });
     });
     host.querySelectorAll('[data-pack-rm]').forEach(function (b) {
-      b.addEventListener('click', function () { try { AA.packs.remove(b.getAttribute('data-pack-rm')); } catch (e) {} b.closest('div').style.opacity = '.35'; b.textContent = '已卸 ✓'; b.disabled = true; });
+      b.addEventListener('click', function () {
+        var name = b.getAttribute('data-pack-rm');
+        _commitUserWrite({
+          operation: 'pack-remove', target: name, failureLabel: '卸载能力包',
+          run: function () { return AA.packs.remove(name); },
+          onSuccess: function () { b.closest('div').style.opacity = '.35'; b.textContent = '已卸 ✓'; b.disabled = true; },
+          successMessage: '已卸载能力包「' + name + '」（下轮生效）'
+        });
+      });
     });
     var ib = host.querySelector('[data-pack-imp]');
     if (ib) ib.addEventListener('click', function () {
       var j = window.prompt('粘贴能力包 JSON：', '');
       if (!j) return;
-      var r = null; try { r = AA.packs.importJSON(j); } catch (e) { r = { ok: false, error: String(e && e.message || e) }; }
-      setStatus(r && r.ok ? '已导入「' + r.imported + '」（' + r.skills + ' 技能·下轮生效）' : '导入失败：' + ((r && r.error) || '未知'));
-      if (r && r.ok) showPacksUI();
+      _commitUserWrite({
+        operation: 'pack-import', target: 'clipboard-json', failureLabel: '导入能力包',
+        run: function () { return AA.packs.importJSON(j); },
+        onSuccess: function () { showPacksUI(); },
+        successMessage: function (r) { return '已导入「' + r.imported + '」（' + r.skills + ' 技能·下轮生效）'; }
+      });
     });
   }
   function showUsageUI() {   // /用量·上下文 · CC /context+/cost 对照（本地 codex-token-usage / claude-hud 思路）
@@ -2882,6 +2965,6 @@
   else init();
 
   // 暴露给测试/调试
-  global.TM_AuthoringAgentUI = { init: init, _ui: ui, undo: undoLastApply, stop: onStop, review: runReview, orchestrate: runOrchestratedUI, preflight: runPreflightUI, qa: runQaUI, explain: runExplainUI, autoMode: _armAutoMode, checkpoint: manualCheckpoint, checkpoints: listCheckpoints, restore: restoreCheckpoint, history: listHistory, clearHistory: clearHistory, changelog: buildChangelog, runChangelog: runChangelogUI, macros: listMacros, saveMacro: saveMacro, deleteMacro: deleteMacro, applyMacro: applyMacro, exportBundle: exportBundle, importBundle: importBundle, detectModels: _detectModels, saveApiCfg: _saveApiCfg, permMode: function (m) { if (m && _PM_LABEL[m]) { var p = _loadPerm(); p.mode = m; _applyPerm(p); } return _loadPerm().mode; }, attachIngest: _ingestFiles, showMemories: showMemoriesUI, showSkills: showSkillsUI, showPacks: showPacksUI, showUsage: showUsageUI,
+  global.TM_AuthoringAgentUI = { init: init, _ui: ui, _commitUserWrite: _commitUserWrite, undo: undoLastApply, stop: onStop, review: runReview, orchestrate: runOrchestratedUI, preflight: runPreflightUI, qa: runQaUI, explain: runExplainUI, autoMode: _armAutoMode, checkpoint: manualCheckpoint, checkpoints: listCheckpoints, restore: restoreCheckpoint, history: listHistory, clearHistory: clearHistory, changelog: buildChangelog, runChangelog: runChangelogUI, macros: listMacros, saveMacro: saveMacro, deleteMacro: deleteMacro, applyMacro: applyMacro, exportBundle: exportBundle, importBundle: importBundle, detectModels: _detectModels, saveApiCfg: _saveApiCfg, permMode: function (m) { if (m && _PM_LABEL[m]) { var p = _loadPerm(); p.mode = m; _applyPerm(p); } return _loadPerm().mode; }, attachIngest: _ingestFiles, showMemories: showMemoriesUI, showSkills: showSkillsUI, showPacks: showPacksUI, showUsage: showUsageUI,
     listSessions: listSessions, switchSession: switchSession, deleteSession: deleteSession, renameSession: renameSession, forkSession: forkSession, rememberConvention: rememberConvention };
 })(typeof window !== 'undefined' ? window : this);

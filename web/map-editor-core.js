@@ -1254,12 +1254,32 @@
 
   var _handlers = {};
   function on(evt, fn){
+    if (typeof fn !== 'function') throw new TypeError('map-editor event handler must be a function');
     if (!_handlers[evt]) _handlers[evt] = [];
     _handlers[evt].push(fn);
+    var active = true;
+    return function unsubscribe(){
+      if (!active) return false;
+      active = false;
+      return off(evt, fn);
+    };
+  }
+  function off(evt, fn){
+    var arr = _handlers[evt];
+    if (!arr || typeof fn !== 'function') return false;
+    var removed = false;
+    for (var i = arr.length - 1; i >= 0; i--){
+      if (arr[i] !== fn) continue;
+      arr.splice(i, 1);
+      removed = true;
+    }
+    if (!arr.length) delete _handlers[evt];
+    return removed;
   }
   function fire(evt, payload){
     var arr = _handlers[evt];
     if (!arr) return;
+    arr = arr.slice();
     for (var i = 0; i < arr.length; i++){
       try { arr[i](payload); } catch(e){ console.error('[map-editor]', evt, e); }
     }
@@ -1597,6 +1617,7 @@
 
     // events
     on: on,
+    off: off,
     fire: fire
   });
 

@@ -49,9 +49,7 @@ function run(fiscal) {
   load(ctx, 'tm-ai-change-pathutils.js');
   load(ctx, 'tm-ai-change-army.js');
   load(ctx, 'tm-ai-change-narrative.js');
-  load(ctx, 'tm-ai-change-applier.js');
-  load(ctx, 'tm-ai-change-applier-validators.js');
-  load(ctx, 'tm-ai-change-applier-reconcile.js');
+  load(ctx, 'generated/tm-ai-change-applier.bundle.js');
   assert(typeof ctx.applyAITurnChanges === 'function', 'applyAITurnChanges 已加载');
   assert(typeof ctx.preflightAIWriteBack === 'function', 'preflightAIWriteBack 已加载');
 

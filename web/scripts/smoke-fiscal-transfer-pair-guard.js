@@ -49,9 +49,7 @@ function pairWarns(eb) { return eb.filter(e => e.cat === '财政❗' && /转账�
   load(ctx, 'tm-ai-change-pathutils.js');
   load(ctx, 'tm-ai-change-army.js');
   load(ctx, 'tm-ai-change-narrative.js');
-  load(ctx, 'tm-ai-change-applier.js');
-  load(ctx, 'tm-ai-change-applier-validators.js');
-  load(ctx, 'tm-ai-change-applier-reconcile.js');
+  load(ctx, 'generated/tm-ai-change-applier.bundle.js');
   assert(typeof ctx.applyAITurnChanges === 'function', 'applyAITurnChanges 已加载');
 
   // ── 案1·★居平案另一形态被识别：内帑 expense 150万 + 太仓 income 150万·事由同源(无裁减/用度关键字·躲过既有闸1) ──

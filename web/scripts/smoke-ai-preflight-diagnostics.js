@@ -13,7 +13,7 @@ function assert(cond, msg) {
 const infra = read('tm-ai-infra.js');
 const ai = read('tm-endturn-ai.js');
 const followup = read('tm-endturn-followup.js');
-const apply = read('tm-ai-change-applier.js') + '\n' + read('tm-ai-change-applier-validators.js') + '\n' + read('tm-ai-change-applier-reconcile.js');
+const apply = read('generated/tm-ai-change-applier.bundle.js');
 const endApply = read('tm-endturn-apply.js') + '\n' + read('tm-endturn-apply-stages.js'); // apply解构S2·preflightAIWriteBack 等迁 stages·拼接 origin→stages
 const render = read('tm-endturn-render.js');
 

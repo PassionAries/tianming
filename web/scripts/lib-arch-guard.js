@@ -16,7 +16,17 @@ const BASELINE_DIR = path.join(__dirname, 'arch-baselines');
 const REPORT_DIR = path.join(WEB_ROOT, 'dev-tools', 'arch-guard');
 
 // 数据/第三方文件：在运行时清单里但不算「代码」，三个 lint 都跳过
-const DATA_SRC_RE = /(vendor\/|libs\/|\bdata\/|scenarios\/|bundle|snapshot|preview-data|\.min\.js)/i;
+const DATA_SRC_RE = /(vendor\/|libs\/|\bdata\/|scenarios\/|bundled-scenarios\/|snapshot|preview-data|\.min\.js)/i;
+const RUNTIME_SOURCE_EXPANSIONS = Object.freeze({
+  'generated/tm-ai-change-applier.bundle.js': [
+    'modules/ai-change-applier/context.js',
+    'modules/ai-change-applier/core.js',
+    'modules/ai-change-applier/validators.js',
+    'modules/ai-change-applier/reconcile.js',
+    'modules/ai-change-applier/legacy-adapter.js',
+    'modules/ai-change-applier/index.js'
+  ]
+});
 
 /** 解析 index.html 的 <script src> 清单（按出现顺序） */
 function parseIndexScripts(indexHtmlPath) {
@@ -39,7 +49,20 @@ function parseIndexScripts(indexHtmlPath) {
 
 /** 运行时「代码」文件集：清单里存在的、非数据的 .js */
 function runtimeCodeFiles(indexHtmlPath) {
-  return parseIndexScripts(indexHtmlPath).filter(f => f.exists && !f.isData && /\.js$/.test(f.src));
+  const out = [];
+  parseIndexScripts(indexHtmlPath).forEach((file) => {
+    if (!file.exists || file.isData || !/\.js$/.test(file.src)) return;
+    const sources = RUNTIME_SOURCE_EXPANSIONS[file.src];
+    if (!sources) {
+      out.push(file);
+      return;
+    }
+    sources.forEach((src) => {
+      const abs = path.join(WEB_ROOT, src);
+      out.push({ src, abs, isData: false, exists: fs.existsSync(abs), generatedFrom: file.src });
+    });
+  });
+  return out.filter((file) => file.exists);
 }
 
 function isCommentLine(line) {

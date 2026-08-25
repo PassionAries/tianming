@@ -898,7 +898,7 @@
       //   路径正常落(这些字段已入禁区堵万能键 anyPathChanges/changes·但 char_updates 经本闸判源后放行)。loyalty 另有 canonical 闸·不在此列。★宁漏勿误杀。
       var _c3approved = false;
       if (reportType === 'char_update' && !isAppend && /^(?:stance|grade|reputation|fame|faction)$/.test(realKey)) {
-        var _c3g = global.TM && global.TM.__acaParts && global.TM.__acaParts._sensitiveCharFieldSourced;
+        var _c3g = global.TM && global.TM.AIChange && global.TM.AIChange.WriteGuards && global.TM.AIChange.WriteGuards.sensitiveCharFieldSourced;
         if (_c3g && !_c3g(G, (aiOutput || null), entity, realKey, entityName)) return;   // 无源·validators 已留痕·跳过该敏感字段
         _c3approved = true;   // 有源·放行·豁免下方 _isPathBlocked(该字段已入禁区仅为堵万能键·char_updates 经本闸放行)
       }

@@ -33,7 +33,7 @@ function makeCtx() {
   ctx._fuzzyFindChar = (name) => (ctx.GM.chars || []).find(c => c && c.name === name);
   vm.createContext(ctx);
   ['tm-ai-change-pathutils.js', 'tm-ai-change-army.js', 'tm-ai-change-narrative.js',
-   'tm-ai-change-applier.js', 'tm-ai-change-applier-validators.js', 'tm-ai-change-applier-reconcile.js',
+   'generated/tm-ai-change-applier.bundle.js',
    'tm-ai-apply-deaths.js', 'tm-endturn-apply-stages.js']
     .forEach(f => vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f }));
   // 玩家之死裁决器·faithful 记录 stub（真件在 tm-endturn-helpers.js·含顶层副作用不便单独装载·

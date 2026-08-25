@@ -28,7 +28,7 @@
 | `tm-endturn-render.js` | 1,803 | 结算结果渲染 | 保留独立 |
 | `tm-ai-schema.js` | 300 | AI 字段契约单一真源（2026-04-24 新增） | 字段演化只改这里 |
 | `tm-ai-output-validator.js` | 200 | p1 校验，从 schema 读字段（2026-04-24 新增） | 保留 |
-| `tm-ai-change-applier.js` | 2,090 | aiOutput → GM 变更应用 | 需重构：旧字段 appointments/regions/institutions 逐步下线 |
+| `modules/ai-change-applier/` | 6 个 ES module 源 + 单一生成 bundle | aiOutput → GM 变更应用；依赖显式注入 | 旧字段 appointments/regions/institutions 逐步下线；禁止恢复相邻脚本 bucket |
 | `tm-ai-npc-memorials.js` | ~300 | NPC 死亡墓志铭生成 | 保留 |
 
 ### 1.3 子系统引擎（**补丁重灾区**）

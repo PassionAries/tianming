@@ -202,8 +202,8 @@ endTurn()                          ← tm-endturn-core.js（入口 + 前置 acto
      │     并行子调用：subcall1b（文事/势力专项）、subcall1c（诏令问责 directive_compliance）
      │     ⚠️ 安卓侧子调用默认串行 + 响应体积闸（防 WebView OOM，见 memory）
      │
-     ├─ step 'post-ai-edict'        ← tm-endturn-edict.js + tm-ai-change-applier.js
-     │     applyAITurnChanges(p1) @ tm-ai-change-applier.js ← 写回 GM 的主门面
+     ├─ step 'post-ai-edict'        ← tm-endturn-edict.js + generated/tm-ai-change-applier.bundle.js
+     │     applyAITurnChanges(p1) @ modules/ai-change-applier/ ← 写回 GM 的模块岛主门面
      │     各 p1.* 段（character_deaths / office_changes / admin_division_updates /
      │       harem_events / current_issues_update）的消费分散在 tm-endturn-apply.js
      │       与 applier；按 p1 字段名 grep 定位，别记行号
@@ -223,7 +223,7 @@ endTurn()                          ← tm-endturn-core.js（入口 + 前置 acto
 **调试技巧**：
 - 每 step 卡住：看 console，搜 `[catch]` `[ai-validator]` `[SaveMigration]`；step 级错误看 `ctx.stepLog`
 - AI 返回格式异常：`TM.getLastValidation()` 查最近一次校验
-- 变更应用异常：搜 `applyAITurnChanges` 的 try/catch（@ `tm-ai-change-applier.js`）
+- 变更应用异常：搜 `applyAITurnChanges` 的 try/catch（源码 @ `modules/ai-change-applier/`，运行产物 @ `generated/tm-ai-change-applier.bundle.js`）
 
 ---
 

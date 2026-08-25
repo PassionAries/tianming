@@ -105,14 +105,6 @@
         "tm-patches.js"
       ]
     },
-    "_syncFiscalScalars": {
-      "owner": "tm-ai-change-applier.js",
-      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
-      "expectedOrder": [
-        "tm-ai-change-applier.js",
-        "tm-ai-change-applier-reconcile.js"
-      ]
-    },
     "_tmActivePreEndturnSnapshotId": {
       "owner": "tm-endturn-core.js",
       "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",

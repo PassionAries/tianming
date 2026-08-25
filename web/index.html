@@ -935,14 +935,12 @@ console.log('天命游戏脚本开始加载...');
 <script src="tm-ai-schema.js?v=2026052201"></script>
 <script src="tm-ai-output-validator.js?v=2026052201"></script>
 <script src="tm-data-access.js?v=2026042714"></script>
-<!-- 2026-05-21·Slice 1+2+3·tm-ai-change-applier.js 拆出·路径 + army + narrative·必须在 applier 之前加载·pathutils → army → narrative → applier -->
+<!-- AI change 基础能力须在模块岛 bundle 之前加载：pathutils → army → narrative → generated applier。 -->
 <script src="tm-ai-change-pathutils.js?v=20260521-slice1"></script>
 <script src="tm-ai-change-army.js?v=20260521-slice2"></script>
 <script src="tm-ai-change-narrative.js?v=20260521-slice3"></script>
-<script src="tm-ai-change-applier.js?v=20260819-auditfix2"></script>
-<!-- 勿动位置·第二十二拆(IIFE 型·origin-first 双向 bucket TM.__acaParts)：validators/reconcile 两分片须【紧随 applier 之后】按此序连续装载·错序=bucket 缺失崩·契约见 scripts/lint-split-contracts.js -->
-<script src="tm-ai-change-applier-validators.js?v=20260819-auditfix2"></script>
-<script src="tm-ai-change-applier-reconcile.js?v=20260819-auditfix2"></script>
+<!-- ES module 源经受检构建生成单一 IIFE；内部依赖显式注入，不再依赖相邻 classic-script bucket。 -->
+<script src="generated/tm-ai-change-applier.bundle.js?v=20260825-module-island1"></script>
 <script src="tm-ai-npc-memorials.js?v=20260709"></script>
 <!-- 侧边抽屉·已合并三代为单文件 (R116a, 2026-04-24) -->
 <script src="tm-var-drawers.js?v=2026042714"></script>

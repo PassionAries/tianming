@@ -31,7 +31,7 @@ function makeCtx(chars) {
   };
   ctx.window = ctx; ctx.global = ctx; ctx.globalThis = ctx;
   vm.createContext(ctx);
-  ['tm-ai-change-pathutils.js', 'tm-ai-change-army.js', 'tm-ai-change-narrative.js', 'tm-ai-change-applier.js', 'tm-ai-change-applier-validators.js', 'tm-ai-change-applier-reconcile.js'].forEach(f =>
+  ['tm-ai-change-pathutils.js', 'tm-ai-change-army.js', 'tm-ai-change-narrative.js', 'generated/tm-ai-change-applier.bundle.js'].forEach(f =>
     vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f }));
   ctx.GM = { turn: 10, month: 1, officeTree: [], armies: [], chars: chars };
   ctx.P = { playerInfo: { characterName: '崇祯', factionName: '明朝廷' } };

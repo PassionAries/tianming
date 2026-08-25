@@ -23,7 +23,7 @@ var promoteIdx = PROM.indexOf('ch.rankLevel = lv - 1;');
 ok(gateIdx > 0 && promoteIdx > gateIdx, 'gate 位于实际升迁之前');
 
 // ── ② 越级强擢·出身天花板加重 ──
-const APP = fs.readFileSync(path.join(__dirname, '..', 'tm-ai-change-applier.js'), 'utf8');
+const APP = fs.readFileSync(path.join(__dirname, '..', 'generated/tm-ai-change-applier.bundle.js'), 'utf8');
 ok(/_TG\.ceilingGap\(ch, _newLv, G\)/.test(APP), 'applier 取出身天花板级差 ceilingGap');
 ok(/promotion_overceiling/.test(APP), '越天花板擢用→皇威损(promotion_overceiling)');
 ok(/越次逾品·名分有亏/.test(APP), '越天花板皇威损叙事');

@@ -10,8 +10,10 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { pathToFileURL } = require('url');
 const ROOT = path.resolve(__dirname, '..');
 let passed = 0, failed = 0;
+let createValidators;
 function ok(c, m) { if (c) { passed++; console.log('  ✓ ' + m); } else { failed++; console.error('  ✗ ' + m); } }
 
 function makeCtx() {
@@ -33,7 +35,7 @@ function makeCtx() {
   ctx._fuzzyFindChar = (name) => (ctx.GM.chars || []).find(c => c && c.name === name);
   vm.createContext(ctx);
   ['tm-time-utils.js', 'tm-ai-change-pathutils.js', 'tm-ai-change-army.js', 'tm-ai-change-narrative.js',
-   'tm-ai-change-applier.js', 'tm-ai-change-applier-validators.js', 'tm-ai-change-applier-reconcile.js',
+   'generated/tm-ai-change-applier.bundle.js',
    'tm-ai-apply-deaths.js', 'tm-endturn-apply-stages.js', 'tm-endturn-agent-write-tools.js']
     .forEach(f => { vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f }); });
   // C4·当前游戏年权威=calcDateFromTurn(真机读 P.time.year 真开局年+按 turn 推进)。此 stub 同款语义：有 P.time.year 则据其推进·否则 adYear=0(回落 GM.year)。
@@ -58,7 +60,21 @@ function transactionRejected(res) {
   return !!(res && res.ok === false && res.rolledBack === true && res.applied && Array.isArray(res.applied.failed) && res.applied.failed.length);
 }
 
-(function () {
+function validatorApi(ctx) {
+  return createValidators({
+    global: ctx,
+    core: {
+      _alreadyResolvedState: function () { return false; },
+      _readFiscalStock: function () { return 0; },
+      _writeFiscalStock: function () {},
+      onAppointment: ctx.onAppointment,
+      onDismissal: ctx.onDismissal
+    }
+  });
+}
+
+(async function () {
+  ({ createValidators } = await import(pathToFileURL(path.join(ROOT, 'modules/ai-change-applier/validators.js')).href));
   console.log('smoke-write-gate-expansion');
 
   // ══════════════════════════════════════════════════════════════════
@@ -281,7 +297,7 @@ function transactionRejected(res) {
   {
     const ctx = makeCtx();
     ctx.GM = baseGM([{ name: '杨涟', alive: true, faction: '明朝廷', stance: '清流', resources: {} }]);
-    const bkt = ctx.TM.__acaParts;
+    const bkt = validatorApi(ctx);
     const ch = findCh(ctx.GM, '杨涟');
     const p1flat = { char_updates: [{ name: '杨涟', new_stance: '失势', new_party: '' }], shizhengji: '杨涟渐失圣眷。' };   // 真实扁平 SC1 形状
     ok(bkt._sensitiveCharFieldSourced(ctx.GM, p1flat, ch, 'stance', '杨涟') === false, 'issue1 扁平 new_stance 无源→判 false(消费点据此跳过写 ch.stance)');
@@ -290,7 +306,7 @@ function transactionRejected(res) {
     ctx2.GM = baseGM([{ name: '杨涟', alive: true, faction: '明朝廷', stance: '清流', resources: {} }],
       { _playerDirectives: [{ id: 'd1', content: '杨涟结党，着夺其清望' }] });
     const p1b = { char_updates: [{ name: '杨涟', new_stance: '失势' }] };
-    ok(ctx2.TM.__acaParts._sensitiveCharFieldSourced(ctx2.GM, p1b, findCh(ctx2.GM, '杨涟'), 'stance', '杨涟') === true, 'issue1 扁平 new_stance 有玩家诏令源→判 true(照落)');
+    ok(validatorApi(ctx2)._sensitiveCharFieldSourced(ctx2.GM, p1b, findCh(ctx2.GM, '杨涟'), 'stance', '杨涟') === true, 'issue1 扁平 new_stance 有玩家诏令源→判 true(照落)');
   }
   // issue1·契约：真实消费点 tm-endturn-apply.js 扁平 new_stance/new_party 处确已接 _sensitiveCharFieldSourced 闸
   {
@@ -298,7 +314,7 @@ function transactionRejected(res) {
     const _epName = 'tm-endturn-apply' + '.js';
     const src = fs.readFileSync(path.join(ROOT, _epName), 'utf8');
     const seg = src.slice(src.indexOf('if (cu.new_stance'), src.indexOf('if (cu.new_stance') + 700);
-    ok(/_sensitiveCharFieldSourced\([^)]*'stance'/.test(seg) && /_sensitiveCharFieldSourced\([^)]*'party'/.test(seg),
+    ok(/sensitiveCharFieldSourced\(GM, p1, ch, 'stance'/.test(seg) && /sensitiveCharFieldSourced\(GM, p1, ch, 'party'/.test(seg),
       'issue1 契约·消费点 new_stance/new_party 均已内联 _sensitiveCharFieldSourced 判源(扁平绕过已堵)');
   }
 
@@ -450,7 +466,7 @@ function transactionRejected(res) {
   {
     const ctx = makeCtx();
     ctx.GM = baseGM([{ name: '王安', alive: true, faction: '明朝廷', resources: {} }]);
-    const bkt = ctx.TM.__acaParts;
+    const bkt = validatorApi(ctx);
     bkt._wgCachedAllNames(ctx.GM);   // 建缓存(仅王安)
     ctx.GM.chars.push({ name: '王安石', alive: true, faction: '明朝廷', resources: {} });   // 同回合 push(tm-indices addChar 同款)
     const names = bkt._wgCachedAllNames(ctx.GM);
@@ -458,7 +474,7 @@ function transactionRejected(res) {
     // 判源正确性：仅提王安石的奏疏不得给王安当源(最长实体消歧)
     const ctx2 = makeCtx();
     ctx2.GM = baseGM([{ name: '王安', alive: true, faction: '明朝廷', resources: {} }], { memorials: [{ from: '御史', text: '论王安石变法之弊' }] });
-    const bkt2 = ctx2.TM.__acaParts;
+    const bkt2 = validatorApi(ctx2);
     bkt2._wgCachedAllNames(ctx2.GM);
     ctx2.GM.chars.push({ name: '王安石', alive: true, faction: '明朝廷', resources: {} });
     ok(bkt2._writeActionSourced(ctx2.GM, {}, findCh(ctx2.GM, '王安'), { scanInputs: true }) === false, '三轮1 仅提王安石的奏疏·缓存失效后对王安判源正确=无源(不误放)');
@@ -469,7 +485,7 @@ function transactionRejected(res) {
     const crs = [];
     for (let i = 0; i < 8; i++) crs.push({ turn: 5, targetTurn: 5, decisions: [{ title: '寻常议题' + i }] });
     ctx.GM = baseGM([{ name: '杨涟', alive: true, faction: '明朝廷', stance: '清流', resources: {} }], { turn: 5, _courtRecords: crs });
-    const bkt = ctx.TM.__acaParts;
+    const bkt = validatorApi(ctx);
     const t0 = bkt._wgCachedCourtText(ctx.GM);   // 建缓存(无杨涟)
     ok(t0.indexOf('杨涟') < 0, '三轮2 前置·封顶8条裁决无杨涟');
     ctx.GM._courtRecords.push({ turn: 5, targetTurn: 5, decisions: [{ title: '杨涟结党案', detail: '罢黜杨涟' }] });
@@ -482,7 +498,7 @@ function transactionRejected(res) {
     const ctx = makeCtx();
     ctx.GM = baseGM([{ name: '杨涟', alive: true, faction: '明朝廷', stance: '清流', resources: {} }],
       { turn: 5, _lastChangchaoDecisions: [{ title: '论他人事', extra: '与杨涟无涉' }], _lastChangchaoDecisionsTargetTurn: 5 });
-    const bkt = ctx.TM.__acaParts;
+    const bkt = validatorApi(ctx);
     ok(bkt._wgCachedCourtText(ctx.GM).indexOf('杨涟结党') < 0, '三轮3 前置·旧裁决组无杨涟结党');
     ctx.GM._lastChangchaoDecisions = [{ title: '杨涟结党案', extra: '着夺杨涟清望' }];   // 整组替换·len 仍 1
     const t1 = bkt._wgCachedCourtText(ctx.GM);
@@ -495,13 +511,13 @@ function transactionRejected(res) {
                      { name: '王安石', alive: true, faction: '明朝廷', resources: {} },
                      { name: '李四', alive: true, faction: '明朝廷', resources: {} }], { turn: 5 });
     ctx._tmLoadGen = 0;
-    const bkt = ctx.TM.__acaParts;
+    const bkt = validatorApi(ctx);
     bkt._wgCachedAllNames(ctx.GM);   // 建缓存(正确)
     ctx.GM._wgAllNamesCache = ['张三', '王安', '李四'];   // 污染:模拟读档载入的旧局陈旧缓存(首末名/len 全同·仅中间不同)
     ctx._tmLoadGen = 1;   // 读档代际++
     const names = bkt._wgCachedAllNames(ctx.GM);
     ok(names.indexOf('王安石') >= 0 && names.indexOf('王安') < 0, '三轮4 读档 loadGen++ 后·陈旧缓存(同 turn 同首末签名)不命中→按真 chars 重建(不串旧局)');
-    const valSrc = fs2.readFileSync(path2.join(ROOT, 'tm-ai-change-applier-validators.js'), 'utf8');
+    const valSrc = fs2.readFileSync(path2.join(ROOT, 'modules/ai-change-applier/validators.js'), 'utf8');
     ok(/function _wgLoadGen\([^)]*\)\s*\{[^}]*_tmLoadGen/.test(valSrc) && /function _wgAllNamesSig[\s\S]{0,400}_wgLoadGen\(/.test(valSrc) && /function _wgCourtTextSig[\s\S]{0,600}_wgLoadGen\(/.test(valSrc), '三轮4 契约·allNames/court 缓存签名经 _wgLoadGen 并入 _tmLoadGen(读档代际)');
     // SKIP 契约：五缓存键入存档黑名单·派生不落档
     const lifeSrc = fs2.readFileSync(path2.join(ROOT, 'tm-save-lifecycle' + '.js'), 'utf8');
@@ -512,4 +528,7 @@ function transactionRejected(res) {
   console.log('');
   console.log('[smoke-write-gate-expansion] ' + passed + ' passed / ' + failed + ' failed');
   if (failed > 0) process.exit(1);
-})();
+})().catch(function (error) {
+  console.error(error && error.stack || error);
+  process.exit(1);
+});

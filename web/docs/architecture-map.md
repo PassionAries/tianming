@@ -27,7 +27,7 @@ date·2026-05-03 · status·**v0 first cut** (Phase 1 slice 1·Claude draft·Cod
 | 9 | 回合·诏令效果 | `tm-endturn-edict.js` | - | - | - |
 | 10 | AI·LLM 调度 | `tm-ai-infra.js` | - | tm-ai-change-applier | ai-infra |
 | 11 | AI·输出 schema | `tm-ai-schema.js` | - | - | - |
-| 12 | AI·输出应用 | `tm-ai-change-applier.js` | tm-ai-output-validator / tm-ai-apply-deaths | tm-ai-infra | applier |
+| 12 | AI·输出应用 | `modules/ai-change-applier/index.js` → `generated/tm-ai-change-applier.bundle.js` | tm-ai-output-validator / tm-ai-apply-deaths | tm-ai-infra | applier |
 | 13 | AI·prompt 片段复用 | `tm-prompt-composer.js` | - | - | composer-smoke |
 | 14 | AI·规划 | `tm-ai-planning.js` | - | - | - |
 | 15 | AI·NPC 奏疏 | `tm-ai-npc-memorials.js` | - | - | - |

@@ -51,7 +51,7 @@ function loadOfficeRuntime() {
   return { ctx, el };
 }
 
-// ── 加载 tm-ai-change-applier.js 到 vm（真实写入链·registerInstitution 是 :1184 create 分支实调函数）──
+// ── 加载 generated/tm-ai-change-applier.bundle.js 到 vm（真实写入链·registerInstitution 是 :1184 create 分支实调函数）──
 function loadApplier() {
   const ctx = {
     console: { log() {}, warn() {}, error() {} },
@@ -60,7 +60,10 @@ function loadApplier() {
   };
   ctx.window = ctx; ctx.global = ctx; ctx.globalThis = ctx;
   vm.createContext(ctx);
-  vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-ai-change-applier.js'), 'utf8'), ctx, { filename: 'tm-ai-change-applier.js' });
+  ['tm-ai-change-pathutils.js', 'tm-ai-change-army.js', 'tm-ai-change-narrative.js'].forEach(function(file) {
+    vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), ctx, { filename: file });
+  });
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'generated/tm-ai-change-applier.bundle.js'), 'utf8'), ctx, { filename: 'generated/tm-ai-change-applier.bundle.js' });
   return ctx;
 }
 

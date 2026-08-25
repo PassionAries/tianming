@@ -64,9 +64,7 @@ function buildContext() {
   load(ctx, 'tm-ai-change-army.js');
   load(ctx, 'tm-ai-change-narrative.js');
   load(ctx, 'tm-edict-parser.js');
-  load(ctx, 'tm-ai-change-applier.js');
-  load(ctx, 'tm-ai-change-applier-validators.js');
-  load(ctx, 'tm-ai-change-applier-reconcile.js');
+  load(ctx, 'generated/tm-ai-change-applier.bundle.js');
 
   assert(ctx.EdictParser && typeof ctx.EdictParser.registerDynamicInstitution === 'function', 'EdictParser dynamic institution API should load');
   assert(ctx.AIChangeApplier && typeof ctx.AIChangeApplier.applyAITurnChanges === 'function', 'AIChangeApplier should load');

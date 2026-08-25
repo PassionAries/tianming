@@ -17,7 +17,7 @@ function ok(c, m) { if (c) pass++; else { fail++; console.error('  ✗ ' + m); }
 const SRC = fs.readFileSync(path.join(ROOT, 'tm-endturn-helpers.js'), 'utf8');
 const APPLY = fs.readFileSync(path.join(ROOT, 'tm-endturn-apply.js'), 'utf8');
 const EXT = fs.readFileSync(path.join(ROOT, 'tm-three-systems-ext.js'), 'utf8');
-const RECON = fs.readFileSync(path.join(ROOT, 'tm-ai-change-applier-reconcile.js'), 'utf8');
+const RECON = fs.readFileSync(path.join(ROOT, 'generated/tm-ai-change-applier.bundle.js'), 'utf8');
 
 // ═══════════════════ ① 源契约 ═══════════════════
 ok(/function _factionEventRipple\(\)/.test(SRC), '契约:_factionEventRipple 定义存在');

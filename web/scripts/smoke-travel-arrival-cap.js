@@ -23,9 +23,10 @@ function mkCtx() {
   sb.addEB = function () {}; sb.toast = function () {};
   sb.buildIndices = function () {}; sb.renderGameState = function () {};
   vm.createContext(sb);
-  vm.runInContext(fs.readFileSync(path.join(WEB, 'tm-ai-change-applier.js'), 'utf8'), sb, { filename: 'aca.js' });
-  vm.runInContext(fs.readFileSync(path.join(WEB, 'tm-ai-change-applier-validators.js'), 'utf8'), sb, { filename: 'tm-ai-change-applier-validators.js' });
-  vm.runInContext(fs.readFileSync(path.join(WEB, 'tm-ai-change-applier-reconcile.js'), 'utf8'), sb, { filename: 'tm-ai-change-applier-reconcile.js' });
+  ['tm-ai-change-pathutils.js', 'tm-ai-change-army.js', 'tm-ai-change-narrative.js'].forEach(function (file) {
+    vm.runInContext(fs.readFileSync(path.join(WEB, file), 'utf8'), sb, { filename: file });
+  });
+  vm.runInContext(fs.readFileSync(path.join(WEB, 'generated/tm-ai-change-applier.bundle.js'), 'utf8'), sb, { filename: 'generated/tm-ai-change-applier.bundle.js' });
   return sb;
 }
 
@@ -78,7 +79,7 @@ ok(ch._travelElapsedDays === undefined && ch._travelExpectedDays === undefined &
   '④ 抵达后 _travelElapsedDays/_travelExpectedDays/_travelRemainingDays 全清');
 
 // ── 源契约 ──
-const src = fs.readFileSync(path.join(WEB, 'tm-ai-change-applier.js'), 'utf8');
+const src = fs.readFileSync(path.join(WEB, 'modules/ai-change-applier/core.js'), 'utf8');
 ok(/_travelElapsedDays\s*=\s*\(Number\(ch\._travelElapsedDays\)/.test(src), '⑤ 源含 _travelElapsedDays 逐 tick 累计(按天)');
 ok(/Math\.max\(ch\._travelExpectedDays \* 2, 40\)/.test(src), '⑤ 源含天数闸 cap=max(应耗×2, 40)');
 ok(!/MAX_TRAVEL_TURNS/.test(src), '⑤ 不再含旧的按回合计硬上限 MAX_TRAVEL_TURNS');

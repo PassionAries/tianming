@@ -10,7 +10,7 @@ const ROOT = path.resolve(__dirname, '..');
 const pathutilsSrc = fs.readFileSync(path.join(ROOT, 'tm-ai-change-pathutils.js'), 'utf8');
 const armySrc = fs.readFileSync(path.join(ROOT, 'tm-ai-change-army.js'), 'utf8');
 const narrativeSrc = fs.readFileSync(path.join(ROOT, 'tm-ai-change-narrative.js'), 'utf8');
-const src = fs.readFileSync(path.join(ROOT, 'tm-ai-change-applier.js'), 'utf8');
+const src = fs.readFileSync(path.resolve(ROOT, 'generated/tm-ai-change-applier.bundle.js'), 'utf8');
 
 function assert(cond, msg) {
   if (!cond) throw new Error('[assert] ' + msg);
@@ -68,9 +68,7 @@ vm.createContext(context);
 vm.runInContext(pathutilsSrc, context, { filename: 'tm-ai-change-pathutils.js' });
 vm.runInContext(armySrc, context, { filename: 'tm-ai-change-army.js' });
 vm.runInContext(narrativeSrc, context, { filename: 'tm-ai-change-narrative.js' });
-vm.runInContext(src, context, { filename: 'tm-ai-change-applier.js' });
-vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-ai-change-applier-validators.js'), 'utf8'), context, { filename: 'tm-ai-change-applier-validators.js' });
-vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-ai-change-applier-reconcile.js'), 'utf8'), context, { filename: 'tm-ai-change-applier-reconcile.js' });
+vm.runInContext(src, context, { filename: 'generated/tm-ai-change-applier.bundle.js' });
 
 const result = context.applyAITurnChanges({
   changes: [

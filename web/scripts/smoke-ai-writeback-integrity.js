@@ -44,9 +44,7 @@ function makeContext() {
     'tm-ai-change-pathutils.js',
     'tm-ai-change-army.js',
     'tm-ai-change-narrative.js',
-    'tm-ai-change-applier.js',
-    'tm-ai-change-applier-validators.js',
-    'tm-ai-change-applier-reconcile.js'
+    'generated/tm-ai-change-applier.bundle.js'
   ].forEach((file) => {
     vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), ctx, { filename: file });
   });

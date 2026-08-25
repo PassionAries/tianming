@@ -9,6 +9,8 @@
     "verify:official-scenarios": "node web/scripts/verify-official-scenario-parity.js",
     "verify:release-workflow": "node scripts/verify-release-workflow-contract.js",
     "verify:release-contract": "npm run verify:official-scenarios && node scripts/verify-release-contract.js",
+    "build:renderer-modules": "node web/scripts/build-renderer-modules.js",
+    "check:renderer-modules": "node web/scripts/build-renderer-modules.js --check",
     "stage:web-release": "node scripts/stage-web-release.js",
     "verify:pages-artifact": "node scripts/verify-pages-artifact.js",
     "prepare-vendor": "cd web && node tools/download-bge-model.js",
@@ -154,7 +156,8 @@
   "devDependencies": {
     "acorn": "^8.15.0",
     "electron": "^33.0.0",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.25.9"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",

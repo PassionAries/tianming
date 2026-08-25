@@ -21,7 +21,7 @@ ok(/effect: b\.impact/.test(he), 'A: branch.impact→choice.effect(固定·_choo
 ok(/aiHint: b\.aiHint/.test(he), 'A: branch.aiHint→choice.aiHint(AI 裁定用)');
 
 // ── Slice B: AI 主推演 critical events → currentIssues(非死旁支 StoryEventBus) ──
-const ap = fs.readFileSync(path.join(ROOT, 'tm-ai-change-applier.js'), 'utf8');
+const ap = fs.readFileSync(path.join(ROOT, 'modules/ai-change-applier/core.js'), 'utf8');
 ok(/收编进御案时政/.test(ap), 'B: applier critical→收编御案时政');
 ok(/global\._eventAdjudicationOn\(\)/.test(ap), 'B: 开关门控 _eventAdjudicationOn');
 ok(/_G2\.currentIssues\.push/.test(ap), 'B: push currentIssues');

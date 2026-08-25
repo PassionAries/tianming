@@ -33,6 +33,10 @@ assert(featureResult.scriptCount === EAGER_REMOVALS.length, 'first feature cohor
 const loaderSource = fs.readFileSync(path.join(lib.WEB_ROOT, 'tm-feature-loader.js'), 'utf8');
 assert(!/(?:\beval\s*\(|new\s+Function\s*\()/.test(loaderSource), 'feature loader must not execute strings');
 assert(!/TM\.__[A-Za-z0-9]+Parts/.test(loaderSource), 'feature loader must not introduce a parts bucket');
+assert(/feature-reload-required/.test(loaderSource) && /scriptRequiresReload/.test(loaderSource), 'timed-out scripts must require a document reload instead of duplicate insertion');
+assert(/ensureRecoverable/.test(loaderSource), 'feature loader must expose one controlled recovery entry point');
+assert(/disposeRequested/.test(loaderSource), 'feature loader must coordinate dispose requests with in-flight loads');
+assert(/feature-dependency-cycle/.test(loaderSource), 'feature loader must reject dependency cycles at runtime');
 
 const desktopSource = fs.readFileSync(path.join(lib.WEB_ROOT, 'tm-desktop-update.js'), 'utf8');
 assert(/function\s+init\s*\(/.test(desktopSource) && /function\s+dispose\s*\(/.test(desktopSource), 'desktop update must expose an explicit lifecycle');
@@ -44,8 +48,15 @@ assert(!/addEventListener\(\s*['"]DOMContentLoaded['"]\s*,\s*(?:arm|init)/.test(
 
 const mapSource = fs.readFileSync(path.join(lib.WEB_ROOT, 'phase8-formal-map.js'), 'utf8');
 assert(!/var\s+_TMGeo\s*=/.test(mapSource), 'formal map must not capture the optional geometry provider at module load');
-assert(/TM\.Features\.ensure\(['"]formalMapLabels['"]\)/.test(mapSource), 'formal map must request its label feature at first render');
+assert(/TM\.Features\.ensureRecoverable\(['"]formalMapLabels['"]/.test(mapSource), 'formal map must use controlled feature recovery');
 assert(/invalidateMapLabelGeometryCaches/.test(mapSource), 'formal map must invalidate fallback geometry caches after late load');
+const renderStart = mapSource.indexOf('function renderFormalMap(){');
+const renderEnd = mapSource.indexOf('var map = getMapData();', renderStart);
+const renderGate = mapSource.slice(renderStart, renderEnd);
+assert(renderGate.indexOf('if (!shell || !stage || !isGameVisible())') < renderGate.indexOf('requestMapLabelFeature();'), 'formal map must request labels only after its visibility gate');
+
+const contentSource = fs.readFileSync(path.join(lib.WEB_ROOT, 'tm-content-manager.js'), 'utf8');
+assert(/TM\.Features\.ensureRecoverable\(['"]desktopUpdate['"]/.test(contentSource), 'desktop content manager must use controlled feature recovery');
 
 if (fs.existsSync(STARTUP)) {
   const startup = JSON.parse(fs.readFileSync(STARTUP, 'utf8'));

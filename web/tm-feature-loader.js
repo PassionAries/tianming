@@ -11,6 +11,7 @@
   var runtime = Object.create(null);
   var scriptLoads = Object.create(null);
   var manifestPromise = null;
+  var scriptAttemptId = 0;
 
   function featureError(code, message, details) {
     var error = new Error(message || code);
@@ -72,15 +73,67 @@
         promise: null,
         initialized: false,
         retryCount: 0,
-        lastError: null
+        lastError: null,
+        generation: 0,
+        disposeRequested: false
       };
     }
     return runtime[name];
   }
 
+  function dependencyCycle(graph) {
+    var visiting = Object.create(null);
+    var visited = Object.create(null);
+
+    function walk(name, trail) {
+      if (visiting[name]) {
+        var start = trail.indexOf(name);
+        return trail.slice(start >= 0 ? start : 0).concat(name);
+      }
+      if (visited[name] || !graph[name]) return null;
+      visiting[name] = true;
+      var nextTrail = trail.concat(name);
+      var dependencies = Array.isArray(graph[name].dependsOn) ? graph[name].dependsOn : [];
+      for (var i = 0; i < dependencies.length; i++) {
+        if (!graph[dependencies[i]]) continue;
+        var cycle = walk(dependencies[i], nextTrail);
+        if (cycle) return cycle;
+      }
+      visiting[name] = false;
+      visited[name] = true;
+      return null;
+    }
+
+    var names = Object.keys(graph);
+    for (var i = 0; i < names.length; i++) {
+      var cycle = walk(names[i], []);
+      if (cycle) return cycle;
+    }
+    return null;
+  }
+
+  function assertNoDependencyCycle(graph) {
+    var cycle = dependencyCycle(graph);
+    if (cycle) {
+      throw featureError('feature-dependency-cycle', 'feature dependency cycle: ' + cycle.join(' -> '), {
+        cycle: cycle
+      });
+    }
+  }
+
+  function graphWith(pending) {
+    var graph = Object.create(null);
+    Object.keys(definitions).forEach(function (name) { graph[name] = definitions[name]; });
+    Object.keys(pending || {}).forEach(function (name) { graph[name] = pending[name]; });
+    return graph;
+  }
+
   function define(name, input) {
     if (definitions[name]) throw featureError('duplicate-feature-definition', 'feature is already defined: ' + name, { feature: name });
-    definitions[name] = normalizeDefinition(name, input);
+    var pending = Object.create(null);
+    pending[name] = normalizeDefinition(name, input);
+    assertNoDependencyCycle(graphWith(pending));
+    definitions[name] = pending[name];
     stateFor(name).state = 'defined';
     return definitions[name];
   }
@@ -89,10 +142,18 @@
     if (!manifest || manifest.version !== 1 || !manifest.features || typeof manifest.features !== 'object') {
       throw featureError('invalid-feature-manifest', 'feature manifest version 1 is required');
     }
-    Object.keys(manifest.features).forEach(function (name) {
-      define(name, manifest.features[name]);
+    var names = Object.keys(manifest.features);
+    var pending = Object.create(null);
+    names.forEach(function (name) {
+      if (definitions[name]) throw featureError('duplicate-feature-definition', 'feature is already defined: ' + name, { feature: name });
+      pending[name] = normalizeDefinition(name, manifest.features[name]);
     });
-    return Object.keys(manifest.features).length;
+    assertNoDependencyCycle(graphWith(pending));
+    names.forEach(function (name) {
+      definitions[name] = pending[name];
+      stateFor(name).state = 'defined';
+    });
+    return names.length;
   }
 
   function platformKind() {
@@ -134,42 +195,122 @@
     }
   }
 
+  function scriptRequiresReload(record) {
+    return !!record && (record.state === 'timed-out' || record.state === 'loaded-late' || record.state === 'failed-after-timeout');
+  }
+
+  function removeScriptNode(node) {
+    if (!node) return;
+    try {
+      if (typeof node.remove === 'function') node.remove();
+      else if (node.parentNode && typeof node.parentNode.removeChild === 'function') node.parentNode.removeChild(node);
+    } catch (error) {
+      report(error, 'script-remove');
+    }
+  }
+
+  function reloadRequiredError(src, record) {
+    return featureError('feature-reload-required', 'feature script timed out; reload the page before trying again: ' + src, {
+      script: src,
+      scriptState: record && record.state || 'timed-out',
+      attemptId: record && record.attemptId || 0
+    });
+  }
+
   function loadScript(src, timeoutMs) {
-    if (scriptLoads[src]) return scriptLoads[src];
-    scriptLoads[src] = new Promise(function (resolve, reject) {
+    var existing = scriptLoads[src];
+    if (existing) {
+      if (scriptRequiresReload(existing)) return Promise.reject(reloadRequiredError(src, existing));
+      return existing.promise;
+    }
+
+    var record = {
+      state: 'loading',
+      node: null,
+      promise: null,
+      attemptId: ++scriptAttemptId,
+      error: null
+    };
+    scriptLoads[src] = record;
+    record.promise = new Promise(function (resolve, reject) {
       var script = root.document.createElement('script');
+      record.node = script;
       var settled = false;
       var timer = root.setTimeout(function () {
         if (settled) return;
         settled = true;
-        delete scriptLoads[src];
-        script.onload = null;
-        script.onerror = null;
-        reject(featureError('feature-script-timeout', 'feature script timed out: ' + src, { script: src, timeoutMs: timeoutMs }));
+        var timeoutError = featureError('feature-script-timeout', 'feature script timed out: ' + src, {
+          script: src,
+          timeoutMs: timeoutMs,
+          attemptId: record.attemptId
+        });
+        record.state = 'timed-out';
+        record.error = timeoutError;
+        removeScriptNode(script);
+        reject(timeoutError);
       }, timeoutMs);
       script.async = false;
       script.src = src;
       script.dataset.tmFeatureScript = 'true';
       script.onload = function () {
-        if (settled) return;
+        if (settled) {
+          if (record.state === 'timed-out') {
+            record.state = 'loaded-late';
+            report(featureError('feature-script-loaded-late', 'timed-out feature script executed after its deadline: ' + src, {
+              script: src,
+              attemptId: record.attemptId
+            }), 'script-loaded-late');
+          }
+          script.onload = null;
+          script.onerror = null;
+          return;
+        }
         settled = true;
+        record.state = 'loaded';
         root.clearTimeout(timer);
         script.onload = null;
         script.onerror = null;
-        resolve({ ok: true, script: src });
+        resolve({ ok: true, script: src, attemptId: record.attemptId });
       };
       script.onerror = function () {
+        if (settled) {
+          if (record.state === 'timed-out') record.state = 'failed-after-timeout';
+          script.onload = null;
+          script.onerror = null;
+          return;
+        }
+        settled = true;
+        root.clearTimeout(timer);
+        var loadError = featureError('feature-script-load-failed', 'feature script failed to load: ' + src, {
+          script: src,
+          attemptId: record.attemptId
+        });
+        record.state = 'failed';
+        record.error = loadError;
+        delete scriptLoads[src];
+        script.onload = null;
+        script.onerror = null;
+        reject(loadError);
+      };
+      try {
+        (root.document.head || root.document.documentElement).appendChild(script);
+      } catch (error) {
         if (settled) return;
         settled = true;
         root.clearTimeout(timer);
         delete scriptLoads[src];
+        record.state = 'failed';
+        record.error = error;
         script.onload = null;
         script.onerror = null;
-        reject(featureError('feature-script-load-failed', 'feature script failed to load: ' + src, { script: src }));
-      };
-      (root.document.head || root.document.documentElement).appendChild(script);
+        reject(featureError('feature-script-load-failed', 'feature script could not be inserted: ' + src, {
+          script: src,
+          attemptId: record.attemptId,
+          cause: error && error.message || String(error)
+        }));
+      }
     });
-    return scriptLoads[src];
+    return record.promise;
   }
 
   function ensureManifest() {
@@ -192,8 +333,75 @@
     });
   }
 
-  function loadFeature(name) {
+  function initFailure(error, definition) {
+    return featureError('feature-init-failed', 'feature init failed: ' + definition.name, {
+      feature: definition.name,
+      causeCode: error && error.code || '',
+      cause: error && error.message || String(error)
+    });
+  }
+
+  function initializeFeature(definition, state, generation) {
+    if (state.disposeRequested || generation !== state.generation) {
+      state.initialized = false;
+      state.state = 'disposed';
+      return Promise.resolve({ skippedInit: true });
+    }
+    if (!definition.init) {
+      state.initialized = true;
+      return Promise.resolve({ initialized: true });
+    }
+    return Promise.resolve().then(function () {
+      return definition.init();
+    }).then(function () {
+      state.initialized = true;
+      return { initialized: true };
+    }).catch(function (error) {
+      return Promise.resolve().then(function () {
+        return definition.dispose ? definition.dispose() : undefined;
+      }).then(function () {
+        state.initialized = false;
+        throw initFailure(error, definition);
+      }, function (rollbackError) {
+        state.initialized = false;
+        throw featureError('feature-init-rollback-failed', 'feature init rollback failed: ' + definition.name, {
+          feature: definition.name,
+          initError: error && error.message || String(error),
+          rollbackError: rollbackError && rollbackError.message || String(rollbackError)
+        });
+      });
+    });
+  }
+
+  function runDisposer(definition, state) {
+    if (!state.initialized) {
+      state.disposeRequested = false;
+      state.state = 'disposed';
+      return Promise.resolve({ ok: true, feature: definition.name, state: 'disposed', disposed: false });
+    }
+    return Promise.resolve().then(function () {
+      return definition.dispose ? definition.dispose() : undefined;
+    }).then(function () {
+      state.initialized = false;
+      state.disposeRequested = false;
+      state.state = 'disposed';
+      state.lastError = null;
+      return { ok: true, feature: definition.name, state: 'disposed', disposed: true };
+    }).catch(function (error) {
+      var disposeError = featureError('feature-dispose-failed', 'feature dispose failed: ' + definition.name, {
+        feature: definition.name,
+        cause: error && error.message || String(error)
+      });
+      state.disposeRequested = false;
+      state.state = 'failed';
+      state.lastError = disposeError;
+      throw disposeError;
+    });
+  }
+
+  function loadFeature(name, generation, trail) {
     return ensureDefined(name).then(function (definition) {
+      assertNoDependencyCycle(definitions);
       var state = stateFor(name);
       var actualPlatform = platformKind();
       if (!applicable(definition.platform, actualPlatform)) {
@@ -202,7 +410,7 @@
       }
       return definition.dependsOn.reduce(function (chain, dependency) {
         return chain.then(function () {
-          return ensure(dependency).then(function (result) {
+          return ensureInternal(dependency, trail).then(function (result) {
             if (result && result.ok === false && result.code === 'not-applicable') {
               throw featureError('feature-dependency-not-applicable', 'feature dependency is not applicable: ' + dependency, {
                 feature: name,
@@ -217,11 +425,16 @@
         }, Promise.resolve());
       }).then(function () {
         verifyProvides(definition);
-        if (!state.initialized && definition.init) {
-          return Promise.resolve(definition.init()).then(function () { state.initialized = true; });
+        return initializeFeature(definition, state, generation);
+      }).then(function (initResult) {
+        if (initResult && initResult.skippedInit) {
+          state.disposeRequested = false;
+          state.state = 'disposed';
+          return { ok: true, feature: name, state: 'disposed', skippedInit: true };
         }
-        state.initialized = true;
-      }).then(function () {
+        if (state.disposeRequested || generation !== state.generation) {
+          return runDisposer(definition, state);
+        }
         state.state = 'ready';
         state.lastError = null;
         return { ok: true, feature: name, state: 'ready' };
@@ -229,18 +442,29 @@
     });
   }
 
-  function ensure(name) {
+  function ensureInternal(name, trail) {
+    trail = Array.isArray(trail) ? trail : [];
+    if (trail.indexOf(name) >= 0) {
+      var cycle = trail.slice(trail.indexOf(name)).concat(name);
+      return Promise.reject(featureError('feature-dependency-cycle', 'feature dependency cycle: ' + cycle.join(' -> '), {
+        cycle: cycle
+      }));
+    }
     var state = stateFor(name);
     if (state.state === 'ready') return Promise.resolve({ ok: true, feature: name, state: 'ready', reused: true });
     if (state.promise) return state.promise;
     if (state.state === 'failed') {
       return Promise.reject(featureError('feature-retry-required', 'feature failed previously; call retry(): ' + name, {
         feature: name,
-        retryCount: state.retryCount
+        retryCount: state.retryCount,
+        lastErrorCode: state.lastError && state.lastError.code || ''
       }));
     }
+    state.disposeRequested = false;
+    state.generation += 1;
+    var generation = state.generation;
     state.state = 'loading';
-    state.promise = loadFeature(name).catch(function (error) {
+    state.promise = loadFeature(name, generation, trail.concat(name)).catch(function (error) {
       state.state = 'failed';
       state.lastError = error;
       report(error, 'ensure', name);
@@ -251,16 +475,55 @@
     return state.promise;
   }
 
+  function ensure(name) {
+    return ensureInternal(name, []);
+  }
+
+  function isRetryableFailure(error, options) {
+    var code = error && error.code || '';
+    if (code === 'feature-script-load-failed') return options.retryLoadError !== false;
+    if (code === 'feature-init-failed') return options.retryInitError !== false;
+    return false;
+  }
+
   function retry(name) {
-    var state = stateFor(name);
-    if (state.state !== 'failed') return ensure(name);
-    if (state.retryCount >= 1) {
-      return Promise.reject(featureError('feature-retry-limit', 'feature retry limit reached: ' + name, { feature: name }));
-    }
-    state.retryCount += 1;
-    state.state = 'defined';
-    state.lastError = null;
-    return ensure(name);
+    return ensureDefined(name).then(function (definition) {
+      var state = stateFor(name);
+      if (state.state !== 'failed') return ensure(name);
+      var prior = state.lastError;
+      var timedOut = definition.scripts.some(function (src) { return scriptRequiresReload(scriptLoads[src]); });
+      if (timedOut || prior && (prior.code === 'feature-script-timeout' || prior.code === 'feature-reload-required')) {
+        return Promise.reject(reloadRequiredError((prior && prior.details && prior.details.script) || definition.scripts[0],
+          scriptLoads[(prior && prior.details && prior.details.script) || definition.scripts[0]]));
+      }
+      if (!isRetryableFailure(prior, {})) {
+        return Promise.reject(featureError('feature-retry-not-allowed', 'feature failure is not safely retryable: ' + name, {
+          feature: name,
+          lastErrorCode: prior && prior.code || ''
+        }));
+      }
+      if (state.retryCount >= 1) {
+        return Promise.reject(featureError('feature-retry-limit', 'feature retry limit reached: ' + name, { feature: name }));
+      }
+      state.retryCount += 1;
+      state.state = 'defined';
+      state.lastError = null;
+      return ensure(name);
+    });
+  }
+
+  function ensureRecoverable(name, options) {
+    options = options || {};
+    return ensure(name).catch(function (error) {
+      var state = stateFor(name);
+      var prior = error && error.code === 'feature-retry-required' ? state.lastError : error;
+      if (prior && (prior.code === 'feature-script-timeout' || prior.code === 'feature-reload-required')) {
+        throw reloadRequiredError((prior.details && prior.details.script) || name,
+          scriptLoads[prior.details && prior.details.script]);
+      }
+      if (!isRetryableFailure(prior, options)) throw error;
+      return retry(name);
+    });
   }
 
   function preload(name) {
@@ -270,15 +533,23 @@
   function dispose(name) {
     return ensureDefined(name).then(function (definition) {
       var state = stateFor(name);
-      if (!state.initialized) {
-        state.state = state.state === 'unknown' ? 'defined' : state.state;
-        return { ok: true, feature: name, disposed: false };
+      state.disposeRequested = true;
+      if (state.promise) {
+        var active = state.promise;
+        return active.then(function () {
+          if (!state.initialized) {
+            state.disposeRequested = false;
+            state.state = 'disposed';
+            return { ok: true, feature: name, state: 'disposed', disposed: true, skippedInit: true };
+          }
+          return runDisposer(definition, state);
+        }, function (error) {
+          state.disposeRequested = false;
+          if (error && error.code === 'feature-dispose-failed') throw error;
+          return { ok: true, feature: name, state: state.state, disposed: false, loadFailed: true };
+        });
       }
-      return Promise.resolve(definition.dispose ? definition.dispose() : undefined).then(function () {
-        state.initialized = false;
-        state.state = 'disposed';
-        return { ok: true, feature: name, disposed: true };
-      });
+      return runDisposer(definition, state);
     });
   }
 
@@ -290,6 +561,7 @@
         state: one.state,
         initialized: one.initialized,
         retryCount: one.retryCount,
+        disposeRequested: one.disposeRequested,
         errorCode: one.lastError && one.lastError.code || ''
       };
     }
@@ -306,14 +578,14 @@
       var search = '';
       try { search = String(root.location && root.location.search || ''); } catch (error) { report(error, 'query-detection'); }
       if (/[?&](?:test|devHarness)=1(?:&|$)/.test(search)) {
-        ensure('browserTestHarness').catch(function (error) { report(error, 'browser-test-harness', 'browserTestHarness'); });
+        ensureRecoverable('browserTestHarness').catch(function (error) { report(error, 'browser-test-harness', 'browserTestHarness'); });
       }
       if (platformKind() === 'web') {
         var idle = typeof root.requestIdleCallback === 'function'
           ? root.requestIdleCallback
           : function (fn) { return root.setTimeout(fn, 1200); };
         idle(function () {
-          ensure('onlineUpdate').catch(function (error) { report(error, 'online-update', 'onlineUpdate'); });
+          ensureRecoverable('onlineUpdate').catch(function (error) { report(error, 'online-update', 'onlineUpdate'); });
         });
       }
     });
@@ -323,6 +595,7 @@
     define: define,
     registerManifest: registerManifest,
     ensure: ensure,
+    ensureRecoverable: ensureRecoverable,
     preload: preload,
     dispose: dispose,
     status: status,

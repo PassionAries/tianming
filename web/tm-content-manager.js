@@ -1240,6 +1240,12 @@
       return { ok: false, code: 'feature-loader-unavailable' };
     }
     try {
+      if (typeof TM.Features.ensureRecoverable === 'function') {
+        return await TM.Features.ensureRecoverable('desktopUpdate', {
+          retryLoadError: true,
+          retryInitError: true
+        });
+      }
       return await TM.Features.ensure('desktopUpdate');
     } catch (error) {
       if (window.console && typeof window.console.warn === 'function') window.console.warn('[TMContentManager] 桌面更新 feature 加载失败', error);

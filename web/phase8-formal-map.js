@@ -1153,7 +1153,10 @@
   function requestMapLabelFeature(){
     if (_labelFeatureRequested || !window.TM || !TM.Features || typeof TM.Features.ensure !== 'function') return;
     _labelFeatureRequested = true;
-    TM.Features.ensure('formalMapLabels').catch(function(error){
+    var load = typeof TM.Features.ensureRecoverable === 'function'
+      ? TM.Features.ensureRecoverable('formalMapLabels', { retryLoadError: true, retryInitError: true })
+      : TM.Features.ensure('formalMapLabels');
+    load.catch(function(error){
       if (window.console && typeof window.console.warn === 'function') window.console.warn('[phase8-formal-map] 标签 feature 加载失败', error);
     });
   }
@@ -1270,7 +1273,6 @@
     return filtered;
   }
   function renderFormalMap(){
-    requestMapLabelFeature();
     var shell = document.getElementById('tm-phase8-main-shell');
     var stage = mapStage();
     if (!shell || !stage || !isGameVisible()) {
@@ -1281,6 +1283,7 @@
       }
       return;
     }
+    requestMapLabelFeature();
     var map = getMapData();
     if (!map || !Array.isArray(map.regions) || !map.regions.length) {
       stage.innerHTML = '<div class="tmf-map-loading">舆图数据尚未载入</div>';

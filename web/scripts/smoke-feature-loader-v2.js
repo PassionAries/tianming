@@ -5,6 +5,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const featureBuild = require('./build-feature-manifest');
 
 const WEB = path.resolve(__dirname, '..');
 const LOADER = fs.readFileSync(path.join(WEB, 'tm-feature-loader.js'), 'utf8');
@@ -15,15 +16,27 @@ async function settle(rounds = 8) { for (let i = 0; i < rounds; i++) await tick(
 
 function makeEnvironment(options = {}) {
   const loads = [];
+  const scriptNodes = [];
   const loadHandlers = [];
   const idleHandlers = [];
   const lifecycle = { desktopInit: 0, desktopDispose: 0, onlineInit: 0, onlineDispose: 0 };
   const failures = Object.assign({}, options.failures || {});
+  const manualScripts = new Set(options.manualScripts || []);
   let context;
 
   const document = {
     readyState: options.readyState || 'loading',
-    createElement(tag) { return { tagName: String(tag).toUpperCase(), dataset: {}, async: true, onload: null, onerror: null }; },
+    createElement(tag) {
+      return {
+        tagName: String(tag).toUpperCase(),
+        dataset: {},
+        async: true,
+        onload: null,
+        onerror: null,
+        removed: false,
+        remove() { this.removed = true; }
+      };
+    },
     head: { appendChild: appendScript },
     documentElement: { appendChild: appendScript }
   };
@@ -32,6 +45,8 @@ function makeEnvironment(options = {}) {
   function appendScript(script) {
     const src = clean(script.src);
     loads.push(src);
+    scriptNodes.push(script);
+    if (manualScripts.has(src)) return script;
     Promise.resolve().then(() => {
       if (failures[src] > 0) {
         failures[src] -= 1;
@@ -89,7 +104,16 @@ function makeEnvironment(options = {}) {
   return {
     root,
     loads,
+    scriptNodes,
     lifecycle,
+    completeManual(src, install) {
+      const cleanSrc = clean(src);
+      const script = scriptNodes.find((row) => clean(row.src) === cleanSrc);
+      if (!script) throw new Error('manual script was not inserted: ' + cleanSrc);
+      if (typeof install === 'function') install(context);
+      if (script.onload) script.onload();
+      return script;
+    },
     fireLoad() { document.readyState = 'complete'; loadHandlers.splice(0).forEach((fn) => fn()); },
     fireIdle() { idleHandlers.splice(0).forEach((fn) => fn()); }
   };
@@ -131,12 +155,127 @@ function makeEnvironment(options = {}) {
   assert.strictEqual(retried.ok, true, 'one explicit retry can recover a failed feature');
   assert.strictEqual(retry.loads.filter((src) => src === 'retry-once.js').length, 2, 'retry inserts the failed script exactly once more');
 
+  const recoverable = makeEnvironment({ platform: 'web', failures: { 'retry-once.js': 1 } });
+  recoverable.root.TM.Features.define('recoverableLoad', {
+    scripts: ['retry-once.js'], dependsOn: [], platform: 'any', provides: ['RetryOnce']
+  });
+  const recovered = await recoverable.root.TM.Features.ensureRecoverable('recoverableLoad');
+  assert.strictEqual(recovered.ok, true, 'controlled recovery retries an explicit network load error');
+  assert.strictEqual(recoverable.loads.filter((src) => src === 'retry-once.js').length, 2, 'controlled recovery performs at most one second insertion after onerror');
+
+  const initRecovery = makeEnvironment({ platform: 'web' });
+  let initAttempts = 0;
+  let initRollbacks = 0;
+  initRecovery.root.TM.Features.define('recoverableInit', {
+    scripts: ['retry-once.js'],
+    dependsOn: [],
+    platform: 'any',
+    provides: ['RetryOnce'],
+    init() {
+      initAttempts += 1;
+      if (initAttempts === 1) throw new Error('injected init failure');
+    },
+    dispose() { initRollbacks += 1; }
+  });
+  const initRecovered = await initRecovery.root.TM.Features.ensureRecoverable('recoverableInit');
+  assert.strictEqual(initRecovered.ok, true, 'controlled recovery retries init only after rollback');
+  assert.strictEqual(initAttempts, 2, 'init retry executes exactly twice');
+  assert.strictEqual(initRollbacks, 1, 'failed init performs exactly one rollback before retry');
+
   retry.root.TM.Features.define('alwaysFail', {
     scripts: ['always-fail.js'], dependsOn: [], platform: 'any', provides: ['Never']
   });
   await assert.rejects(retry.root.TM.Features.ensure('alwaysFail'));
   await assert.rejects(retry.root.TM.Features.retry('alwaysFail'));
   await assert.rejects(retry.root.TM.Features.retry('alwaysFail'), (error) => error.code === 'feature-retry-limit');
+
+  const late = makeEnvironment({ platform: 'web', manualScripts: ['slow-late.js'] });
+  let lateInit = 0;
+  late.root.TM.Features.define('slowLate', {
+    scripts: ['slow-late.js'],
+    dependsOn: [],
+    platform: 'any',
+    provides: ['SlowLate'],
+    timeoutMs: 5,
+    init() { lateInit += 1; }
+  });
+  await assert.rejects(late.root.TM.Features.ensure('slowLate'), (error) => error.code === 'feature-script-timeout');
+  assert.strictEqual(late.scriptNodes.length, 1, 'timeout inserts only one script node');
+  assert.strictEqual(late.scriptNodes[0].removed, true, 'timeout best-effort removes the orphaned script node');
+  late.completeManual('slow-late.js', (ctx) => {
+    ctx.SlowLate = {};
+    ctx.__lateScriptExecutions = (ctx.__lateScriptExecutions || 0) + 1;
+  });
+  await settle();
+  await assert.rejects(late.root.TM.Features.retry('slowLate'), (error) => error.code === 'feature-reload-required');
+  await assert.rejects(late.root.TM.Features.ensureRecoverable('slowLate'), (error) => error.code === 'feature-reload-required');
+  assert.strictEqual(late.loads.filter((src) => src === 'slow-late.js').length, 1, 'late completion cannot trigger a duplicate same-src insertion');
+  assert.strictEqual(late.root.__lateScriptExecutions, 1, 'late classic script executes at most once in the document');
+  assert.strictEqual(lateInit, 0, 'late completion does not run feature init after timeout');
+
+  const disposeBeforeInit = makeEnvironment({ platform: 'web', manualScripts: ['dispose-before-init.js'] });
+  let skippedInitCalls = 0;
+  let skippedDisposeCalls = 0;
+  disposeBeforeInit.root.TM.Features.define('disposeBeforeInit', {
+    scripts: ['dispose-before-init.js'],
+    dependsOn: [],
+    platform: 'any',
+    provides: ['DisposeBeforeInit'],
+    init() { skippedInitCalls += 1; },
+    dispose() { skippedDisposeCalls += 1; }
+  });
+  const pendingBeforeInit = disposeBeforeInit.root.TM.Features.ensure('disposeBeforeInit');
+  await settle(2);
+  const disposeBeforeInitResult = disposeBeforeInit.root.TM.Features.dispose('disposeBeforeInit');
+  disposeBeforeInit.completeManual('dispose-before-init.js', (ctx) => { ctx.DisposeBeforeInit = {}; });
+  const beforeInitResults = await Promise.all([pendingBeforeInit, disposeBeforeInitResult]);
+  assert.strictEqual(beforeInitResults[0].state, 'disposed', 'load resolves deterministically as disposed when disposal wins before init');
+  assert.strictEqual(skippedInitCalls, 0, 'dispose requested during script loading skips init');
+  assert.strictEqual(skippedDisposeCalls, 0, 'skipped init does not invoke an unnecessary disposer');
+  assert.strictEqual(disposeBeforeInit.root.TM.Features.status('disposeBeforeInit').state, 'disposed', 'in-flight dispose leaves a stable disposed state');
+
+  const disposeDuringInit = makeEnvironment({ platform: 'web' });
+  let releaseInit;
+  let duringInitCalls = 0;
+  let duringDisposeCalls = 0;
+  disposeDuringInit.root.TM.Features.define('disposeDuringInit', {
+    scripts: ['retry-once.js'],
+    dependsOn: [],
+    platform: 'any',
+    provides: ['RetryOnce'],
+    init() {
+      duringInitCalls += 1;
+      return new Promise((resolve) => { releaseInit = resolve; });
+    },
+    dispose() { duringDisposeCalls += 1; }
+  });
+  const pendingDuringInit = disposeDuringInit.root.TM.Features.ensure('disposeDuringInit');
+  await settle(4);
+  assert.strictEqual(duringInitCalls, 1, 'async init is in flight before disposal');
+  const disposeDuringInitResult = disposeDuringInit.root.TM.Features.dispose('disposeDuringInit');
+  releaseInit();
+  await Promise.all([pendingDuringInit, disposeDuringInitResult]);
+  assert.strictEqual(duringDisposeCalls, 1, 'dispose waits for in-flight init and runs the disposer exactly once');
+  assert.strictEqual(disposeDuringInit.root.TM.Features.status('disposeDuringInit').state, 'disposed', 'dispose during init cannot later become ready');
+
+  const runtimeCycle = makeEnvironment({ platform: 'web' });
+  assert.throws(() => runtimeCycle.root.TM.Features.registerManifest({
+    version: 1,
+    features: {
+      cycleA: { scripts: ['a.js'], dependsOn: ['cycleB'], platform: 'any', provides: ['CycleA'] },
+      cycleB: { scripts: ['b.js'], dependsOn: ['cycleA'], platform: 'any', provides: ['CycleB'] }
+    }
+  }), (error) => error.code === 'feature-dependency-cycle', 'runtime manifest registration rejects a two-node dependency cycle');
+  assert.strictEqual(runtimeCycle.root.TM.Features.status('cycleA').state, 'unknown', 'cycle rejection is atomic and installs no partial definitions');
+
+  assert.throws(() => featureBuild.validateFeatureManifest({
+    version: 1,
+    features: {
+      cycleA: { scripts: ['tm-update-card.js'], dependsOn: ['cycleB'], platform: 'any', loadPolicy: 'on-demand', sideEffects: 'none', provides: ['CycleA'] },
+      cycleB: { scripts: ['tm-desktop-update.js'], dependsOn: ['cycleC'], platform: 'any', loadPolicy: 'on-demand', sideEffects: 'none', provides: ['CycleB'] },
+      cycleC: { scripts: ['tm-online-update.js'], dependsOn: ['cycleA'], platform: 'any', loadPolicy: 'on-demand', sideEffects: 'none', provides: ['CycleC'] }
+    }
+  }), /feature dependency cycle: cycleA -> cycleB -> cycleC -> cycleA/, 'build-time manifest validation rejects a three-node dependency cycle');
 
   const normal = makeEnvironment({ platform: 'web' });
   normal.fireLoad();
@@ -160,7 +299,7 @@ function makeEnvironment(options = {}) {
   assert(touch.root.TMMapLabelGeo && touch.root.TMMapLabelCollide, 'touch branch receives both map label providers');
   assert.strictEqual((await touch.root.TM.Features.ensure('desktopUpdate')).code, 'not-applicable', 'touch branch rejects desktop-only feature');
 
-  console.log('[smoke-feature-loader-v2] PASS assertions=27');
+  console.log('[smoke-feature-loader-v2] PASS assertions=51');
 })().catch((error) => {
   console.error(error && error.stack || error);
   process.exit(1);

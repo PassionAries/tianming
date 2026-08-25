@@ -59,6 +59,25 @@ function validateFeatureManifest(manifest) {
       if (dependency === name) errors.push(`${name}: feature cannot depend on itself`);
     });
   });
+  const visiting = new Set();
+  const visited = new Set();
+  function visit(name, trail) {
+    if (visiting.has(name)) {
+      const start = trail.indexOf(name);
+      const cycle = trail.slice(start >= 0 ? start : 0).concat(name);
+      errors.push(`feature dependency cycle: ${cycle.join(' -> ')}`);
+      return;
+    }
+    if (visited.has(name) || !features || !features[name]) return;
+    visiting.add(name);
+    const nextTrail = trail.concat(name);
+    (features[name].dependsOn || []).forEach((dependency) => {
+      if (features[dependency]) visit(dependency, nextTrail);
+    });
+    visiting.delete(name);
+    visited.add(name);
+  }
+  Object.keys(features || {}).forEach((name) => visit(name, []));
   if (errors.length) throw new Error('feature manifest invalid:\n- ' + errors.join('\n- '));
   return { featureCount: Object.keys(features).length, scriptCount: seenScripts.size };
 }

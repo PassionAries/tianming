@@ -222,6 +222,11 @@ check(/ipcMain\.handle\('update-install',[\s\S]{0,500}requestApplicationUpdateIn
 check(/_autoSaveInFlightPromise/.test(saveLifecycleSource)
   && /flushForClose[\s\S]{0,1200}awaitDesktopAutoSave\('application-close'\)/.test(saveCloseFlushSource),
   'close acknowledgement must await the tracked desktop autosave mirror after canonical saves drain');
+check(/for \(var pass=1;pass<=4;pass\+\+\)/.test(saveCloseFlushSource)
+  && /await Promise\.resolve\(\)/.test(saveCloseFlushSource)
+  && /closeSaveQueuesQuiet\(\)/.test(saveCloseFlushSource)
+  && /close-save-quiescence-limit/.test(saveCloseFlushSource),
+  'close acknowledgement must prove bounded canonical and desktop queue quiescence');
 check(/factionId:String\(fac\.id\)/.test(reconcileSource)
   && /newLeaderId:String\(leader\.id\)/.test(reconcileSource)
   && /_tmExactFaction\(sc\.factionId \|\| sc\.faction\)/.test(endturnApplySource)

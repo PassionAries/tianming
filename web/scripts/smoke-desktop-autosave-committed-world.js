@@ -311,13 +311,31 @@ async function main() {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   check('关闭握手会等待桌面自动档 IPC 而非仅等待 canonical 双槽', typeof delayedWriteResolve === 'function' && closeFlushSettled === false);
+  const firstCloseMirrorResolve = delayedWriteResolve;
+  context.GM._aiMemorySummary = '关闭等待期间新完成的后台摘要';
+  const duringCloseSave = await context.requestBackgroundAutosave({
+    reason: 'summary-complete-during-close',
+    expectedWorldLease: retryLease,
+    expectedTurn: retryLease.turn
+  });
+  check('桌面镜像在途时新摘要仍进入独立 canonical 保存队列', duringCloseSave.ok === true
+    && closeFlushSettled === false);
+  delayNextWrite = true;
+  firstCloseMirrorResolve();
+  for (let spin = 0; delayedWriteResolve === firstCloseMirrorResolve && spin < 40; spin++) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  check('首次镜像完成后关闭握手继续等待新 canonical 对应的第二个桌面镜像',
+    typeof delayedWriteResolve === 'function' && delayedWriteResolve !== firstCloseMirrorResolve
+    && closeFlushSettled === false && backgroundTransactions.length === beforeCloseFlush + 2);
   delayedWriteResolve();
   const closeFlush = await closeFlushPromise;
   check('立即退出握手会实际 drain 后台保存而非只提示', closeFlush.ok === true
-    && backgroundTransactions.length === beforeCloseFlush + 1
-    && backgroundTransactions[backgroundTransactions.length - 1].states[0].GM._aiMemorySummary === '退出前刚完成的后台摘要');
-  check('关闭握手把最新后台摘要同步到桌面恢复镜像', writes.length === beforeCloseMirrorWrites + 1
-    && writes[writes.length - 1].gameState._aiMemorySummary === '退出前刚完成的后台摘要');
+    && closeFlush.quiescencePasses === 2
+    && backgroundTransactions.length === beforeCloseFlush + 2
+    && backgroundTransactions[backgroundTransactions.length - 1].states[0].GM._aiMemorySummary === '关闭等待期间新完成的后台摘要');
+  check('关闭握手把最新后台摘要同步到桌面恢复镜像', writes.length === beforeCloseMirrorWrites + 2
+    && writes[writes.length - 1].gameState._aiMemorySummary === '关闭等待期间新完成的后台摘要');
   check('关闭握手成功后 canonical 与桌面镜像都不存在待保存或在途任务',
     !context._backgroundSavePending && !context._backgroundSaveInFlight
     && !context._autoSaveDeferred && !context._autoSaveFlushTimer

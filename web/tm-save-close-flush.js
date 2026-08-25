@@ -31,21 +31,45 @@
     return {ok:true,reason:'desktop-autosave-flushed',result:result,drains:drains};
   }
 
+  function closeSaveQueuesQuiet(){
+    return !_backgroundSavePending&&!_backgroundSaveInFlight&&!_backgroundSaveTimer
+      &&!_autoSaveDeferred&&!_autoSaveFlushTimer&&!_autoSaveInFlight&&!_autoSaveInFlightPromise;
+  }
+
   async function flushForClose(){
     if (isWorldTransactionActive()) return {ok:false,code:'world-transaction-active',reason:'回合、读档或回滚事务仍在进行'};
     try {
-      var result=await _tmAwaitBackgroundAutosaves();
-      if (_backgroundSavePending||_backgroundSaveInFlight) return {ok:false,code:'background-save-still-pending',reason:'后台保存队列尚未清空'};
-      if (result&&result.error) return {ok:false,code:'background-save-flush-failed',reason:result.error&&result.error.message||String(result.error)};
-      var desktopResult=await awaitDesktopAutoSave('application-close');
-      if (!(desktopResult&&desktopResult.ok===true)) {
-        return {
-          ok:false,
-          code:String(desktopResult&&desktopResult.code||'desktop-autosave-flush-failed'),
-          reason:String(desktopResult&&(desktopResult.reason||(desktopResult.error&&desktopResult.error.message))||'桌面自动存档镜像尚未安全完成')
-        };
+      var result={ok:false,skipped:true,reason:'no-background-save'};
+      var desktopResult={ok:true,skipped:true,reason:'desktop-autosave-not-pending'};
+      for (var pass=1;pass<=4;pass++) {
+        if (isWorldTransactionActive()) return {ok:false,code:'world-transaction-active',reason:'回合、读档或回滚事务仍在进行'};
+        result=await _tmAwaitBackgroundAutosaves();
+        if (result&&result.error) return {ok:false,code:'background-save-flush-failed',reason:result.error&&result.error.message||String(result.error)};
+        if (result&&result.deferred) return {ok:false,code:'background-save-deferred',reason:String(result.reason||'后台保存因世界事务延迟')};
+        // A newly completed summary may enqueue another canonical save while the
+        // previous drain is resuming. Do not mirror an already superseded state.
+        if (_backgroundSavePending||_backgroundSaveInFlight||_backgroundSaveTimer) continue;
+        desktopResult=await awaitDesktopAutoSave('application-close');
+        if (!(desktopResult&&desktopResult.ok===true)) {
+          return {
+            ok:false,
+            code:String(desktopResult&&desktopResult.code||'desktop-autosave-flush-failed'),
+            reason:String(desktopResult&&(desktopResult.reason||(desktopResult.error&&desktopResult.error.message))||'桌面自动存档镜像尚未安全完成')
+          };
+        }
+        // Let promise continuations that completed during the desktop IPC publish
+        // their background-save requests, then prove both queues are quiescent.
+        await Promise.resolve();
+        if (closeSaveQueuesQuiet()) {
+          return {
+            ok:true,
+            reason:result&&result.reason||'background-saves-flushed',
+            desktopAutoSave:desktopResult,
+            quiescencePasses:pass
+          };
+        }
       }
-      return {ok:true,reason:result&&result.reason||'background-saves-flushed',desktopAutoSave:desktopResult};
+      return {ok:false,code:'close-save-quiescence-limit',reason:'关闭期间仍持续产生新的保存任务'};
     } catch(error) {
       try {
         if (global.TM&&TM.errors&&typeof TM.errors.captureSilent==='function') TM.errors.captureSilent(error,'background-save-close-flush');

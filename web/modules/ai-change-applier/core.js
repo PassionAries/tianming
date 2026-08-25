@@ -1069,9 +1069,6 @@ export function createCore(deps) {
     try { if (G._turnReport) G._turnReport.push({ type: 'allegiance', from: oldName, to: newName, char: ch.name, reason: opts.reason || '', turn: G.turn || 0 }); } catch (_tr) {}
     return { ok: true, from: oldName, to: newName, char: ch.name };
   }
-  if (typeof global !== 'undefined') { try { global.applyAllegianceChange = applyAllegianceChange; } catch (_g) {} }
-  if (typeof window !== 'undefined') { window.applyAllegianceChange = applyAllegianceChange; }
-
   // ═══════════════════════════════════════════════════════════════════
   //  主应用函数：applyAITurnChanges
   // ═══════════════════════════════════════════════════════════════════
@@ -2256,7 +2253,6 @@ export function createCore(deps) {
 
   function applyAITurnChanges(aiOutput){ return _modules.reconcile.applyAITurnChangesAtomic.apply(this, arguments); }
   function _syncFiscalScalars(G){ return _modules.reconcile._syncFiscalScalars.apply(this, arguments); }
-  if (typeof window !== 'undefined') window._syncFiscalScalars = _syncFiscalScalars;
 
   //>>ACA-SPLIT22-SHIMS-START  (巨石拆分第二十二拆 20260706·脚本生成·勿手改)
   // origin=本片(先装载)。两分片 tm-ai-change-applier-validators.js / -reconcile.js 于本片【之后】装载，
@@ -2921,14 +2917,11 @@ export function createCore(deps) {
       if (!Array.isArray(G._turnReport)) G._turnReport = [];
       G._turnReport.push({ type:'travel_arrived', char: ch.name, to: toLoc, assignPost: assignPost, turn: G.turn || 0 });
   }
-  global._arriveCharNow = _arriveCharNow;
-  global._hasInstantArrivalRule = _hasInstantArrivalRule;   // 导出·供官制面板 _offPickerConfirm 认"瞬间抵达"规则即抵(治"官制任命后长期不赴任")
-
   // ═══════════════════════════════════════════════════════════════════
   //  导出
   // ═══════════════════════════════════════════════════════════════════
 
-  global.AIChangeApplier = {
+  var facade = {
     applyAITurnChanges: applyAITurnChanges,
     applyAIArmyChange: applyAIArmyChange,
     onAppointment: onAppointment,
@@ -2949,29 +2942,34 @@ export function createCore(deps) {
     VERSION: 1
   };
 
-  // 全局快捷
-  global.applyAITurnChanges = applyAITurnChanges;
-  global.applyAIArmyChange = applyAIArmyChange;
-  global.onAppointment = onAppointment;
-  global.onDismissal = onDismissal;
-  global._tmReasonIsImprison = _tmReasonIsImprison;
-  global._TM_IMPRISON_RE = _TM_IMPRISON_RE;
-  global._resolveBinding = _resolveBinding;
-  global.renderTurnReport = renderTurnReport;
-  global.buildFullAIContext = buildFullAIContext;
-  global.advanceCharTravelByDays = advanceCharTravelByDays;
-
   var _modulesBound = false;
   function bindModules(modules) {
     if (_modulesBound) throw new Error('[AIChangeApplier] module graph already bound');
     if (!modules || !modules.validators || !modules.reconcile) throw new Error('[AIChangeApplier] incomplete module graph');
     _modules = modules;
     _modulesBound = true;
-    return global.AIChangeApplier;
+    return facade;
   }
   return {
     bindModules: bindModules,
-    facade: global.AIChangeApplier,
+    facade: facade,
+    legacyExports: {
+      AIChangeApplier: facade,
+      applyAllegianceChange: applyAllegianceChange,
+      _syncFiscalScalars: _syncFiscalScalars,
+      _arriveCharNow: _arriveCharNow,
+      _hasInstantArrivalRule: _hasInstantArrivalRule,
+      applyAITurnChanges: applyAITurnChanges,
+      applyAIArmyChange: applyAIArmyChange,
+      onAppointment: onAppointment,
+      onDismissal: onDismissal,
+      _tmReasonIsImprison: _tmReasonIsImprison,
+      _TM_IMPRISON_RE: _TM_IMPRISON_RE,
+      _resolveBinding: _resolveBinding,
+      renderTurnReport: renderTurnReport,
+      buildFullAIContext: buildFullAIContext,
+      advanceCharTravelByDays: advanceCharTravelByDays
+    },
     internals: {
       _alreadyResolvedState: _alreadyResolvedState,
       _readFiscalStock: _readFiscalStock,

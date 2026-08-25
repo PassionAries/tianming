@@ -1055,15 +1055,6 @@
       }
       return { ok: true, from: oldName, to: newName, char: ch.name };
     }
-    if (typeof global !== "undefined") {
-      try {
-        global.applyAllegianceChange = applyAllegianceChange;
-      } catch (_g) {
-      }
-    }
-    if (typeof window !== "undefined") {
-      window.applyAllegianceChange = applyAllegianceChange;
-    }
     function _captureValidatorBaseline(G) {
       return _modules.reconcile._captureValidatorBaseline.apply(this, arguments);
     }
@@ -2259,7 +2250,6 @@
     function _syncFiscalScalars(G) {
       return _modules.reconcile._syncFiscalScalars.apply(this, arguments);
     }
-    if (typeof window !== "undefined") window._syncFiscalScalars = _syncFiscalScalars;
     function _validatePersonnelConsistency(G, aiOutput, applied) {
       return _modules.validators._validatePersonnelConsistency.apply(this, arguments);
     }
@@ -2972,9 +2962,7 @@
       if (!Array.isArray(G._turnReport)) G._turnReport = [];
       G._turnReport.push({ type: "travel_arrived", char: ch.name, to: toLoc, assignPost, turn: G.turn || 0 });
     }
-    global._arriveCharNow = _arriveCharNow;
-    global._hasInstantArrivalRule = _hasInstantArrivalRule;
-    global.AIChangeApplier = {
+    var facade = {
       applyAITurnChanges,
       applyAIArmyChange,
       onAppointment,
@@ -2994,27 +2982,34 @@
       advanceCharTravelByDays,
       VERSION: 1
     };
-    global.applyAITurnChanges = applyAITurnChanges;
-    global.applyAIArmyChange = applyAIArmyChange;
-    global.onAppointment = onAppointment;
-    global.onDismissal = onDismissal;
-    global._tmReasonIsImprison = _tmReasonIsImprison;
-    global._TM_IMPRISON_RE = _TM_IMPRISON_RE;
-    global._resolveBinding = _resolveBinding;
-    global.renderTurnReport = renderTurnReport;
-    global.buildFullAIContext = buildFullAIContext;
-    global.advanceCharTravelByDays = advanceCharTravelByDays;
     var _modulesBound = false;
     function bindModules(modules) {
       if (_modulesBound) throw new Error("[AIChangeApplier] module graph already bound");
       if (!modules || !modules.validators || !modules.reconcile) throw new Error("[AIChangeApplier] incomplete module graph");
       _modules = modules;
       _modulesBound = true;
-      return global.AIChangeApplier;
+      return facade;
     }
     return {
       bindModules,
-      facade: global.AIChangeApplier,
+      facade,
+      legacyExports: {
+        AIChangeApplier: facade,
+        applyAllegianceChange,
+        _syncFiscalScalars,
+        _arriveCharNow,
+        _hasInstantArrivalRule,
+        applyAITurnChanges,
+        applyAIArmyChange,
+        onAppointment,
+        onDismissal,
+        _tmReasonIsImprison,
+        _TM_IMPRISON_RE,
+        _resolveBinding,
+        renderTurnReport,
+        buildFullAIContext,
+        advanceCharTravelByDays
+      },
       internals: {
         _alreadyResolvedState,
         _readFiscalStock,
@@ -4694,8 +4689,6 @@
       }
       return appliedChars.length;
     }
-    global.normalizeAIWriteBackDeaths = normalizeAIWriteBackDeaths;
-    global.applyNormalizedAIWriteBackDeaths = applyNormalizedAIWriteBackDeaths;
     function _processDeathEpitaphs(G, aiOutput) {
       if (!G || !Array.isArray(G.chars)) return;
       if (!G._epitaphs) G._epitaphs = [];
@@ -4841,7 +4834,6 @@
         }
       }
     }
-    global._reconcilePlayerMovements = _reconcilePlayerMovements;
     function _reconcilePlayerFiscalReforms(G, aiOutput) {
       if (!G || !Array.isArray(G._turnFiscalReforms) || G._turnFiscalReforms.length === 0) return;
       var reforms = G._turnFiscalReforms;
@@ -4906,7 +4898,6 @@
         if (typeof global.addEB === "function") global.addEB("财政改革", ({ anticorruption: "肃贪", landsurvey: "丈田", saltreform: "盐政改革", openmaritime: "开海通商", encouragefarming: "劝农" }[fr.type] || fr.type) + "·已确定性落账·必生效");
       });
     }
-    global._reconcilePlayerFiscalReforms = _reconcilePlayerFiscalReforms;
     function _applyOfficeDutyTick(G) {
       if (typeof officeFlagOn !== "function" || !officeFlagOn("officeDutyStateEnabled")) return;
       if (typeof tickOfficeDutyState !== "function") return;
@@ -4948,7 +4939,6 @@
       } catch (_ebE) {
       }
     }
-    global._applyOfficeDutyTick = _applyOfficeDutyTick;
     function _isTaxIncome(fa) {
       var s = String((fa.category || "") + "|" + (fa.name || "") + "|" + (fa.reason || ""));
       if (/缴获|贡纳|进贡|赏赐|罚没|抄没|抄家|捐纳|卖官|借款|赎银|缴还/.test(s)) return false;
@@ -4986,7 +4976,6 @@
       }
       return collected;
     }
-    global._applyTaxAuthorityGate = _applyTaxAuthorityGate;
     function _applyDirectiveCompliance(G, aiOutput) {
       if (!G) return;
       var _curTurn = G.turn || 0;
@@ -5043,7 +5032,6 @@
         return true;
       });
     }
-    global._applyDirectiveCompliance = _applyDirectiveCompliance;
     function _applyRegentDecisions(G, aiOutput) {
       if (!G) return;
       var signal = G.regentSignal || G.regentState && G.regentState.signal || null;
@@ -5090,7 +5078,6 @@
         });
       });
     }
-    global._applyRegentDecisions = _applyRegentDecisions;
     var _tmPreflightCollector = null;
     var _tmPreflightContext = null;
     var _tmPreflightSideEffects = true;
@@ -5544,7 +5531,6 @@
       }
       return aiOutput;
     }
-    global.preflightAIWriteBack = preflightAIWriteBack;
     function _tmCloneWriteback(value, seen) {
       if (value == null || typeof value !== "object") return value;
       seen = seen || (typeof WeakMap === "function" ? /* @__PURE__ */ new WeakMap() : null);
@@ -5740,7 +5726,6 @@
       });
       return { ok: unique.length === 0, output: detached, failures: unique };
     }
-    global.validateAIWriteBackBatch = validateAIWriteBackBatch;
     function _applyBattleResult(G, aiOutput, applied) {
       if (!G || !aiOutput || !aiOutput.battleResult) return;
       var api = global.MilitarySystems || global.TM && global.TM.MilitarySystems;
@@ -5805,7 +5790,6 @@
         applied.failed.push({ battleResult: true, reason: r && r.reason });
       }
     }
-    global._applyBattleResult = _applyBattleResult;
     function _deficitTier(amount, scaleMoney) {
       var deep = Math.abs(amount);
       var pct = deep / Math.max(1, scaleMoney);
@@ -5904,8 +5888,6 @@
       });
       if (!anyDef) G._fiscalDeficitStreak = 0;
     }
-    global._applyFiscalDeficitPenalties = _applyFiscalDeficitPenalties;
-    global._resetDeficitStreakIfHealthy = _resetDeficitStreakIfHealthy;
     var _AI_VALIDATOR_LOG_KEYS = [
       "_fiscalValidatorLog",
       "_personnelValidatorLog",
@@ -6099,7 +6081,6 @@
         }
       });
     }
-    if (typeof window !== "undefined") window._syncFiscalScalars = _syncFiscalScalars;
     return {
       _processDeathEpitaphs,
       _reconcilePlayerMovements,
@@ -6117,7 +6098,23 @@
       _collectValidatorFailures,
       _runConsistencyValidator,
       applyAITurnChangesAtomic,
-      _syncFiscalScalars
+      _syncFiscalScalars,
+      legacyExports: {
+        normalizeAIWriteBackDeaths,
+        applyNormalizedAIWriteBackDeaths,
+        _reconcilePlayerMovements,
+        _reconcilePlayerFiscalReforms,
+        _applyOfficeDutyTick,
+        _applyTaxAuthorityGate,
+        _applyDirectiveCompliance,
+        _applyRegentDecisions,
+        preflightAIWriteBack,
+        validateAIWriteBackBatch,
+        _applyBattleResult,
+        _applyFiscalDeficitPenalties,
+        _resetDeficitStreakIfHealthy,
+        _syncFiscalScalars
+      }
     };
   }
 
@@ -6211,10 +6208,31 @@
   }
 
   // web/modules/ai-change-applier/legacy-adapter.js
-  function installLegacyFacade(global, create, createDeps) {
-    var tm = global.TM = global.TM || {};
-    var aiNamespace = tm.AIChange = tm.AIChange || {};
-    var existing = aiNamespace.ApplierModule;
+  function snapshotProperty(target, key) {
+    return { target, key, descriptor: Object.getOwnPropertyDescriptor(target, key) };
+  }
+  function publishProperty(target, key, value) {
+    target[key] = value;
+    if (target[key] !== value) throw new Error("[AIChangeApplier] legacy export was not installed: " + key);
+  }
+  function restoreProperties(snapshots) {
+    var failures = [];
+    for (var index = snapshots.length - 1; index >= 0; index -= 1) {
+      var row = snapshots[index];
+      try {
+        if (row.descriptor) Object.defineProperty(row.target, row.key, row.descriptor);
+        else if (!delete row.target[row.key] && Object.prototype.hasOwnProperty.call(row.target, row.key)) {
+          throw new Error("property could not be deleted");
+        }
+      } catch (error) {
+        failures.push({ key: row.key, error: String(error && (error.message || error) || "rollback failed") });
+      }
+    }
+    return failures;
+  }
+  function installLegacyFacade(global, build, createDeps) {
+    var aiNamespace = global && global.TM && global.TM.AIChange;
+    var existing = aiNamespace && aiNamespace.ApplierModule;
     if (existing && existing.initialized === true) return existing.facade;
     if (global.AIChangeApplier) {
       var conflict = new Error("[AIChangeApplier] refusing to overwrite an existing provider");
@@ -6222,20 +6240,54 @@
       throw conflict;
     }
     var deps = createDeps(global);
-    var facade = create(deps);
-    aiNamespace.WriteGuards = facade.writeGuards;
+    var installation = build(deps);
+    var facade = installation && installation.facade;
+    var legacyExports = installation && installation.legacyExports;
+    aiNamespace = global && global.TM && global.TM.AIChange;
+    if (!facade || !legacyExports || !aiNamespace || typeof aiNamespace !== "object") {
+      var invalid = new Error("[AIChangeApplier] incomplete legacy installation");
+      invalid.code = "ai-change-applier-installation-invalid";
+      throw invalid;
+    }
+    if (legacyExports.AIChangeApplier !== facade) {
+      var mismatch = new Error("[AIChangeApplier] facade export mismatch");
+      mismatch.code = "ai-change-applier-installation-invalid";
+      throw mismatch;
+    }
     var state = Object.freeze({
       initialized: true,
       facade,
-      create,
+      create: function(nextDeps) {
+        return build(nextDeps).facade;
+      },
+      build,
       createLegacyDeps: createDeps
     });
-    aiNamespace.ApplierModule = state;
-    return facade;
+    var exportKeys = Object.keys(legacyExports);
+    var snapshots = exportKeys.map(function(key) {
+      return snapshotProperty(global, key);
+    });
+    snapshots.push(snapshotProperty(aiNamespace, "WriteGuards"));
+    snapshots.push(snapshotProperty(aiNamespace, "ApplierModule"));
+    try {
+      exportKeys.forEach(function(key) {
+        publishProperty(global, key, legacyExports[key]);
+      });
+      publishProperty(aiNamespace, "WriteGuards", facade.writeGuards);
+      publishProperty(aiNamespace, "ApplierModule", state);
+      return facade;
+    } catch (error) {
+      var rollbackFailures = restoreProperties(snapshots);
+      var publishError = new Error("[AIChangeApplier] atomic legacy publish failed: " + String(error && (error.message || error) || "unknown"));
+      publishError.code = "ai-change-applier-publish-failed";
+      publishError.cause = error;
+      publishError.rollbackFailures = rollbackFailures;
+      throw publishError;
+    }
   }
 
   // web/modules/ai-change-applier/index.js
-  function createAIChangeApplier(deps) {
+  function buildAIChangeApplier(deps) {
     validateDependencies(deps);
     var core = createCore(deps);
     var validators = createValidators({ global: deps.global, core: core.internals });
@@ -6248,10 +6300,16 @@
     core.facade.writeGuards = Object.freeze({
       sensitiveCharFieldSourced: validators._sensitiveCharFieldSourced
     });
-    return core.facade;
+    return {
+      facade: core.facade,
+      legacyExports: Object.assign({}, core.legacyExports, reconcile.legacyExports)
+    };
+  }
+  function createAIChangeApplier(deps) {
+    return buildAIChangeApplier(deps).facade;
   }
   function installAIChangeApplier(global) {
-    return installLegacyFacade(global, createAIChangeApplier, createLegacyDeps);
+    return installLegacyFacade(global, buildAIChangeApplier, createLegacyDeps);
   }
   var rendererRoot = typeof window !== "undefined" ? window : typeof globalThis !== "undefined" ? globalThis : null;
   if (rendererRoot) installAIChangeApplier(rendererRoot);

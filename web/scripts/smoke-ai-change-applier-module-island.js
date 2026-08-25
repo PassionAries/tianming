@@ -16,21 +16,29 @@ function load(ctx, file) {
   vm.runInContext(fs.readFileSync(path.join(WEB, file), 'utf8'), ctx, { filename: file });
 }
 
-const ctx = {
-  console: { log() {}, warn() {}, error() {} },
-  setTimeout() { return 1; }, clearTimeout() {}, setInterval() { return 1; }, clearInterval() {},
-  GM: { turn: 1, chars: [], facs: [], armies: [], regions: [], officeTree: {}, vars: {}, guoku: {}, neitang: {} },
-  P: {},
-  structuredClone(value) { return JSON.parse(JSON.stringify(value)); }
-};
-ctx.window = ctx;
-ctx.global = ctx;
-ctx.globalThis = ctx;
-vm.createContext(ctx);
+function createContext() {
+  const context = {
+    console: { log() {}, warn() {}, error() {} },
+    setTimeout() { return 1; }, clearTimeout() {}, setInterval() { return 1; }, clearInterval() {},
+    GM: { turn: 1, chars: [], facs: [], armies: [], regions: [], officeTree: {}, vars: {}, guoku: {}, neitang: {} },
+    P: {},
+    structuredClone(value) { return JSON.parse(JSON.stringify(value)); }
+  };
+  context.window = context;
+  context.global = context;
+  context.globalThis = context;
+  vm.createContext(context);
+  return context;
+}
 
-load(ctx, 'tm-ai-change-pathutils.js');
-load(ctx, 'tm-ai-change-army.js');
-load(ctx, 'tm-ai-change-narrative.js');
+function loadPrerequisites(context) {
+  load(context, 'tm-ai-change-pathutils.js');
+  load(context, 'tm-ai-change-army.js');
+  load(context, 'tm-ai-change-narrative.js');
+}
+
+const ctx = createContext();
+loadPrerequisites(ctx);
 load(ctx, 'generated/tm-ai-change-applier.bundle.js');
 
 assert(ctx.AIChangeApplier && ctx.AIChangeApplier.VERSION === 1, 'legacy facade should install');
@@ -69,5 +77,49 @@ try {
 }
 assert(dependencyError && dependencyError.code === 'ai-change-applier-dependencies-missing', 'missing dependencies must fail explicitly');
 assert(!missingDeps.AIChangeApplier, 'failed initialization must not install the legacy facade');
+
+const atomicCtx = createContext();
+loadPrerequisites(atomicCtx);
+const priorShortcut = function priorShortcut() {};
+atomicCtx.applyAITurnChanges = priorShortcut;
+const injectedSetter = function injectedSetter() { throw new Error('injected publish failure'); };
+Object.defineProperty(atomicCtx, 'normalizeAIWriteBackDeaths', {
+  configurable: true,
+  enumerable: true,
+  get() { return undefined; },
+  set: injectedSetter
+});
+let publishError = null;
+try {
+  load(atomicCtx, 'generated/tm-ai-change-applier.bundle.js');
+} catch (error) {
+  publishError = error;
+}
+assert(publishError && publishError.code === 'ai-change-applier-publish-failed', 'late publish failure must be structured');
+assert(atomicCtx.applyAITurnChanges === priorShortcut, 'failed publish must restore an overwritten shortcut descriptor');
+[
+  'AIChangeApplier', 'applyAllegianceChange', '_syncFiscalScalars', '_arriveCharNow',
+  '_hasInstantArrivalRule', 'applyAIArmyChange', 'onAppointment', 'onDismissal',
+  '_tmReasonIsImprison', '_TM_IMPRISON_RE', '_resolveBinding', 'renderTurnReport',
+  'buildFullAIContext', 'advanceCharTravelByDays', 'applyNormalizedAIWriteBackDeaths',
+  '_reconcilePlayerMovements', '_reconcilePlayerFiscalReforms', '_applyOfficeDutyTick',
+  '_applyTaxAuthorityGate', '_applyDirectiveCompliance', '_applyRegentDecisions',
+  'preflightAIWriteBack', 'validateAIWriteBackBatch', '_applyBattleResult',
+  '_applyFiscalDeficitPenalties', '_resetDeficitStreakIfHealthy'
+].forEach(function (key) {
+  assert(!Object.prototype.hasOwnProperty.call(atomicCtx, key), 'failed publish must not leak ' + key);
+});
+const restoredBlocker = Object.getOwnPropertyDescriptor(atomicCtx, 'normalizeAIWriteBackDeaths');
+assert(restoredBlocker && restoredBlocker.set === injectedSetter, 'failed publish must restore the injected property descriptor');
+assert(!Object.prototype.hasOwnProperty.call(atomicCtx.TM.AIChange, 'WriteGuards'), 'failed publish must roll back WriteGuards');
+assert(!Object.prototype.hasOwnProperty.call(atomicCtx.TM.AIChange, 'ApplierModule'), 'failed publish must not expose initialized module state');
+assert(!publishError.rollbackFailures || publishError.rollbackFailures.length === 0, 'atomic rollback should restore every descriptor');
+
+delete atomicCtx.normalizeAIWriteBackDeaths;
+load(atomicCtx, 'generated/tm-ai-change-applier.bundle.js');
+assert(atomicCtx.AIChangeApplier && atomicCtx.TM.AIChange.ApplierModule.initialized === true, 'retry after rollback should initialize successfully');
+const recoveredFacade = atomicCtx.AIChangeApplier;
+load(atomicCtx, 'generated/tm-ai-change-applier.bundle.js');
+assert(atomicCtx.AIChangeApplier === recoveredFacade, 'successful retry should remain idempotent');
 
 console.log('smoke-ai-change-applier-module-island PASS assertions=' + assertions);

@@ -6,7 +6,7 @@ import { createReconcile } from './reconcile.js';
 import { createLegacyDeps, validateDependencies } from './context.js';
 import { installLegacyFacade } from './legacy-adapter.js';
 
-export function createAIChangeApplier(deps) {
+export function buildAIChangeApplier(deps) {
   validateDependencies(deps);
   var core = createCore(deps);
   var validators = createValidators({ global: deps.global, core: core.internals });
@@ -19,11 +19,18 @@ export function createAIChangeApplier(deps) {
   core.facade.writeGuards = Object.freeze({
     sensitiveCharFieldSourced: validators._sensitiveCharFieldSourced
   });
-  return core.facade;
+  return {
+    facade: core.facade,
+    legacyExports: Object.assign({}, core.legacyExports, reconcile.legacyExports)
+  };
+}
+
+export function createAIChangeApplier(deps) {
+  return buildAIChangeApplier(deps).facade;
 }
 
 export function installAIChangeApplier(global) {
-  return installLegacyFacade(global, createAIChangeApplier, createLegacyDeps);
+  return installLegacyFacade(global, buildAIChangeApplier, createLegacyDeps);
 }
 
 var rendererRoot = typeof window !== 'undefined'

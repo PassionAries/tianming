@@ -70,7 +70,24 @@ const entry = read(path.join(MODULE_ROOT, 'index.js'));
   check(entry.indexOf("from '" + specifier + "'") >= 0, 'module entry must explicitly import ' + specifier);
 });
 check(/validateDependencies\(deps\)[\s\S]*createCore\(deps\)/.test(entry), 'dependency validation must precede core initialization');
-check(/existing && existing\.initialized === true/.test(read(path.join(MODULE_ROOT, 'legacy-adapter.js'))), 'legacy adapter must initialize idempotently');
+check(/buildAIChangeApplier\(deps\)[\s\S]*legacyExports/.test(entry), 'module graph must be fully built before legacy publication');
+const adapter = read(path.join(MODULE_ROOT, 'legacy-adapter.js'));
+check(/existing && existing\.initialized === true/.test(adapter), 'legacy adapter must initialize idempotently');
+check(adapter.indexOf('Object.getOwnPropertyDescriptor') >= 0 && adapter.indexOf('Object.defineProperty') >= 0, 'legacy publication must snapshot and restore property descriptors');
+check(adapter.indexOf('restoreProperties(snapshots)') >= 0, 'legacy publication failure must roll back every published property');
+check(adapter.indexOf("publishProperty(aiNamespace, 'ApplierModule', state)") > adapter.indexOf('exportKeys.forEach'), 'initialized module state must publish after every legacy global');
+check(adapter.indexOf('ai-change-applier-publish-failed') >= 0, 'legacy publication failures must remain structured and retryable after rollback');
+
+const pureFactories = read(path.join(MODULE_ROOT, 'core.js')) + '\n' + read(path.join(MODULE_ROOT, 'reconcile.js'));
+[
+  'AIChangeApplier', 'applyAllegianceChange', '_syncFiscalScalars', '_arriveCharNow',
+  '_hasInstantArrivalRule', 'applyAITurnChanges', 'applyAIArmyChange', 'onAppointment',
+  'onDismissal', 'normalizeAIWriteBackDeaths', 'applyNormalizedAIWriteBackDeaths',
+  'preflightAIWriteBack', 'validateAIWriteBackBatch', '_applyBattleResult'
+].forEach((name) => {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  check(!new RegExp('\\b(?:global|window)\\.' + escaped + '\\s*=(?!=)').test(pureFactories), name + ' must only publish through the atomic legacy adapter');
+});
 
 const splitContracts = read(path.join(lib.WEB_ROOT, 'scripts', 'lint-split-contracts.js'));
 LEGACY.forEach((file) => check(splitContracts.indexOf(file) === -1, file + ' must not remain a split-order contract'));

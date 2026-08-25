@@ -9970,9 +9970,7 @@
       "platform": "any",
       "sideEffects": "legacy-unknown",
       "provides": [
-        "_syncFiscalScalars",
-        "_tmOfficeUiRefreshPending",
-        "applyAllegianceChange"
+        "_tmOfficeUiRefreshPending"
       ],
       "consumes": [],
       "dependsOn": [],

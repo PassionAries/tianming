@@ -133,9 +133,6 @@ export function createReconcile(deps) {
     return appliedChars.length;
   }
 
-  global.normalizeAIWriteBackDeaths = normalizeAIWriteBackDeaths;
-  global.applyNormalizedAIWriteBackDeaths = applyNormalizedAIWriteBackDeaths;
-
   // ═══════════════════════════════════════════════════════════════════
   //  死亡墓志铭 & 诈死holding
   // ═══════════════════════════════════════════════════════════════════
@@ -291,7 +288,6 @@ export function createReconcile(deps) {
       try { _refreshCharacterLocationUiAfterTravel(); } catch(_){}
     }
   }
-  global._reconcilePlayerMovements = _reconcilePlayerMovements;
 
   // ── P-VWF·2026-05-29·财政改革对账层 ──
   // 照 _reconcilePlayerMovements 范式·读 GM._turnFiscalReforms·按 type 确定性拨开关（必生效）·
@@ -363,7 +359,6 @@ export function createReconcile(deps) {
       if (typeof global.addEB === 'function') global.addEB('财政改革', ({anticorruption:'肃贪',landsurvey:'丈田',saltreform:'盐政改革',openmaritime:'开海通商',encouragefarming:'劝农'}[fr.type]||fr.type) + '·已确定性落账·必生效');
     });
   }
-  global._reconcilePlayerFiscalReforms = _reconcilePlayerFiscalReforms;
 
   // ── 官制活化 Slice②·履职 tick → 实征率/腐败（确定性·开关 officeDutyStateEnabled·默认关零回归）──
   // 每回合调 tickOfficeDutyState：失职扣/称职奖·按抽象 power 映射既有 FE 杠杆（taxCollect→compliance·supervise/impeach→corruption）。
@@ -395,7 +390,6 @@ export function createReconcile(deps) {
       }
     } catch (_ebE) {}
   }
-  global._applyOfficeDutyTick = _applyOfficeDutyTick;
 
   // ── 官制活化 Slice③ 权限门·税类 income 执行力打折（颁布权≠执行力·开关 officeAuthorityGateEnabled·默认关零回归）──
   function _isTaxIncome(fa) {
@@ -427,7 +421,6 @@ export function createReconcile(deps) {
     try { if (!Array.isArray(G._chronicle)) G._chronicle = []; G._chronicle.push({ turn: G.turn || 0, date: G._gameDate || '', type: '官制↔财政·吏治', text: '掌征税之权' + auth.reason + '·' + (fa.name || fa.category || '税入') + ' 加赋原额' + amount + '·实收' + collected + '·漏额' + shortfall + '中饱', tags: ['联动', '官制'] }); } catch (_cgE2) {}
     return collected;
   }
-  global._applyTaxAuthorityGate = _applyTaxAuthorityGate;
 
   function _applyDirectiveCompliance(G, aiOutput) {
     if (!G) return;
@@ -484,7 +477,6 @@ export function createReconcile(deps) {
       return true;
     });
   }
-  global._applyDirectiveCompliance = _applyDirectiveCompliance;
 
   function _applyRegentDecisions(G, aiOutput) {
     if (!G) return;
@@ -532,7 +524,6 @@ export function createReconcile(deps) {
       });
     });
   }
-  global._applyRegentDecisions = _applyRegentDecisions;
 
   var _tmPreflightCollector = null;
   var _tmPreflightContext = null;
@@ -983,7 +974,6 @@ export function createReconcile(deps) {
     }
     return aiOutput;
   }
-  global.preflightAIWriteBack = preflightAIWriteBack;
 
   function _tmCloneWriteback(value, seen) {
     if (value == null || typeof value !== 'object') return value;
@@ -1164,7 +1154,6 @@ export function createReconcile(deps) {
     });
     return { ok: unique.length === 0, output: detached, failures: unique };
   }
-  global.validateAIWriteBackBatch = validateAIWriteBackBatch;
 
   function _applyBattleResult(G, aiOutput, applied) {
     if (!G || !aiOutput || !aiOutput.battleResult) return;
@@ -1227,7 +1216,6 @@ export function createReconcile(deps) {
       applied.failed.push({ battleResult: true, reason: r && r.reason });
     }
   }
-  global._applyBattleResult = _applyBattleResult;
 
   // 赤字深度等级：返回 tier 对应的惩罚倍率（越深越重）
   function _deficitTier(amount, scaleMoney) {
@@ -1337,8 +1325,6 @@ export function createReconcile(deps) {
     });
     if (!anyDef) G._fiscalDeficitStreak = 0;
   }
-  global._applyFiscalDeficitPenalties = _applyFiscalDeficitPenalties;
-  global._resetDeficitStreakIfHealthy = _resetDeficitStreakIfHealthy;
   // AI writeback validation and rollback transaction (split from the origin to keep the runtime shard bounded).
   var _AI_VALIDATOR_LOG_KEYS = [
     '_fiscalValidatorLog','_personnelValidatorLog','_militaryValidatorLog','_sentimentValidatorLog',
@@ -1513,9 +1499,6 @@ export function createReconcile(deps) {
       }
     });
   }
-  // 暴露给 window·让 endTurn / renderGameState 可调用兜底
-  if (typeof window !== 'undefined') window._syncFiscalScalars = _syncFiscalScalars;
-
   return {
     _processDeathEpitaphs: _processDeathEpitaphs,
     _reconcilePlayerMovements: _reconcilePlayerMovements,
@@ -1533,6 +1516,22 @@ export function createReconcile(deps) {
     _collectValidatorFailures: _collectValidatorFailures,
     _runConsistencyValidator: _runConsistencyValidator,
     applyAITurnChangesAtomic: applyAITurnChangesAtomic,
-    _syncFiscalScalars: _syncFiscalScalars
+    _syncFiscalScalars: _syncFiscalScalars,
+    legacyExports: {
+      normalizeAIWriteBackDeaths: normalizeAIWriteBackDeaths,
+      applyNormalizedAIWriteBackDeaths: applyNormalizedAIWriteBackDeaths,
+      _reconcilePlayerMovements: _reconcilePlayerMovements,
+      _reconcilePlayerFiscalReforms: _reconcilePlayerFiscalReforms,
+      _applyOfficeDutyTick: _applyOfficeDutyTick,
+      _applyTaxAuthorityGate: _applyTaxAuthorityGate,
+      _applyDirectiveCompliance: _applyDirectiveCompliance,
+      _applyRegentDecisions: _applyRegentDecisions,
+      preflightAIWriteBack: preflightAIWriteBack,
+      validateAIWriteBackBatch: validateAIWriteBackBatch,
+      _applyBattleResult: _applyBattleResult,
+      _applyFiscalDeficitPenalties: _applyFiscalDeficitPenalties,
+      _resetDeficitStreakIfHealthy: _resetDeficitStreakIfHealthy,
+      _syncFiscalScalars: _syncFiscalScalars
+    }
   };
 }

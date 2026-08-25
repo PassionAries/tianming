@@ -1,9 +1,8 @@
 // ============================================================
-//  tm-online-update.js — 在线版更新提示 + 三端 footer 版本号同步
+//  tm-online-update.js — 在线版更新提示（由 TM.Features 显式管理生命周期）
 //  2026-06-11·更新功能全面升级 S6
 //
-//  ① footer 版本号（#tm-foot-ver）三端统一从 <meta name="tm-version"> 读·
-//     meta 与代码同包同发·天然就是「正在运行的版本」·从此告别手改 footer。
+//  ① footer 版本号同步已迁入 tm-startup-contract.js，避免三端为一行文本加载本模块。
 //  ② 仅在线版（github.io·非桌面非安卓）跑检查循环：同源拉 version.json?t=时间戳
 //     （query 进缓存键·穿透浏览器缓存与 Pages 边缘缓存）·远端版本更高 → 弹横幅
 //     「线上新版已颁·刷新页面即可启用」·绝不自动刷新（玩家可能在局中）。
@@ -34,6 +33,10 @@
 
     var _lastCheckAt = 0;
     var _state = { localVersion: '', remoteVersion: '', shown: false, lastResult: '' };
+    var _initialized = false;
+    var _firstCheckTimer = null;
+    var _recheckInterval = null;
+    var _visibilityHandler = null;
 
     function compareVersions(a, b) {
       var aa = String(a || '0').split(/[.+-]/).map(function (n) { var v = parseInt(n, 10); return isFinite(v) ? v : 0; });
@@ -59,16 +62,6 @@
         if (m) return m[0];
       } catch (_) {}
       return '';
-    }
-
-    // ── footer 版本号同步（三端都跑·meta = 正在运行的包版本） ────────────────
-    function syncFooter() {
-      try {
-        var v = getLocalVersion();
-        if (!v) return;
-        var span = document.getElementById('tm-foot-ver');
-        if (span && span.textContent !== v) span.textContent = v;
-      } catch (_) {}
     }
 
     // ── 横幅 ─────────────────────────────────────────────────────────────────
@@ -195,31 +188,65 @@
         });
     }
 
-    function arm() {
-      syncFooter();
-      if (!isWeb) return; // 桌面/安卓只同步 footer·各有自己的更新通道
+    function init() {
+      if (_initialized) return { ok: true, reused: true, isWeb: isWeb };
+      _initialized = true;
+      if (!isWeb) return { ok: false, code: 'not-applicable', isWeb: false };
       var testMode = false;
       try { testMode = /[?&]tmOluTest=1/.test(String(window.location.search || '')); } catch (_) {}
-      setTimeout(function () { check(false); }, testMode ? 500 : FIRST_CHECK_MS);
-      setInterval(function () {
+      _firstCheckTimer = setTimeout(function () {
+        _firstCheckTimer = null;
+        check(false);
+      }, testMode ? 500 : FIRST_CHECK_MS);
+      _recheckInterval = setInterval(function () {
         try { if (!document.hidden && !_state.shown) check(false); } catch (_) {}
       }, RECHECK_MS);
-      try {
-        document.addEventListener('visibilitychange', function () {
-          try {
-            if (document.hidden || _state.shown) return;
-            if (Date.now() - _lastCheckAt >= VISIBLE_RECHECK_MIN_GAP_MS) check(false);
-          } catch (_) {}
-        });
-      } catch (_) {}
+      _visibilityHandler = function () {
+        try {
+          if (document.hidden || _state.shown) return;
+          if (Date.now() - _lastCheckAt >= VISIBLE_RECHECK_MIN_GAP_MS) check(false);
+        } catch (_) {}
+      };
+      document.addEventListener('visibilitychange', _visibilityHandler);
+      return { ok: true, reused: false, isWeb: true };
     }
 
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', arm);
-    else arm();
+    function dispose() {
+      if (!_initialized) return { ok: true, disposed: false };
+      if (_firstCheckTimer != null) {
+        clearTimeout(_firstCheckTimer);
+        _firstCheckTimer = null;
+      }
+      if (_recheckInterval != null) {
+        clearInterval(_recheckInterval);
+        _recheckInterval = null;
+      }
+      if (_visibilityHandler) {
+        document.removeEventListener('visibilitychange', _visibilityHandler);
+        _visibilityHandler = null;
+      }
+      removeBanner();
+      _initialized = false;
+      return { ok: true, disposed: true };
+    }
 
     window.TM_OnlineUpdate = {
+      init: init,
+      dispose: dispose,
       check: function (force) { return check(force !== false); },
-      getState: function () { return { localVersion: getLocalVersion(), remoteVersion: _state.remoteVersion, shown: _state.shown, lastResult: _state.lastResult, isWeb: isWeb }; },
+      getState: function () {
+        return {
+          localVersion: getLocalVersion(),
+          remoteVersion: _state.remoteVersion,
+          shown: _state.shown,
+          lastResult: _state.lastResult,
+          isWeb: isWeb,
+          initialized: _initialized,
+          firstCheckScheduled: _firstCheckTimer != null,
+          recheckScheduled: _recheckInterval != null,
+          visibilityBound: !!_visibilityHandler
+        };
+      },
       dismiss: dismiss,
       refresh: doRefresh
     };

@@ -19,6 +19,18 @@
     ['TimeUtils', function (world) { return !!world.TimeUtils; }]
   ];
 
+  function syncFooterVersion(doc) {
+    doc = doc || (root && root.document);
+    if (!doc || typeof doc.querySelector !== 'function') return '';
+    var meta = doc.querySelector('meta[name="tm-version"]');
+    var version = meta && typeof meta.getAttribute === 'function'
+      ? String(meta.getAttribute('content') || '').trim() : '';
+    if (!/^\d+(?:\.\d+){1,3}$/.test(version)) return '';
+    var footer = typeof doc.getElementById === 'function' ? doc.getElementById('tm-foot-ver') : null;
+    if (footer && footer.textContent !== version) footer.textContent = version;
+    return version;
+  }
+
   function validate(world) {
     world = world || root;
     var missing = REQUIRED.filter(function (entry) {
@@ -44,8 +56,14 @@
     return true;
   }
 
-  var api = { validate: validate, renderFailure: renderFailure, required: REQUIRED.map(function (entry) { return entry[0]; }) };
+  var api = {
+    validate: validate,
+    renderFailure: renderFailure,
+    syncFooterVersion: syncFooterVersion,
+    required: REQUIRED.map(function (entry) { return entry[0]; })
+  };
   root.TMStartupContract = api;
+  syncFooterVersion();
   var result = validate(root);
   root.__tmStartupContract = result;
   if (!result.ok) {

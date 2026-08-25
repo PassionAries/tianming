@@ -80,10 +80,12 @@ function load(opts) {
 }
 
 (async function main() {
-  // ── A·web 端·远端相同 → 静默；footer 同步 ──
+  // ── A·web 端·显式 init 后远端相同 → 静默；footer 由 startup contract 同步 ──
   {
     const env = load({ localVersion: '1.3.3.5', remote: { version: '1.3.3.5' } });
-    assert(env.footSpan.textContent === '1.3.3.5', 'A·footer 从 meta 同步');
+    assert(env.footSpan.textContent === '0.0.0.0', 'A·模块装载不再为 footer 产生副作用');
+    assert(env.timers.length === 0, 'A·模块装载不自动排程');
+    env.windowStub.TM_OnlineUpdate.init();
     assert(env.timers.some(t => t.ms === 20000), 'A·20s 首查排程');
     assert(env.timers.some(t => t.interval && t.ms === 30 * 60 * 1000), 'A·30min 周期排程');
     env.fire(20000);
@@ -95,6 +97,7 @@ function load(opts) {
   // ── B·远端更高 → 横幅·立即刷新带 ?r= ──
   {
     const env = load({ localVersion: '1.3.3.5', remote: { version: '1.3.4.0' } });
+    env.windowStub.TM_OnlineUpdate.init();
     env.fire(20000);
     await flush();
     const banner = env.banner();
@@ -109,6 +112,7 @@ function load(opts) {
   // ── C·稍后记账·同版本不再弹·更高版本再弹 ──
   {
     const env = load({ localVersion: '1.3.3.5', remote: { version: '1.3.4.0' } });
+    env.windowStub.TM_OnlineUpdate.init();
     env.fire(20000);
     await flush();
     const later = env.banner()._children.find(c => c.className === 'tm-olu-later');
@@ -118,6 +122,7 @@ function load(opts) {
     const r2 = await env.windowStub.TM_OnlineUpdate.check(false);
     assert(r2 === 'dismissed' && env.banner() === null, 'C·同版本被记账压制');
     const env2 = load({ localVersion: '1.3.3.5', remote: { version: '1.3.5.0' }, localStorage: { 'tm.onlineUpdate.dismissedVersion': '1.3.4.0' } });
+    env2.windowStub.TM_OnlineUpdate.init();
     env2.fire(20000);
     await flush();
     assert(!!env2.banner(), 'C·更高版本突破记账再弹');
@@ -127,6 +132,7 @@ function load(opts) {
   {
     for (const remote of [null, 'badjson', { version: 'not-a-version' }, { version: '' }]) {
       const env = load({ localVersion: '1.3.3.5', remote });
+      env.windowStub.TM_OnlineUpdate.init();
       env.fire(20000);
       await flush();
       assert(env.banner() === null, 'D·异常远端静默·' + JSON.stringify(remote && remote.version || remote));
@@ -136,15 +142,16 @@ function load(opts) {
   // ── E·自举·本地无 meta + 远端有 → 弹（发版当天还开着的旧会话） ──
   {
     const env = load({ noMeta: true, remote: { version: '1.3.4.0' } });
+    env.windowStub.TM_OnlineUpdate.init();
     env.fire(20000);
     await flush();
     assert(!!env.banner(), 'E·无本地 meta（旧会话）→ 提示刷新');
   }
 
-  // ── F·桌面端 → 零检查·footer 照常同步 ──
+  // ── F·桌面端 → 显式 not-applicable·零检查 ──
   {
     const env = load({ desktop: true, localVersion: '1.3.3.5', remote: { version: '9.9.9.9' } });
-    assert(env.footSpan.textContent === '1.3.3.5', 'F·桌面 footer 同步');
+    assert(env.windowStub.TM_OnlineUpdate.init().code === 'not-applicable', 'F·桌面 init 明确 not-applicable');
     assert(!env.timers.some(t => t.ms === 20000), 'F·桌面不排检查');
     env.timers.forEach(t => { if (!t.fired) { t.fired = true; t.fn && t.fn(); } });
     await flush();
@@ -154,12 +161,14 @@ function load(opts) {
   // ── G·安卓端 → 零检查 ──
   {
     const env = load({ capacitor: true, localVersion: '1.3.3.5', remote: { version: '9.9.9.9' } });
+    assert(env.windowStub.TM_OnlineUpdate.init().code === 'not-applicable', 'G·安卓 init 明确 not-applicable');
     assert(!env.timers.some(t => t.ms === 20000), 'G·安卓不排检查');
   }
 
   // ── H·测试缝·?tmOluTest=1 → 500ms 首查 ──
   {
     const env = load({ localVersion: '1.3.3.5', remote: { version: '1.3.4.0' }, search: '?tmOluTest=1' });
+    env.windowStub.TM_OnlineUpdate.init();
     assert(env.timers.some(t => t.ms === 500), 'H·测试模式 500ms 首查');
   }
 

@@ -418,35 +418,40 @@
   // ── 地图标签几何：委托纯几何/字号/配色引擎 tm-map-label-geo.js（跨朝代通用·零游戏依赖·独立单测）──
   //   本文件只留「region 适配层」：pointsForRegion 取环 + WeakMap 按几何签名缓存(几何静态·frozen 剧本对象亦安全)。
   //   引擎未加载时全部安全回落(面积→bbox·锚点→actualCenter·字号→min·亮色→null)·不崩。
-  var _TMGeo = (typeof window !== 'undefined' && window.TMMapLabelGeo) ||
-               (typeof TMMapLabelGeo !== 'undefined' ? TMMapLabelGeo : null);
+  function getTMGeo(){ return (typeof window !== 'undefined' && window.TMMapLabelGeo) || null; }
   function _tmGeoSig(pts){ return pts.length + (pts.length ? (':' + pts[0].x.toFixed(1) + ',' + pts[0].y.toFixed(1)) : ''); }
   var _tmAreaCache = (typeof WeakMap !== 'undefined') ? new WeakMap() : null;
   var _tmAnchorCache = (typeof WeakMap !== 'undefined') ? new WeakMap() : null;
+  function invalidateMapLabelGeometryCaches(){
+    _tmAreaCache = (typeof WeakMap !== 'undefined') ? new WeakMap() : null;
+    _tmAnchorCache = (typeof WeakMap !== 'undefined') ? new WeakMap() : null;
+  }
   // region 真面积(缓存·shoelace)·引擎缺失或无点→回落 bbox 面积。
   function regionTrueArea(r){
     if (!r) return 0;
     var pts = pointsForRegion(r), sig = _tmGeoSig(pts);
-    if (_tmAreaCache) { var hit = _tmAreaCache.get(r); if (hit && hit.sig === sig) return hit.area; }
-    var area = _TMGeo ? Math.abs(_TMGeo.polyAreaSigned(pts)) : 0;
+    var geo = getTMGeo();
+    if (geo && _tmAreaCache) { var hit = _tmAreaCache.get(r); if (hit && hit.sig === sig) return hit.area; }
+    var area = geo ? Math.abs(geo.polyAreaSigned(pts)) : 0;
     if (!(area > 0)) { var ext = regionExtent(r); area = ext.area || 0; }
-    if (_tmAreaCache) { try { _tmAreaCache.set(r, { sig: sig, area: area }); } catch (_) {} }
+    if (geo && _tmAreaCache) { try { _tmAreaCache.set(r, { sig: sig, area: area }); } catch (_) {} }
     return area;
   }
   // region 标签锚点(缓存·polylabel 内接圆心)·引擎缺失/无点→回落 actualCenter。
   function labelAnchor(r){
     if (!r) return { x: 0, y: 0 };
     var pts = pointsForRegion(r), sig = _tmGeoSig(pts);
-    if (_tmAnchorCache) { var hit = _tmAnchorCache.get(r); if (hit && hit.sig === sig) return hit.anchor; }
-    var a = (_TMGeo && pts.length >= 3) ? _TMGeo.polylabel(pts) : null;
+    var geo = getTMGeo();
+    if (geo && _tmAnchorCache) { var hit = _tmAnchorCache.get(r); if (hit && hit.sig === sig) return hit.anchor; }
+    var a = (geo && pts.length >= 3) ? geo.polylabel(pts) : null;
     if (!a || !isFinite(a.x) || !isFinite(a.y)) a = actualCenter(r);
-    if (_tmAnchorCache) { try { _tmAnchorCache.set(r, { sig: sig, anchor: a }); } catch (_) {} }
+    if (geo && _tmAnchorCache) { try { _tmAnchorCache.set(r, { sig: sig, anchor: a }); } catch (_) {} }
     return a;
   }
   // 面积→字号 平滑幂律(委托引擎·缺失回落 min)。
-  function _tmAreaFont(area, ref, base, k, min, max){ return _TMGeo ? _TMGeo.areaFont(area, ref, base, k, min, max) : min; }
+  function _tmAreaFont(area, ref, base, k, min, max){ var geo = getTMGeo(); return geo ? geo.areaFont(area, ref, base, k, min, max) : min; }
   // 势力色亮化(委托引擎·缺失回落 null → CSS fallback 金)。
-  function _tmBrightenLabelColor(color){ return _TMGeo ? _TMGeo.brightenLabelColor(color) : null; }
+  function _tmBrightenLabelColor(color){ var geo = getTMGeo(); return geo ? geo.brightenLabelColor(color) : null; }
 
   // perf round6 (2026-06-10): 归一化结果 memo·载档/回合末地图刷新对同一批字符串
   // 反复 trim+regex+lower 数百万次·见 _admIdxCache 注释
@@ -1055,10 +1060,11 @@
   function _factionLabelAnchor(g, avgx, avgy){
     var cx = g._wsum > 0 ? g._wx / g._wsum : avgx, cy = g._wsum > 0 ? g._wy / g._wsum : avgy;
     var regs = g._regs || [];
-    if (_TMGeo && regs.length) {
+    var geo = getTMGeo();
+    if (geo && regs.length) {
       for (var i = 0; i < regs.length; i++) {                     // 质心是否落在本势力某地块内
         var pts = pointsForRegion(regs[i]);
-        if (pts.length >= 3 && _TMGeo.pointToPolyDist(cx, cy, pts) > 0) return { x: cx, y: cy };
+        if (pts.length >= 3 && geo.pointToPolyDist(cx, cy, pts) > 0) return { x: cx, y: cy };
       }
       var best = null, bestD = Infinity;                          // 落缝隙/飞地外→吸附最近本势力地块内接圆心
       for (var j = 0; j < regs.length; j++) {
@@ -1079,13 +1085,14 @@
     var maxArea = Math.max.apply(null, groups.map(function(g){ return Number(g.area || 0); }).concat([1]));
     var maxN = Math.max.apply(null, groups.map(function(g){ return Number(g.n || 0); }).concat([1]));
     var maxSpan = Math.max.apply(null, groups.map(function(g){ return Number(g.span || 0); }).concat([1]));
+    var geo = getTMGeo();
     // 势力名字号按疆域「真面积」铺满区间：最小势力→MINF、最大→MAXF·中间 area^K 平滑铺开(owner: 大够大/小够小/均匀按面积)
     var facAreas = groups.map(function(g){ return Number(g.area || 0); }).filter(function(a){ return a > 0; });
     var minA = facAreas.length ? Math.min.apply(null, facAreas) : 1;
     var maxA = facAreas.length ? Math.max.apply(null, facAreas) : 1;
     return groups.map(function(g){
       var name = realmFactionName(g), nlen = String(name).length || 1;
-      var size = (legacy && _TMGeo) ? _TMGeo.legacyFactionSize(Number(g.area||0), maxArea, Number(g.n||0), maxN, Number(g.span||0), maxSpan, nlen) : realmLabelSize(Number(g.area||0), minA, maxA);
+      var size = (legacy && geo) ? geo.legacyFactionSize(Number(g.area||0), maxArea, Number(g.n||0), maxN, Number(g.span||0), maxSpan, nlen) : realmLabelSize(Number(g.area||0), minA, maxA);
       var rotate = realmLabelRotation(g.key || name);
       var lw = Math.max(size * 1.05, nlen * size * 1.12), lh = size * 1.25;   // 纯文字盒(无框·含 .34em 字距)·供防重叠
       var style = '--realm-label-size:' + size + 'px';
@@ -1140,6 +1147,18 @@
   function renderFormalMapSoon(){
     clearTimeout(state.mapRenderTimer);
     state.mapRenderTimer = setTimeout(renderFormalMap, 0);
+  }
+
+  var _labelFeatureRequested = false;
+  function requestMapLabelFeature(){
+    if (_labelFeatureRequested || !window.TM || !TM.Features || typeof TM.Features.ensure !== 'function') return;
+    _labelFeatureRequested = true;
+    var load = typeof TM.Features.ensureRecoverable === 'function'
+      ? TM.Features.ensureRecoverable('formalMapLabels', { retryLoadError: true, retryInitError: true })
+      : TM.Features.ensure('formalMapLabels');
+    load.catch(function(error){
+      if (window.console && typeof window.console.warn === 'function') window.console.warn('[phase8-formal-map] 标签 feature 加载失败', error);
+    });
   }
 
   // ── 阶段3·zoom 联动(CK3)：缩放跨阈值自动切 mapScale 层级·按钮切层亦带动缩放·单一真相=mapView.scale ──
@@ -1264,6 +1283,7 @@
       }
       return;
     }
+    requestMapLabelFeature();
     var map = getMapData();
     if (!map || !Array.isArray(map.regions) || !map.regions.length) {
       stage.innerHTML = '<div class="tmf-map-loading">舆图数据尚未载入</div>';
@@ -2547,8 +2567,18 @@
   bridge.map.__liveOwnerFromProvinceMap = liveOwnerFromProvinceMap;
   bridge.map.__regionKeyNorm = regionKeyNorm;
   bridge.map.__regionMatchFields = regionMatchFields;
+  bridge.map.__regionTrueArea = regionTrueArea;
+  bridge.map.__labelAnchor = labelAnchor;
+  bridge.map.__requestMapLabelFeature = requestMapLabelFeature;
   // perf round7: 强制下次 renderFormalMap 重建 SVG(清 dirty 签名)·供几何变更等绕过守卫
   bridge.map.invalidateFormalMap = function(){ try { state._lastFormalMapSig = null; } catch(_){} };
+  bridge.map.invalidateMapLabelGeometryCaches = invalidateMapLabelGeometryCaches;
+  bridge.map.onMapLabelFeatureReady = function(){
+    invalidateMapLabelGeometryCaches();
+    state._lastFormalMapSig = null;
+    renderFormalMapSoon();
+    scheduleLabelLayout();
+  };
   bridge.map.__formalMapSignature = formalMapSignature;
 
   // ── re-attach bridge exposes that previously came from bridge.js ──

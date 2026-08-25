@@ -25,6 +25,7 @@
 const lib = require('./lib-arch-guard');
 const fs = require('fs');
 const path = require('path');
+const featureBuild = require('./build-feature-manifest');
 
 const BASELINE_FILE = path.join(lib.BASELINE_DIR, 'dep-dangling.json');
 const MANIFEST_FILE = path.join(lib.REPORT_DIR, 'deps-manifest.json');
@@ -112,6 +113,18 @@ function analyzeEntry(entry) {
     if (f.isData) return;
     manifest.push({ order, src: f.src, provides: [...s.provides].sort(), requires: [...s.requires].sort() });
   });
+  if (entry === 'index.html') {
+    const featureManifest = featureBuild.loadFeatureManifest();
+    featureBuild.validateFeatureManifest(featureManifest);
+    Object.entries(featureManifest.features).forEach(([featureName, feature]) => {
+      feature.provides.forEach((providerPath) => {
+        const match = String(providerPath).match(/^TM\.([A-Za-z_$][\w$]*)/);
+        if (!match) return;
+        if (!definers.has(match[1])) definers.set(match[1], []);
+        definers.get(match[1]).push(`feature:${featureName}`);
+      });
+    });
+  }
   const dangling = [...users.keys()].filter(ns => !definers.has(ns)).sort();
   const shared = [...definers.entries()].filter(([, v]) => v.length > 1).map(([k, v]) => ({ ns: k, files: v }));
   return { entry, files, definers, users, dangling, shared, dynamicDefiners, manifest };

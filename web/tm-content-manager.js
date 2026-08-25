@@ -1234,6 +1234,25 @@
     return Promise.all(tasks);
   }
 
+  async function ensureDesktopUpdateFeature() {
+    if (!desktop()) return { ok: false, code: 'not-applicable' };
+    if (!window.TM || !TM.Features || typeof TM.Features.ensure !== 'function') {
+      return { ok: false, code: 'feature-loader-unavailable' };
+    }
+    try {
+      if (typeof TM.Features.ensureRecoverable === 'function') {
+        return await TM.Features.ensureRecoverable('desktopUpdate', {
+          retryLoadError: true,
+          retryInitError: true
+        });
+      }
+      return await TM.Features.ensure('desktopUpdate');
+    } catch (error) {
+      if (window.console && typeof window.console.warn === 'function') window.console.warn('[TMContentManager] 桌面更新 feature 加载失败', error);
+      return { ok: false, code: error && error.code || 'feature-load-failed' };
+    }
+  }
+
   async function openContentManager() {
     state.feedUrl = loadFeedUrl();
     state.hotFeedUrl = loadHotFeedUrl();
@@ -1258,6 +1277,7 @@
       try { if (Array.isArray(state.webInstalled) && state.webInstalled.length) checkWorkshopUpdates(true); } catch (eU) {} // 批C·静默检查更新(有已装包才跑·不弹窗·结果缀真源条/更新中心)
       return;
     }
+    await ensureDesktopUpdateFeature();
     try {
       var status = await window.tianming.contentStatus();
       if (status && status.success) {

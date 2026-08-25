@@ -4,11 +4,14 @@
 const fs = require('fs');
 const path = require('path');
 const lib = require('./lib-arch-guard');
+const featureBuild = require('./build-feature-manifest');
 
 const INDEX = path.join(lib.WEB_ROOT, 'index.html');
 const PROVIDERS = path.join(lib.REPORT_DIR, 'global-providers.json');
 const OUTPUT = path.join(lib.WEB_ROOT, 'startup-script-phases.json');
 const CHECK = process.argv.includes('--check');
+const featureManifest = featureBuild.loadFeatureManifest();
+featureBuild.validateFeatureManifest(featureManifest);
 
 if (!fs.existsSync(PROVIDERS)) {
   throw new Error('global provider report missing; run node web/scripts/lint-global-providers.js first');
@@ -46,16 +49,34 @@ const scripts = parsed.map((row, index) => ({
   script: row.src,
   order: index,
   phase: phaseFor(index),
+  loadPolicy: 'eager-ordered',
+  platform: 'any',
+  sideEffects: 'legacy-unknown',
   provides: Array.from(providedByScript.get(row.src) || []).sort(),
   consumes: Array.from(consumedByScript.get(row.src) || []).sort(),
-  mustLoadBefore: index + 1 < parsed.length ? [parsed[index + 1].src] : [],
-  mustLoadAfter: index > 0 ? [parsed[index - 1].src] : [],
+  dependsOn: [],
+  mustLoadBefore: [],
+  mustLoadAfter: [],
   lazySafe: false,
-  reason: 'Round 20 dependency audit retained the current classic-script order; no startup side-effect-free lazy boundary was proven for this provider.'
+  reason: 'Legacy eager script: document order remains observable, but adjacency is not represented as a dependency. Explicit split contracts remain owned by lint-split-contracts.js.'
 }));
 
+const features = Object.keys(featureManifest.features).sort().map((name) => {
+  const feature = featureManifest.features[name];
+  return {
+    feature: name,
+    scripts: feature.scripts.map(featureBuild.scriptPath),
+    loadPolicy: feature.loadPolicy,
+    platform: feature.platform,
+    sideEffects: feature.sideEffects,
+    dependsOn: feature.dependsOn.slice(),
+    provides: feature.provides.slice()
+  };
+});
+const deferredScriptCount = features.reduce((count, feature) => count + feature.scripts.length, 0);
+
 const manifest = {
-  version: 1,
+  version: 2,
   source: 'index.html',
   generatedBy: 'web/scripts/build-startup-phase-manifest.js',
   scriptCount: scripts.length,
@@ -63,9 +84,10 @@ const manifest = {
     out[row.phase] = (out[row.phase] || 0) + 1;
     return out;
   }, {}),
-  deferredChangesApproved: 0,
-  auditConclusion: 'No classic-script group was deferred in Round 20: 414+ ordered providers, immediate registrations, split-provider adjacency contracts, and two approved early reads make bulk defer unsafe without a dedicated loader migration.',
-  scripts
+  deferredChangesApproved: deferredScriptCount,
+  auditConclusion: 'Feature Loader V2 defers only six audited scripts behind explicit lifecycle and platform boundaries. All other classic scripts retain document order; adjacency alone is no longer emitted as a false dependency.',
+  scripts,
+  features
 };
 const text = JSON.stringify(manifest, null, 2) + '\n';
 
@@ -75,8 +97,8 @@ if (CHECK) {
     console.error('[startup-phase-manifest] stale: ' + lib.rel(OUTPUT));
     process.exit(1);
   }
-  console.log('[startup-phase-manifest] PASS scripts=' + scripts.length + ' phases=' + JSON.stringify(manifest.phaseCounts));
+  console.log('[startup-phase-manifest] PASS scripts=' + scripts.length + ' deferred=' + deferredScriptCount + ' phases=' + JSON.stringify(manifest.phaseCounts));
 } else {
   fs.writeFileSync(OUTPUT, text, 'utf8');
-  console.log('[startup-phase-manifest] wrote ' + lib.rel(OUTPUT) + ' scripts=' + scripts.length);
+  console.log('[startup-phase-manifest] wrote ' + lib.rel(OUTPUT) + ' scripts=' + scripts.length + ' deferred=' + deferredScriptCount);
 }

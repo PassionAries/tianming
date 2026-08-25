@@ -511,6 +511,7 @@ console.log('天命游戏脚本开始加载...');
 
 <script src="tm-env-detect.js?v=2026042714"></script>
 <script src="tm-platform.js?v=20260823-ipc1"></script>
+<script src="tm-feature-loader.js?v=20260825-feature-loader-v2"></script>
 <!-- 固定虚拟分辨率+整体等比缩放适配（移植 Phase 2 重做）·仅 capacitor/?fit=1·须在 platform 后尽早加载防闪 -->
 <script src="tm-fixed-fit.js?v=20260723-modern-viewport-units"></script>
 <script src="tm-debug-logger.js?v=2026052801"></script>
@@ -954,8 +955,7 @@ console.log('天命游戏脚本开始加载...');
 <!-- 旧 Tianqi runtime snapshot 仍可作为兼容产物生成，但在线入口不再空闲时无条件下载。
      完整官方脚本已包含同源地图与运行时数组，由 TMOfficialScenarioLoader 在选中剧本时一次性加载。 -->
 
-<!-- 测试框架（?test=1 自动运行） -->
-<script src="tm-test-harness.js?v=2026042714" defer></script>
+<!-- 浏览器测试框架仅在 ?test=1 / ?devHarness=1 时由 TM.Features 按需加载。 -->
 
 <!-- 邸报·更新公告 -->
 <script src="tm-changelog.js?v=20260519-remote-changelog"></script>
@@ -972,8 +972,7 @@ console.log('天命游戏脚本开始加载...');
 <script src="phase8-formal-bridge.js?v=20260706-split27"></script>
 <!-- phase8-formal·按 surface family 拆 6 module·主 bridge 必先 load·skeleton + alias 块·body 0 改动·2026-05-26 -->
 <script src="phase8-formal-topbar.js?v=20260621-optland"></script>
-<script src="tm-map-label-geo.js?v=20260705-noframe"></script>
-<script src="tm-map-label-collide.js?v=20260705-noframe"></script>
+<!-- 地图标签几何/碰撞由正式地图首次渲染时通过 TM.Features 加载；地图可先用安全 fallback。 -->
 <script src="phase8-formal-map.js?v=20260706-split25"></script>
 <!-- 勿动位置·第二十五拆：phase8-formal-map-dossier 必须【紧随 origin 之后】装载(②b origin-first 双向 bucket·origin 先导出 __p8MapParts→本片捕获回填) -->
 <script src="phase8-formal-map-dossier.js?v=20260706-split25"></script>
@@ -993,12 +992,7 @@ console.log('天命游戏脚本开始加载...');
 <!-- Capacitor 启动钩子（移植 Phase 3）·Capgo 热更 notifyAppReady + 在线·仅原生端·桌面/web no-op -->
 <script src="tm-capacitor-boot.js?v=20260604-ota-progress3"></script>
 
-<!-- 更新进度卡·三端共用 UI 组件·自身不判平台不发请求·由消费方挂载（不挂载即惰性） -->
-<script src="tm-update-card.js?v=20260611-upd1"></script>
-<!-- 桌面端启动自动检查更新·仅 window.tianming 在时生效·dev 静默·安卓/在线 no-op -->
-<script src="tm-desktop-update.js?v=20260611-upd1"></script>
-<!-- 在线版更新提示（仅 web 端查 version.json·桌面/安卓只同步 footer 版本号） -->
-<script src="tm-online-update.js?v=20260611-upd1"></script>
+<!-- 更新卡/桌面更新由更新中心按需加载；在线更新在 Web 首屏完成后 idle 加载。 -->
 
 <!-- 触屏手势桥（移植 Phase 2·S2.x）·长按=右键(contextmenu)·仅触屏设备挂载·鼠标零影响 -->
 <script src="tm-touch-gestures.js?v=20260603-longpress-rclick"></script>

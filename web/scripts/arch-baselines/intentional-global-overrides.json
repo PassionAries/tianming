@@ -555,14 +555,6 @@
         "phase8-formal-drafts.js"
       ]
     },
-    "getTributeRatio": {
-      "owner": "tm-economy.js",
-      "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
-      "expectedOrder": [
-        "tm-economy.js",
-        "tm-test-harness.js"
-      ]
-    },
     "GM": {
       "owner": "tm-data-model.js",
       "reason": "Pre-existing classic-script provider chain retained as an explicit load-order contract; later providers intentionally extend or replace the compatibility surface.",
@@ -637,8 +629,7 @@
       "expectedOrder": [
         "tm-data-model.js",
         "tm-save-lifecycle.js",
-        "tm-content-manager.js",
-        "tm-test-harness.js"
+        "tm-content-manager.js"
       ]
     },
     "renderEvtTab": {

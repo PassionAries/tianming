@@ -26,10 +26,13 @@ function criticalWorld() {
 
 function load(world) {
   const appended = [];
+  const footer = { textContent: 'stale' };
+  const meta = { getAttribute(name) { return name === 'content' ? '1.3.4.11' : null; } };
   const document = {
     body: { appendChild(node) { appended.push(node); } },
     documentElement: { dataset: {} },
-    getElementById() { return null; },
+    getElementById(id) { return id === 'tm-foot-ver' ? footer : null; },
+    querySelector(selector) { return selector === 'meta[name="tm-version"]' ? meta : null; },
     createElement() {
       return {
         id: '', textContent: '', style: {}, attributes: {},
@@ -47,13 +50,14 @@ function load(world) {
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(SOURCE, context, { filename: 'tm-startup-contract.js' });
-  return { context, document, appended };
+  return { context, document, appended, footer };
 }
 
 let fixture = load(criticalWorld());
 check(fixture.context.__tmStartupContract.ok === true, 'complete runtime satisfies the startup contract');
 check(fixture.appended.length === 0, 'complete runtime does not render a failure surface');
 check(fixture.context.TMStartupContract.required.includes('endTurn'), 'contract publishes its critical global inventory');
+check(fixture.footer.textContent === '1.3.4.11', 'startup contract synchronizes footer version on every platform');
 
 const broken = criticalWorld();
 delete broken.endTurn;

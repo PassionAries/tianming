@@ -38,6 +38,8 @@
   var _verbose = false;
   var _fetchTotalBytes = 0;       // 增量计划总字节·算百分比/速度用
   var _samples = [];              // 速度采样（滚动 2.5s 窗·与安卓卡同算法）
+  var _initialized = false;
+  var _subscriptionDisposers = [];
 
   function card() { return window.TMUpdateCard || null; }
   function nowMs() {
@@ -182,8 +184,8 @@
 
   // electron-updater 事件 → 卡片进度（仅本模块发起的安装包下载会话）
   function wireInstallerEvents() {
-    if (typeof window.tianming.onUpdateStatus !== 'function') return;
-    window.tianming.onUpdateStatus(function (st) {
+    if (typeof window.tianming.onUpdateStatus !== 'function') return null;
+    return window.tianming.onUpdateStatus(function (st) {
       if (!_installerActive || !st || !st.kind) return;
       var c = card();
       if (!c) return;
@@ -205,8 +207,8 @@
 
   // ── 主进程事件 → 卡片进度 ────────────────────────────────────────────────
   function wireStatusEvents() {
-    if (typeof window.tianming.onHotUpdateStatus !== 'function') return;
-    window.tianming.onHotUpdateStatus(function (st) {
+    if (typeof window.tianming.onHotUpdateStatus !== 'function') return null;
+    return window.tianming.onHotUpdateStatus(function (st) {
       if (!_sessionActive || !st || !st.kind) return;
       var c = card();
       if (!c) return;
@@ -330,23 +332,65 @@
     runCheck(verbose);
   }
 
-  function arm() {
+  function init() {
+    if (_initialized) return { ok: true, reused: true, subscriptions: _subscriptionDisposers.length };
     // wireXxx 保留：手动 TMDesktopUpdate.check(true) 发起的安装会话仍需进度回显。
-    wireStatusEvents();
-    wireInstallerEvents();
+    var installed = [];
+    try {
+      var hotDispose = wireStatusEvents();
+      if (typeof hotDispose === 'function') installed.push(hotDispose);
+      var installerDispose = wireInstallerEvents();
+      if (typeof installerDispose === 'function') installed.push(installerDispose);
+    } catch (error) {
+      installed.forEach(function (disposeSubscription) {
+        try { disposeSubscription(); }
+        catch (disposeError) { if (window.console && typeof window.console.warn === 'function') window.console.warn('[tm-desktop-update] init rollback disposer failed', disposeError); }
+      });
+      throw error;
+    }
+    _subscriptionDisposers = installed;
+    _initialized = true;
     // ★2026-07-01·桌面端不再自动检查/自动弹热更卡（owner：桌面热更改到「创意工坊 / 更新中心」手动做）。
     //   原「启动 8s 首查 + 6h 周期复查」会自动 offerUpdate/installerFlow 弹 TMUpdateCard·已整段移除。
     //   → 桌面开局零更新卡；新版仍靠邸报(有未读 changelog 自动弹+红点)提示玩家去创意工坊更新。
     //   checkWhenClear / CHECK_DELAY_MS / RECHECK_INTERVAL_MS / AVOID_* 现仅供手动路径与历史参考。
+    return { ok: true, reused: false, subscriptions: _subscriptionDisposers.length };
   }
-  if (document.readyState === 'complete') arm();
-  else window.addEventListener('load', arm);
+
+  function dispose() {
+    if (!_initialized) return { ok: true, disposed: false, subscriptions: 0 };
+    var errors = [];
+    _subscriptionDisposers.splice(0).forEach(function (disposeSubscription) {
+      try { disposeSubscription(); }
+      catch (error) {
+        errors.push(error && error.message ? error.message : String(error));
+        if (window.console && typeof window.console.warn === 'function') window.console.warn('[tm-desktop-update] subscription disposer failed', error);
+      }
+    });
+    _initialized = false;
+    _sessionActive = false;
+    _installerActive = false;
+    _busy = false;
+    return { ok: errors.length === 0, disposed: true, errors: errors };
+  }
 
   // 手动入口（联网中枢/控制台/调试用）
   window.TMDesktopUpdate = {
-    check: function (verbose) { return runCheck(verbose !== false); },
+    init: init,
+    dispose: dispose,
+    check: function (verbose) {
+      init();
+      return runCheck(verbose !== false);
+    },
     state: function () {
-      return { busy: _busy, sessionActive: _sessionActive, installerActive: _installerActive, offeredVersion: _offeredVersion };
+      return {
+        busy: _busy,
+        sessionActive: _sessionActive,
+        installerActive: _installerActive,
+        offeredVersion: _offeredVersion,
+        initialized: _initialized,
+        subscriptions: _subscriptionDisposers.length
+      };
     }
   };
 })();

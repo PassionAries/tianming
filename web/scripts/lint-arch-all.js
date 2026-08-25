@@ -16,6 +16,7 @@ const CHECKS = [
   { name: 'lint-gm-writes', file: 'lint-gm-writes.js' },
   { name: 'lint-dep-graph', file: 'lint-dep-graph.js' },
   { name: 'lint-global-providers', file: 'lint-global-providers.js' },
+  { name: 'lint-feature-boundaries', file: 'lint-feature-boundaries.js' },
   { name: 'lint-runtime-template-immutability', file: 'lint-runtime-template-immutability.js' },
   { name: 'lint-renderer-writeback-boundaries', file: 'lint-renderer-writeback-boundaries.js' },
   { name: 'lint-file-size', file: 'lint-file-size.js' },

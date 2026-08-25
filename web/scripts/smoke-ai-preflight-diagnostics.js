@@ -13,7 +13,9 @@ function assert(cond, msg) {
 const infra = read('tm-ai-infra.js');
 const ai = read('tm-endturn-ai.js');
 const followup = read('tm-endturn-followup.js');
-const apply = read('tm-ai-change-applier.js') + '\n' + read('tm-ai-change-applier-validators.js') + '\n' + read('tm-ai-change-applier-reconcile.js');
+const apply = read('generated/tm-ai-change-applier.bundle.js');
+const reconcile = read('modules/ai-change-applier/reconcile.js');
+const legacyAdapter = read('modules/ai-change-applier/legacy-adapter.js');
 const endApply = read('tm-endturn-apply.js') + '\n' + read('tm-endturn-apply-stages.js'); // apply解构S2·preflightAIWriteBack 等迁 stages·拼接 origin→stages
 const render = read('tm-endturn-render.js');
 
@@ -48,10 +50,12 @@ assert(/async function\s+_callFollowupAI\s*\(/.test(followup), 'followup AI stat
 });
 
 assert(/function\s+preflightAIWriteBack\s*\(/.test(apply), 'write preflight helper exists');
-assert(/global\.preflightAIWriteBack\s*=\s*preflightAIWriteBack/.test(apply), 'write preflight exported globally');
+assert(/preflightAIWriteBack:\s*preflightAIWriteBack/.test(reconcile), 'write preflight is staged as a legacy export');
+assert(/exportKeys\.forEach[\s\S]*publishProperty\(global/.test(legacyAdapter), 'write preflight is published only by the atomic adapter');
 assert(/preflightAIWriteBack\(aiOutput/.test(apply), 'applyAITurnChanges invokes preflight');
 assert(/function\s+validateAIWriteBackBatch\s*\(/.test(apply), 'strict detached writeback validator exists');
-assert(/global\.validateAIWriteBackBatch\s*=\s*validateAIWriteBackBatch/.test(apply), 'strict validator exported globally');
+assert(/validateAIWriteBackBatch:\s*validateAIWriteBackBatch/.test(reconcile), 'strict validator is staged as a legacy export');
+assert(!/global\.(?:preflightAIWriteBack|validateAIWriteBackBatch)\s*=(?!=)/.test(reconcile), 'reconcile factory must not publish partial globals');
 assert(/character_deaths/.test(apply) && /faction_dissolve/.test(apply) && /battleResult/.test(apply), 'high impact fields covered');
 assert(/function\s+_tmResolveChar\s*\(/.test(apply) && /function\s+_tmResolveFaction\s*\(/.test(apply), 'weak entity resolvers exist');
 assert(/_tmWeakEntityHint/.test(apply) && /_aiWeakWriteHints/.test(apply), 'weak write hints are recorded');

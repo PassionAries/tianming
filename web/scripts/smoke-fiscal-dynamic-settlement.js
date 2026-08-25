@@ -55,7 +55,7 @@ function load(rel) {
 
 load('tm-guoku-engine.js');
 load('tm-neitang-engine.js');
-load('tm-ai-change-pathutils.js'); load('tm-ai-change-army.js'); load('tm-ai-change-narrative.js'); load('tm-ai-change-applier.js'); load('tm-ai-change-applier-validators.js'); load('tm-ai-change-applier-reconcile.js');
+load('tm-ai-change-pathutils.js'); load('tm-ai-change-army.js'); load('tm-ai-change-narrative.js'); load('generated/tm-ai-change-applier.bundle.js');
 
 function resetGM(turn) {
   ctx.GM = {

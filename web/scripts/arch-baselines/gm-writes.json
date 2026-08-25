@@ -15,10 +15,10 @@
     ],
     "pFactories": []
   },
-  "updatedAt": "2026-07-22T10:21:16.021Z",
+  "updatedAt": "2026-08-25T08:23:55.263Z",
   "totals": {
-    "gm": 4499,
-    "p": 733
+    "gm": 4439,
+    "p": 687
   },
   "files": {
     "map-converter.js": {
@@ -159,12 +159,12 @@
       }
     },
     "tm-relations.js": {
-      "gm": 16,
+      "gm": 13,
       "p": 0,
       "roots": {
         "gm:_npcRelationEvents": 3,
-        "gm:factionRelationsMap": 9,
-        "gm:factionRelations": 4
+        "gm:factionRelationsMap": 7,
+        "gm:factionRelations": 3
       }
     },
     "tm-memory-tables.js": {
@@ -172,13 +172,6 @@
       "p": 0,
       "roots": {
         "gm:_memTables": 11
-      }
-    },
-    "tm-semantic-recall.js": {
-      "gm": 1,
-      "p": 0,
-      "roots": {
-        "gm:_runId": 1
       }
     },
     "tm-recall-gate.js": {
@@ -292,23 +285,21 @@
       }
     },
     "tm-change-queue.js": {
-      "gm": 14,
+      "gm": 5,
       "p": 0,
       "roots": {
-        "gm:vars[<dynamic>]": 1,
-        "gm:<dynamic>": 1,
-        "gm:_listeners": 5,
-        "gm:_changeQueue": 3,
+        "gm:_listeners": 1,
         "gm:eraState": 4
       }
     },
     "tm-indices.js": {
-      "gm": 51,
+      "gm": 54,
       "p": 7,
       "roots": {
-        "gm:_indices": 48,
+        "gm:_indices": 52,
+        "gm:playerInfo": 1,
         "p:_indices": 7,
-        "gm:chars": 3
+        "gm:chars": 1
       }
     },
     "tm-world.js": {
@@ -335,7 +326,7 @@
       }
     },
     "tm-wendui.js": {
-      "gm": 83,
+      "gm": 82,
       "p": 0,
       "roots": {
         "gm:_pendingLetterTo": 1,
@@ -351,7 +342,7 @@
         "gm:_pendingAudiences": 2,
         "gm:_pendingOvernightReq": 3,
         "gm:_wdRefusedCounsel": 3,
-        "gm:chars": 2,
+        "gm:chars": 1,
         "gm:_indices": 1,
         "gm:_pendingOvernight": 2,
         "gm:_imperialPromises": 2,
@@ -383,10 +374,10 @@
       }
     },
     "tm-office-system.js": {
-      "gm": 10,
+      "gm": 9,
       "p": 0,
       "roots": {
-        "gm:chars": 3,
+        "gm:chars": 2,
         "gm:_lastEvalTurn": 1,
         "gm:_officeDerivedSig": 2,
         "gm:officeTree": 2,
@@ -395,10 +386,10 @@
       }
     },
     "tm-office-fallback.js": {
-      "gm": 2,
+      "gm": 1,
       "p": 0,
       "roots": {
-        "gm:chars": 2
+        "gm:chars": 1
       }
     },
     "tm-office-runtime.js": {
@@ -424,13 +415,13 @@
       }
     },
     "tm-office-panel.js": {
-      "gm": 30,
+      "gm": 28,
       "p": 0,
       "roots": {
         "gm:_edictSuggestions": 13,
         "gm:qijuHistory": 1,
         "gm:_edictTracker": 5,
-        "gm:chars": 4,
+        "gm:chars": 2,
         "gm:minxin": 1,
         "gm:_chronicle": 5,
         "gm:biannianItems": 1
@@ -503,17 +494,16 @@
     },
     "tm-player-settings.js": {
       "gm": 0,
-      "p": 26,
+      "p": 25,
       "roots": {
         "p:ai": 3,
-        "p:conf": 23
+        "p:conf": 22
       }
     },
     "tm-player-core.js": {
       "gm": 26,
-      "p": 17,
+      "p": 12,
       "roots": {
-        "p:playerInfo": 5,
         "p:ai": 8,
         "gm:evtLog": 2,
         "gm:_edictSuggestions": 10,
@@ -573,13 +563,12 @@
       }
     },
     "tm-game-loop.js": {
-      "gm": 53,
+      "gm": 52,
       "p": 0,
       "roots": {
         "gm:_corruptionPresetDone": 1,
         "gm:_guokuPresetDone": 1,
         "gm:_neitangPresetDone": 1,
-        "gm:_cascadePreviewDone": 1,
         "gm:_fixedExpensePreviewDone": 1,
         "gm:guoku": 5,
         "gm:_lastFixedExpense": 1,
@@ -608,14 +597,13 @@
       }
     },
     "tm-map-system.js": {
-      "gm": 27,
-      "p": 10,
+      "gm": 23,
+      "p": 6,
       "roots": {
-        "gm:mapData": 23,
-        "p:map": 8,
-        "p:mapData": 2,
+        "gm:mapData": 19,
         "gm:turnChanges": 3,
-        "gm:terrainTypes": 1
+        "gm:terrainTypes": 1,
+        "p:map": 6
       }
     },
     "tm-dynamic-systems.js": {
@@ -648,15 +636,14 @@
       }
     },
     "tm-economy.js": {
-      "gm": 12,
+      "gm": 11,
       "p": 0,
       "roots": {
         "gm:stateTreasury": 1,
         "gm:privateTreasury": 1,
         "gm:_bankruptcyTurns": 3,
         "gm:vars[<dynamic>]": 2,
-        "gm:eraState": 4,
-        "gm:chars": 1
+        "gm:eraState": 4
       }
     },
     "tm-military.js": {
@@ -813,14 +800,14 @@
       }
     },
     "tm-court-meter.js": {
-      "gm": 37,
+      "gm": 34,
       "p": 0,
       "roots": {
         "gm:_courtMeter": 18,
         "gm:vars[皇威]": 2,
-        "gm:_pendingShijiModal": 9,
-        "gm:_isPostTurnCourt": 6,
-        "gm:_chaoyiCount": 2
+        "gm:_chaoyiCount": 2,
+        "gm:_pendingShijiModal": 7,
+        "gm:_isPostTurnCourt": 5
       }
     },
     "tm-dianzhang.js": {
@@ -1008,7 +995,7 @@
       }
     },
     "tm-endturn-apply.js": {
-      "gm": 145,
+      "gm": 137,
       "p": 3,
       "roots": {
         "gm:taxPressure": 2,
@@ -1022,7 +1009,7 @@
         "gm:factionEvents": 3,
         "gm:factionRelations": 4,
         "gm:eraState": 3,
-        "gm:chars": 4,
+        "gm:chars": 1,
         "gm:parties": 5,
         "gm:_interceptedIntel": 3,
         "gm:_courtSilenced": 1,
@@ -1030,10 +1017,9 @@
         "gm:_courtResolutions": 3,
         "gm:_revoltPrecursors": 4,
         "gm:_activeRevolts": 2,
-        "gm:activeWars": 9,
-        "gm:facs": 5,
+        "gm:activeWars": 8,
+        "gm:facs": 4,
         "gm:_gameOverPending": 1,
-        "gm:factionRelationsMap": 3,
         "gm:classes": 3,
         "gm:provinceStats": 13,
         "gm:officeTree": 3,
@@ -1137,13 +1123,13 @@
       "p": 0,
       "roots": {
         "gm:_partyClassPreSubmitBusy": 2,
+        "gm:_turnContext": 1,
+        "gm:_turnTyrantActivities": 1,
+        "gm:_turnAiResults": 1,
         "gm:busy": 4,
         "gm:_endTurnBusy": 3,
         "gm:_aiMemorySummaries": 3,
         "gm:monthlyChronicles": 5,
-        "gm:_turnContext": 1,
-        "gm:_turnTyrantActivities": 1,
-        "gm:_turnAiResults": 1,
         "gm:running": 1,
         "gm:_playerDead": 1,
         "gm:_playerDeathReason": 1,
@@ -1177,11 +1163,11 @@
       }
     },
     "tm-endturn-render.js": {
-      "gm": 22,
+      "gm": 21,
       "p": 0,
       "roots": {
         "gm:eraName": 1,
-        "gm:_lastTurnDigest": 2,
+        "gm:_lastTurnDigest": 1,
         "gm:_fengwenRecord": 2,
         "gm:shijiHistory": 1,
         "gm:_yearlyDigest": 3,
@@ -1206,24 +1192,21 @@
       }
     },
     "tm-patches-start.js": {
-      "gm": 94,
-      "p": 93,
+      "gm": 92,
+      "p": 79,
       "roots": {
-        "p:<dynamic>": 4,
+        "p:<dynamic>": 3,
         "p:variables": 3,
         "gm:vars": 1,
         "gm:vars[<dynamic>]": 2,
         "gm:mapData": 3,
-        "p:map": 8,
-        "p:mapData": 7,
         "gm:_useAIGeo": 2,
-        "gm:chars": 16,
+        "gm:chars": 15,
         "gm:facs": 5,
         "gm:_corruptionPresetDone": 1,
         "gm:_guokuPresetDone": 1,
         "gm:_neitangPresetDone": 1,
         "p:conf": 2,
-        "gm:saveName": 1,
         "gm:eraState": 8,
         "p:goals": 1,
         "p:offendGroups": 1,
@@ -1239,7 +1222,7 @@
         "gm:chronicleAfterwords": 1,
         "gm:customPolicies": 1,
         "gm:affinityMap": 1,
-        "p:economyConfig": 2,
+        "p:economyConfig": 1,
         "gm:postSystem": 4,
         "p:gameSettings": 1,
         "gm:eraName": 1,
@@ -1248,6 +1231,7 @@
         "p:military": 1,
         "p:rules": 1,
         "p:timeline": 1,
+        "p:map": 1,
         "p:worldSettings": 1,
         "p:government": 1,
         "p:adminHierarchy": 1,
@@ -1260,10 +1244,12 @@
         "p:_varFormulas": 2,
         "p:openingText": 1,
         "p:globalRules": 1,
+        "p:mapData": 1,
         "p:buildingSystem": 1,
         "p:battleConfig": 1,
         "p:mechanicsConfig": 1,
         "p:militaryConfig": 1,
+        "p:supplySystem": 3,
         "p:adminConfig": 1,
         "p:chronicleConfig": 1,
         "p:eventConstraints": 1,
@@ -1306,8 +1292,7 @@
         "gm:allCharacters": 2,
         "gm:playerCharacterId": 1,
         "gm:families": 2,
-        "gm:harem": 3,
-        "p:supplySystem": 2
+        "gm:harem": 3
       }
     },
     "tm-military-ui.js": {
@@ -1573,13 +1558,13 @@
       }
     },
     "tm-keju-enke.js": {
-      "gm": 33,
+      "gm": 32,
       "p": 0,
       "roots": {
         "gm:_enkeAbuseCounter": 4,
         "gm:_tesuomingHistory": 2,
         "gm:_enkeParty": 10,
-        "gm:chars": 2,
+        "gm:chars": 1,
         "gm:_enkeXieendaQueue": 6,
         "gm:_enkeXieendaPending": 2,
         "gm:_enkeHistory": 2,
@@ -1590,12 +1575,12 @@
       }
     },
     "tm-keju-wuju.js": {
-      "gm": 45,
+      "gm": 43,
       "p": 0,
       "roots": {
         "gm:_wujuPeacefulCounter": 5,
         "gm:_wujuAssignSpinIdx": 2,
-        "gm:chars": 4,
+        "gm:chars": 2,
         "gm:_wujuCeremonyQueue": 4,
         "gm:_wujuParty": 11,
         "gm:_wenguanImpeachmentCount": 2,
@@ -1612,12 +1597,12 @@
       }
     },
     "tm-keju-tongzi.js": {
-      "gm": 23,
+      "gm": 22,
       "p": 0,
       "roots": {
         "gm:_chronicle": 1,
         "gm:_tongziDeferredQueue": 2,
-        "gm:chars": 2,
+        "gm:chars": 1,
         "gm:_tongziHistory": 2,
         "gm:_tongziFamilies": 2,
         "gm:_tongziCeremonyQueue": 2,
@@ -1632,11 +1617,11 @@
       }
     },
     "tm-keju-school-network.js": {
-      "gm": 41,
+      "gm": 40,
       "p": 0,
       "roots": {
         "gm:_schoolNetwork": 7,
-        "gm:chars": 2,
+        "gm:chars": 1,
         "gm:_kjpHTierChangeFiredTurn": 1,
         "gm:_lastSchoolFoundedYear": 1,
         "gm:_lastSchoolBannedYear": 1,
@@ -1703,10 +1688,10 @@
     },
     "tm-electron.js": {
       "gm": 4,
-      "p": 29,
+      "p": 26,
       "roots": {
-        "p:scenarios": 6,
-        "p:<dynamic>": 6,
+        "p:scenarios": 5,
+        "p:<dynamic>": 4,
         "p:_activeScnName": 3,
         "gm:sid": 3,
         "gm:saveName": 1,
@@ -1724,18 +1709,17 @@
       }
     },
     "tm-keju-runtime-keyi.js": {
-      "gm": 22,
+      "gm": 17,
       "p": 7,
       "roots": {
-        "gm:keju": 3,
+        "gm:keju": 2,
         "gm:_courtRecords": 3,
         "gm:_edictTracker": 2,
         "gm:jishiRecords": 2,
-        "gm:chars": 5,
         "gm:allCharacters": 1,
         "p:keju": 7,
         "gm:_kejuPendingAssignment": 3,
-        "gm:_runId": 1,
+        "gm:chars": 2,
         "gm:eraState": 2
       }
     },
@@ -1861,11 +1845,11 @@
       }
     },
     "tm-char-autogen.js": {
-      "gm": 16,
+      "gm": 14,
       "p": 0,
       "roots": {
         "gm:_generatingChars": 6,
-        "gm:chars": 4,
+        "gm:chars": 2,
         "gm:_indices": 1,
         "gm:_pendingCharacters": 5
       }
@@ -1885,7 +1869,7 @@
       }
     },
     "tm-save-lifecycle.js": {
-      "gm": 391,
+      "gm": 405,
       "p": 77,
       "roots": {
         "gm:shijiHistory": 1,
@@ -1969,7 +1953,7 @@
         "gm:_pendingMemorialDeliveries": 2,
         "gm:_interceptedIntel": 2,
         "gm:_undeliveredLetters": 2,
-        "p:conf": 22,
+        "p:conf": 24,
         "p:ai": 3,
         "p:classes": 1,
         "p:externalForces": 1,
@@ -2215,19 +2199,22 @@
         "gm:_secretMeetings": 1,
         "gm:_historyIndex": 1,
         "gm:_historyIndexCursor": 1,
-        "p:gameState": 1,
-        "gm:running": 1,
-        "gm:busy": 1,
-        "gm:_endTurnBusy": 1,
         "gm:_useAIGeo": 2,
-        "p:map": 1,
-        "p:mapData": 1,
+        "gm:_stableIdMigration": 3,
+        "gm:_pendingTurnDataPublish": 1,
+        "gm:busy": 3,
+        "gm:_loadHydrationPending": 4,
+        "p:gameState": 1,
+        "gm:_isFreshNewGame": 1,
+        "gm:running": 1,
+        "gm:_endTurnBusy": 1,
         "gm:adminHierarchy": 2,
         "gm:engineConstants": 1,
         "gm:influenceGroups": 1,
         "p:engineConstants": 1,
         "p:influenceGroups": 1,
         "gm:fiscal": 4,
+        "gm:_backgroundSaveFailures": 3,
         "p:<dynamic>": 1
       }
     },
@@ -2364,17 +2351,17 @@
       }
     },
     "tm-char-historical-profiles.js": {
-      "gm": 3,
+      "gm": 1,
       "p": 0,
       "roots": {
-        "gm:chars": 3
+        "gm:chars": 1
       }
     },
     "tm-ceming.js": {
-      "gm": 2,
+      "gm": 1,
       "p": 0,
       "roots": {
-        "gm:chars": 2
+        "gm:chars": 1
       }
     },
     "tm-char-economy-ui.js": {
@@ -2405,15 +2392,14 @@
     },
     "tm-economy-engine.js": {
       "gm": 57,
-      "p": 1,
+      "p": 0,
       "roots": {
         "gm:environment": 4,
         "gm:nationalCarrying": 1,
         "gm:nationalLoad": 1,
-        "gm:crisisHistory": 2,
-        "p:national": 1,
         "gm:unrest": 1,
         "gm:byRegion": 1,
+        "gm:crisisHistory": 2,
         "gm:policyHistory": 4,
         "gm:activePolicies": 3,
         "gm:fiscal": 16,
@@ -2440,23 +2426,22 @@
     },
     "tm-huji-engine.js": {
       "gm": 8,
-      "p": 74,
+      "p": 60,
       "roots": {
         "gm:population": 8,
         "p:byAge": 1,
         "p:byGender": 1,
-        "p:deepFieldEffects": 9,
+        "p:deepFieldEffects": 11,
         "p:corvee": 5,
         "p:military": 11,
-        "p:national": 10,
-        "p:dynamics": 22,
-        "p:hiddenCount": 2,
+        "p:national": 4,
+        "p:dynamics": 11,
+        "p:hiddenCount": 1,
         "p:fugitives": 2,
-        "p:meta": 3,
-        "p:byLegalStatus": 4,
+        "p:meta": 7,
+        "p:byLegalStatus": 3,
         "p:largeCorveeActive": 1,
-        "p:byRegion": 2,
-        "p:migrationEvents": 1
+        "p:migrationEvents": 2
       }
     },
     "tm-edict-parser.js": {
@@ -2496,10 +2481,10 @@
       }
     },
     "tm-huji-deep-fill.js": {
-      "gm": 49,
+      "gm": 42,
       "p": 0,
       "roots": {
-        "gm:population": 34,
+        "gm:population": 27,
         "gm:guoku": 8,
         "gm:unrest": 2,
         "gm:troopOrders": 3,
@@ -2617,10 +2602,10 @@
       }
     },
     "tm-historical-presets.js": {
-      "gm": 13,
+      "gm": 4,
       "p": 0,
       "roots": {
-        "gm:population": 13
+        "gm:population": 4
       }
     },
     "tm-prophecy.js": {
@@ -2642,10 +2627,10 @@
       }
     },
     "tm-region-enrich.js": {
-      "gm": 19,
+      "gm": 18,
       "p": 0,
       "roots": {
-        "gm:population": 15,
+        "gm:population": 14,
         "gm:armies": 2,
         "gm:minxin": 2
       }
@@ -2793,17 +2778,17 @@
       }
     },
     "tm-integration-bridge.js": {
-      "gm": 55,
+      "gm": 48,
       "p": 0,
       "roots": {
         "gm:adminHierarchy": 1,
-        "gm:population": 12,
-        "gm:minxin": 7,
-        "gm:fiscal": 3,
-        "gm:environment": 5,
-        "gm:regionMap": 2,
-        "gm:corruption": 17,
+        "gm:population": 13,
+        "gm:minxin": 6,
+        "gm:fiscal": 2,
+        "gm:environment": 4,
+        "gm:regionMap": 1,
         "gm:_popSnapshot": 4,
+        "gm:corruption": 13,
         "gm:guoku": 4
       }
     },
@@ -2817,9 +2802,9 @@
         "gm:guoku": 22,
         "gm:neitang": 2,
         "gm:turnChanges": 1,
-        "gm:_lastCascadeTaxTurn": 1,
         "gm:_lastCascadeSummary": 1,
         "gm:_lastCascadeTurn": 1,
+        "gm:_lastCascadeTaxTurn": 1,
         "gm:_lastFixedExpense": 1,
         "gm:_lastFixedExpenseTurn": 1,
         "gm:minxin": 2,
@@ -2858,7 +2843,7 @@
         "gm:_aiDataIntegrityLog": 1
       }
     },
-    "tm-ai-change-applier.js": {
+    "modules/ai-change-applier/core.js": {
       "gm": 52,
       "p": 0,
       "roots": {
@@ -2874,7 +2859,7 @@
         "gm:activeProjects": 2
       }
     },
-    "tm-ai-change-applier-reconcile.js": {
+    "modules/ai-change-applier/reconcile.js": {
       "gm": 58,
       "p": 0,
       "roots": {
@@ -2896,14 +2881,6 @@
         "gm:_corruptionState": 1,
         "gm:population": 2,
         "gm:_fiscalDeficitStreak": 3
-      }
-    },
-    "tm-test-harness.js": {
-      "gm": 0,
-      "p": 4,
-      "roots": {
-        "p:conf": 1,
-        "p:ai": 3
       }
     },
     "tm-content-manager.js": {

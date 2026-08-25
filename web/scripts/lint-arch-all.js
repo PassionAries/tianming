@@ -19,6 +19,7 @@ const CHECKS = [
   { name: 'lint-feature-boundaries', file: 'lint-feature-boundaries.js' },
   { name: 'lint-runtime-template-immutability', file: 'lint-runtime-template-immutability.js' },
   { name: 'lint-renderer-writeback-boundaries', file: 'lint-renderer-writeback-boundaries.js' },
+  { name: 'lint-renderer-module-boundaries', file: 'lint-renderer-module-boundaries.js' },
   { name: 'lint-file-size', file: 'lint-file-size.js' },
   { name: 'lint-control-bytes', file: 'lint-control-bytes.js' },
   { name: 'lint-split-contracts', file: 'lint-split-contracts.js' },

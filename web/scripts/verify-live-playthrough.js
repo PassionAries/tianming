@@ -29,7 +29,7 @@ for (const src of scripts) {
 }
 console.log('  载入 ' + loaded + '/' + scripts.length + ' 脚本');
 // 我改的文件必须全部成功载入(集成/语法/接线)
-const mine = ['tm-endturn-ai-context.js','tm-fiscal-engine.js','tm-keju-enke.js','tm-keju-wuju.js','tm-promotion.js','tm-military.js','tm-memorials.js','tm-endturn-apply.js','tm-ai-change-applier.js','tm-history-events.js','phase8-formal-modules.js','tm-authority-complete.js','tm-ai-change-pathutils.js','tm-office-system.js','tm-game-loop.js','tm-faction-action-engine.js','tm-faction-npc-llm-decision.js','tm-endturn-prompt.js','tm-chaoyi-changchao.js'];
+const mine = ['tm-endturn-ai-context.js','tm-fiscal-engine.js','tm-keju-enke.js','tm-keju-wuju.js','tm-promotion.js','tm-military.js','tm-memorials.js','tm-endturn-apply.js','generated/tm-ai-change-applier.bundle.js','tm-history-events.js','phase8-formal-modules.js','tm-authority-complete.js','tm-ai-change-pathutils.js','tm-office-system.js','tm-game-loop.js','tm-faction-action-engine.js','tm-faction-npc-llm-decision.js','tm-endturn-prompt.js','tm-chaoyi-changchao.js'];
 const mineErr = errors.filter(e => mine.some(f => e.indexOf(f) >= 0));
 ok(mineErr.length === 0, '★本轮 ' + mine.length + ' 改动文件全部真实载入无报错' + (mineErr.length ? (' → '+mineErr.join(' | ')) : ''));
 ok(errors.length === 0, '全 bundle 零载入错误' + (errors.length ? (' ('+errors.length+'处: '+errors.slice(0,3).join(' ; ')+')') : ''));

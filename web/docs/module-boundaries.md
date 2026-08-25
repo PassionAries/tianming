@@ -228,16 +228,17 @@ tm-endturn-core (调 / 间接·tm-player-core (endTurn 按钮)
 
 ---
 
-## 12·tm-ai-change-applier.js (AI 输出应用)
+## 12·modules/ai-change-applier/ (AI 输出应用模块岛)
 
 | 项 | 内容 |
 |---|---|
-| owns | applyAITurnChanges·schema 应用 GM·field-family writeback·validator |
+| owns | applyAITurnChanges·schema 应用 GM·field-family writeback·validator·reconcile |
 | does not own | LLM 调用 (→ tm-ai-infra)·prompt (→ tm-prompt-composer) |
-| public API | `applyAITurnChanges` |
-| depends on | tm-ai-schema / tm-ai-output-validator·业务 module reducers |
+| public API | `AIChangeApplier` 兼容门面；`applyAITurnChanges` 等既有快捷入口 |
+| depends on | 显式注入的 PathUtils / Army / Narrative / world / identities / commands；tm-ai-schema / tm-ai-output-validator |
 | used by | tm-endturn-ai-infer (Region 4 sc1 writeback delegate) |
-| 新功能加哪 | 新 schema 字段应用 → 加这里·先 tm-ai-schema 注册 |
+| 构建 | `npm run build:renderer-modules` 生成 `generated/tm-ai-change-applier.bundle.js`；CI 用 `check:renderer-modules` 验证可复现 |
+| 新功能加哪 | 新 schema 字段应用 → 加到模块源·先 tm-ai-schema 注册；禁止手改生成 bundle 或新增 `TM.__*Parts` |
 
 ---
 

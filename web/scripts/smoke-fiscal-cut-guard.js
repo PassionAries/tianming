@@ -60,9 +60,7 @@ function run(fiscal) {
   load(ctx, 'tm-ai-change-pathutils.js');
   load(ctx, 'tm-ai-change-army.js');
   load(ctx, 'tm-ai-change-narrative.js');
-  load(ctx, 'tm-ai-change-applier.js');
-  load(ctx, 'tm-ai-change-applier-validators.js');
-  load(ctx, 'tm-ai-change-applier-reconcile.js');
+  load(ctx, 'generated/tm-ai-change-applier.bundle.js');
   assert(typeof ctx.applyAITurnChanges === 'function', 'applyAITurnChanges 已加载');
 
   // ── 案1 复现原病·内帑侧：裁减用度 expense 1300 万 → 拦截·库存不动 ──

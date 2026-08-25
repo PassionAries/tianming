@@ -2,7 +2,7 @@
   "type": "tianming-hot-update",
   "version": "1.3.4.11",
   "entry": "index.html",
-  "generatedAt": "2026-08-25T10:31:20.712Z",
+  "generatedAt": "2026-08-25T10:48:28.203Z",
   "files": [
     {
       "path": "_preview_map.json",
@@ -21,8 +21,8 @@
     },
     {
       "path": "ARCHITECTURE.md",
-      "sha256": "b521d9b860728b1e1a9e8505f46778ebfff322ba8fb38e8c3fb29ea83b001ba9",
-      "size": 18680
+      "sha256": "10af94a48a041f7b95e7d767dc467981c4f7161a7ca290b21334dec5ed2b19f0",
+      "size": 18779
     },
     {
       "path": "assets/assets-isolated/audio/bgm/README.md",
@@ -2160,14 +2160,19 @@
       "size": 2146
     },
     {
+      "path": "generated/tm-ai-change-applier.bundle.js",
+      "sha256": "5379106da7c6c1c7cc10db43fffb36b7d07f3f888a34740907b4886c306f265a",
+      "size": 336456
+    },
+    {
       "path": "icon.png",
       "sha256": "8a2c8ae36d6b4665f16cd53e64f4f365c022d07b318d32998996f87e79cecbf4",
       "size": 12525
     },
     {
       "path": "index.html",
-      "sha256": "9cb1fc8a49cb173c3fd07bbb9998a42445f82796330bd68c0d986128b3447b6b",
-      "size": 69443
+      "sha256": "b59fefd20a499d5d63c33df2445a8e4c7990ff4bc2012c7c0606951169236a05",
+      "size": 69148
     },
     {
       "path": "INDEX.md",
@@ -2573,6 +2578,41 @@
       "path": "map-recognition.js",
       "sha256": "0b179313c6d94c159f8a3f7387fec8eb72ec308049c0e95c755d9dd7bc280fb3",
       "size": 67149
+    },
+    {
+      "path": "modules/ai-change-applier/context.js",
+      "sha256": "eb06aabb33a8a28c6115273b75296c7317677df7af62bb27f729a538d477a3e2",
+      "size": 3481
+    },
+    {
+      "path": "modules/ai-change-applier/core.js",
+      "sha256": "82fe3c47a674572723a010c3d5f2723cb7ba5c2426ab20594419ee916341541e",
+      "size": 190421
+    },
+    {
+      "path": "modules/ai-change-applier/index.js",
+      "sha256": "fd11e5c7d7928452ca6bd09472daaf979ff703441186f1ad44c319f90a5ff138",
+      "size": 1313
+    },
+    {
+      "path": "modules/ai-change-applier/legacy-adapter.js",
+      "sha256": "04bff1146417ce4b008f67bf4d21d7bc48a3f652a5f519ed90eda7723ef19740",
+      "size": 3321
+    },
+    {
+      "path": "modules/ai-change-applier/package.json",
+      "sha256": "f69ed17eea98f49ee075f676bae79df9cb779e54d5887b94d94313d34511170c",
+      "size": 42
+    },
+    {
+      "path": "modules/ai-change-applier/reconcile.js",
+      "sha256": "57cd7b88ebfcbf63633e055c6e7c248d72f65e5d1794186da0ae9f00794dca38",
+      "size": 89612
+    },
+    {
+      "path": "modules/ai-change-applier/validators.js",
+      "sha256": "ddf42376a07c908f8b1cb624237802237c565a8363e80dc1a620e7694d04b50a",
+      "size": 118296
     },
     {
       "path": "package.json",
@@ -3351,8 +3391,8 @@
     },
     {
       "path": "startup-script-phases.json",
-      "sha256": "ab24704b5248f10883f100f7a6348fae6da72832acca154ed4c7cced1c3052ce",
-      "size": 347245
+      "sha256": "b717430904971dd1f8d1599192ec98c81e01386b1e36cff637526aab794fa1ee",
+      "size": 345220
     },
     {
       "path": "styles.css",
@@ -3375,29 +3415,14 @@
       "size": 14730
     },
     {
-      "path": "tm-ai-change-applier-reconcile.js",
-      "sha256": "89804b4fce3ccfdcd278ccdb741b27fe7a5b5a3ed8fdf94642b34df38b41a32f",
-      "size": 92053
-    },
-    {
-      "path": "tm-ai-change-applier-validators.js",
-      "sha256": "7a9c26ce3a0b92e98c3abcf63a0925552543ffefa822fc952f51356fffcdf5da",
-      "size": 121449
-    },
-    {
-      "path": "tm-ai-change-applier.js",
-      "sha256": "a6cfa7bac1d2a1fc4773756784aa5d2c84d7364b3911bbe60982e334b718f8db",
-      "size": 194256
-    },
-    {
       "path": "tm-ai-change-army.js",
       "sha256": "96b9f9abb426c38bf8560005f45a9e480f3a22e031b9847b210fdb7cb4717e31",
       "size": 44973
     },
     {
       "path": "tm-ai-change-narrative.js",
-      "sha256": "849e649a29e24f62c079b4f5a455496e6003cd63d27e2b12bd0cada1203c7fea",
-      "size": 52990
+      "sha256": "e920fc79c1521328d5239a5042856694fcab34623eae6a2b0970837a704c657f",
+      "size": 53031
     },
     {
       "path": "tm-ai-change-pathutils.js",
@@ -3931,8 +3956,8 @@
     },
     {
       "path": "tm-endturn-apply.js",
-      "sha256": "627e4a97a294166f70407d8df139522af0ef6b217e8e9158f7cea7b2f25ad35b",
-      "size": 371924
+      "sha256": "773b7345b0e5a574b3c2cd769f6ec0856c976a6bef668457a3b94488fad5fbc8",
+      "size": 371949
     },
     {
       "path": "tm-endturn-core.js",

@@ -237,7 +237,7 @@ assert(context.findCharByName('善妒同僚').loyalty === 57, 'jealous colleague
 
 // ── 官制任命赴任·即时抵达(治"官制任命后官员长期不赴任":即时规则在线→当回合即抵·不留原地) ──
 context._hasInstantArrivalRule = function () { return true; };  // 模拟玩家"人事调动即刻瞬间抵达"规则在线
-// 本测试不加载 applier·stub 规范抵达 _arriveCharNow(真身在 tm-ai-change-applier.js·内部同步双表镜像+就任+清字段)
+// 本测试不加载 applier·stub 规范抵达 _arriveCharNow(真身在 generated/tm-ai-change-applier.bundle.js·内部同步双表镜像+就任+清字段)
 context._arriveCharNow = function (G, ch) {
   if (!ch || !ch._travelTo) return;
   ch.location = ch._travelTo;

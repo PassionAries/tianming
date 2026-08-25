@@ -5,7 +5,7 @@
 //   刀A 多回合化：默认 3 回合(turns 1-10 可调)·同一局连跑(世界连续·非三局各跑一回合)·
 //        单回合抛错记录后不中断后续·超时中止后续(防 _endTurnInternal 异步与下一回合争抢)。
 //   刀B 四类体检：死人任职+幽灵键 ← TM.invariants.check()（tm-invariants.js）·
-//        账面守恒 ← GM._fiscalValidatorLog（tm-ai-change-applier-validators.js:_validateFiscalConsistency）·
+//        账面守恒 ← GM._fiscalValidatorLog（generated/tm-ai-change-applier.bundle.js:_validateFiscalConsistency）·
 //        叙事错名 ← GM._personnelValidatorLog（同上:_validatePersonnelConsistency）·
 //        全部「调既有校验器取结果」·log 基线 slice 按回合归因·
 //        报告 schema:2 向后兼容(旧 bootOk/turnOk/turn/errors 保留)·verdict 总判绿/黄/红+

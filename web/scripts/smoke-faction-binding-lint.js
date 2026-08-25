@@ -68,12 +68,12 @@ const ALLOW_LINES = [
   { file: 'tm-faction-npc-intervention.js', match: /c\.faction\s*=\s*pn;/ },
   // tm-revolt-entity.js·_setCharFaction 已 try FactionMembership.assignChar·此为 API 缺席兜底(smoke 裸跑/装载序)
   { file: 'tm-revolt-entity.js', match: /ch\.faction\s*=\s*facName\s*\|\|\s*''/ },
-  // tm-ai-change-applier.js / tm-ai-change-army.js (Slice 2 拆出) / tm-region-enrich.js:
+  // AI applier bundle / tm-ai-change-army.js (Slice 2 拆出) / tm-region-enrich.js:
   //   assignArmy first·direct write only in legacy fallback/catch.
-  // tm-ai-change-applier.js·applyAllegianceChange 主路已走 assignChar；以下仅 membership 模块缺位时双锚 fallback.
-  { file: 'tm-ai-change-applier.js', match: /ch\.faction\s*=\s*newName/ },
-  { file: 'tm-ai-change-applier.js', match: /if \(newId\) ch\.factionId\s*=\s*newId/ },
-  { file: 'tm-ai-change-applier.js', match: /army\.faction\s*=\s*factionName/ },
+  // applyAllegianceChange 主路已走 assignChar；以下仅 membership 模块缺位时双锚 fallback.
+  { file: 'generated/tm-ai-change-applier.bundle.js', match: /ch\.faction\s*=\s*newName/, owner: 'ai-change-applier' },
+  { file: 'generated/tm-ai-change-applier.bundle.js', match: /if \(newId\) ch\.factionId\s*=\s*newId/, owner: 'ai-change-applier' },
+  { file: 'generated/tm-ai-change-applier.bundle.js', match: /army\.faction\s*=\s*factionName/, owner: 'ai-change-applier' },
   { file: 'tm-ai-change-army.js',    match: /army\.faction\s*=\s*factionName/ },
   { file: 'tm-region-enrich.js',     match: /army\.faction\s*=\s*factionName/ },
   // tm-map-system.js: region.factionId mirrors map-region owner, not character/army/province membership.
@@ -103,7 +103,7 @@ const ALLOW_LINES = [
 ];
 
 function scanFile(filePath, source, results) {
-  const fileName = path.basename(filePath);
+  const fileName = path.relative(ROOT, filePath).replace(/\\/g, '/');
   if (ALLOW_FILES.has(fileName)) return;
   const lines = source.split('\n');
   // 单变量名 + .faction 直接赋值
@@ -146,10 +146,10 @@ function main() {
   // 只扫 tm-*.js + map-*.js (运行时·不扫 editor / scripts / scenarios)
   const files = fs.readdirSync(dir).filter(function(f){
     return /\.js$/.test(f) && !/^editor-/.test(f);
-  });
+  }).map(function(f) { return path.join(dir, f); });
+  files.push(path.join(dir, 'generated', 'tm-ai-change-applier.bundle.js'));
   const results = [];
-  files.forEach(function(f){
-    var fp = path.join(dir, f);
+  files.forEach(function(fp){
     if (!fs.statSync(fp).isFile()) return;
     var src = fs.readFileSync(fp, 'utf8');
     scanFile(fp, src, results);

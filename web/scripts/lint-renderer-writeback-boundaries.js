@@ -200,7 +200,7 @@ const mainSource = fs.readFileSync(path.join(rootDir, 'main-impl.js'), 'utf8');
 const preloadSource = fs.readFileSync(path.join(rootDir, 'preload-impl.js'), 'utf8');
 const saveLifecycleSource = read('tm-save-lifecycle.js');
 const saveCloseFlushSource = read('tm-save-close-flush.js');
-const reconcileSource = read('tm-ai-change-applier-reconcile.js');
+const reconcileSource = read('generated/tm-ai-change-applier.bundle.js');
 const endturnApplySource = read('tm-endturn-apply.js');
 check(/ipcMain\.handle\('app-quit',\s*\(\)\s*=>\s*requestApplicationQuit\(/.test(mainSource),
   'renderer quit requests must pass through the background-save close handshake');
@@ -227,8 +227,8 @@ check(/for \(var pass=1;pass<=4;pass\+\+\)/.test(saveCloseFlushSource)
   && /closeSaveQueuesQuiet\(\)/.test(saveCloseFlushSource)
   && /close-save-quiescence-limit/.test(saveCloseFlushSource),
   'close acknowledgement must prove bounded canonical and desktop queue quiescence');
-check(/factionId:String\(fac\.id\)/.test(reconcileSource)
-  && /newLeaderId:String\(leader\.id\)/.test(reconcileSource)
+check(/factionId\s*:\s*String\(fac\.id\)/.test(reconcileSource)
+  && /newLeaderId\s*:\s*String\(leader\.id\)/.test(reconcileSource)
   && /_tmExactFaction\(sc\.factionId \|\| sc\.faction\)/.test(endturnApplySource)
   && /sc\.newLeaderId \|\| sc\.newLeader/.test(endturnApplySource),
   'faction succession must preserve stable faction and leader identities through the production consumer');

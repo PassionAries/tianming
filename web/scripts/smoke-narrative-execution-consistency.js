@@ -7,7 +7,7 @@
 //   兜底解析器 _validatePersonnelConsistency 旧动词表无"砍/斩/杀"口语·且 {2,4} 贪婪
 //   捕获会把"把"吞进人名 → 漏抓。
 //
-// 修复(tm-ai-change-applier.js)·
+// 修复(generated/tm-ai-change-applier.bundle.js)·
 //   1. execute 移出通用 pat1/pat2·改 _scanExecutions 受事锚定扫描器
 //      (被动 X被斩 / 处置式 把X砍了 / 动宾 斩X / 自戕 X自尽)·抓口语又不误杀施事者
 //   2. onDismissal 处决正则补全多字处决词 + 自戕词·两表一致
@@ -47,7 +47,7 @@ function makeCtx() {
     return { ok: true };
   };
   vm.createContext(ctx);
-  ['tm-ai-change-pathutils.js', 'tm-ai-change-army.js', 'tm-ai-change-narrative.js', 'tm-ai-change-applier.js', 'tm-ai-change-applier-validators.js', 'tm-ai-change-applier-reconcile.js']
+  ['tm-ai-change-pathutils.js', 'tm-ai-change-army.js', 'tm-ai-change-narrative.js', 'generated/tm-ai-change-applier.bundle.js']
     .forEach(f => vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f }));
   return ctx;
 }

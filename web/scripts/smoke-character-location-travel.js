@@ -12,7 +12,7 @@ const wenduiSrc = (fs.readFileSync(path.join(ROOT, 'tm-wendui.js'), 'utf8') + '\
 const pathutilsSrc = fs.readFileSync(path.join(ROOT, 'tm-ai-change-pathutils.js'), 'utf8');
 const armySrc = fs.readFileSync(path.join(ROOT, 'tm-ai-change-army.js'), 'utf8');
 const narrativeSrc = fs.readFileSync(path.join(ROOT, 'tm-ai-change-narrative.js'), 'utf8');
-const applierSrc = fs.readFileSync(path.join(ROOT, 'tm-ai-change-applier.js'), 'utf8');
+const applierSrc = fs.readFileSync(path.resolve(ROOT, 'generated/tm-ai-change-applier.bundle.js'), 'utf8');
 
 let passed = 0;
 function assert(cond, label) {
@@ -117,9 +117,7 @@ vm.runInContext(wenduiSrc, sandbox, { filename: 'tm-wendui.js' });
 vm.runInContext(pathutilsSrc, sandbox, { filename: 'tm-ai-change-pathutils.js' });
 vm.runInContext(armySrc, sandbox, { filename: 'tm-ai-change-army.js' });
 vm.runInContext(narrativeSrc, sandbox, { filename: 'tm-ai-change-narrative.js' });
-vm.runInContext(applierSrc, sandbox, { filename: 'tm-ai-change-applier.js' });
-vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-ai-change-applier-validators.js'), 'utf8'), sandbox, { filename: 'tm-ai-change-applier-validators.js' });
-vm.runInContext(fs.readFileSync(path.join(ROOT, 'tm-ai-change-applier-reconcile.js'), 'utf8'), sandbox, { filename: 'tm-ai-change-applier-reconcile.js' });
+vm.runInContext(applierSrc, sandbox, { filename: 'generated/tm-ai-change-applier.bundle.js' });
 
 assert(typeof sandbox._isSameLocation === 'function', 'location alias helper exists');
 assert(sandbox._isSameLocation('顺天府', '京师'), '顺天府 matches 京师');

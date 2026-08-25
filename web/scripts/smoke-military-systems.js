@@ -115,7 +115,7 @@ load('tm-migration.js');
 load('tm-map-system.js');
 load('tm-ai-schema.js');
 load('tm-ai-output-validator.js');
-load('tm-ai-change-pathutils.js'); load('tm-ai-change-army.js'); load('tm-ai-change-narrative.js'); load('tm-ai-change-applier.js'); load('tm-ai-change-applier-validators.js'); load('tm-ai-change-applier-reconcile.js');
+load('tm-ai-change-pathutils.js'); load('tm-ai-change-army.js'); load('tm-ai-change-narrative.js'); load('generated/tm-ai-change-applier.bundle.js');
 load('tm-data-access.js');
 
 const EC = context.TM.EngineConstants;
@@ -140,7 +140,7 @@ check(endturnSource.indexOf('lastInteractionMemory/recognitionState') >= 0, 'sc0
 
 const militarySource = fs.readFileSync(path.join(ROOT, 'tm-military.js'), 'utf8');
 const renderSource = fs.readFileSync(path.join(ROOT, 'tm-endturn-shiji-compose.js'), 'utf8');  // 2026-07-06 诸军总览迁 compose
-const applierSource = fs.readFileSync(path.join(ROOT, 'tm-ai-change-applier.js'), 'utf8');
+const applierSource = fs.readFileSync(path.resolve(ROOT, 'generated/tm-ai-change-applier.bundle.js'), 'utf8');
 // 2026-05-21·Slice 2·applyAIArmyChange 已拆到 tm-ai-change-army.js
 const armySource = fs.readFileSync(path.join(ROOT, 'tm-ai-change-army.js'), 'utf8');
 const phase8FormalSource = fs.readFileSync(path.join(ROOT, 'phase8-formal-bridge.js'), 'utf8') +

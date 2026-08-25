@@ -2,13 +2,13 @@
 // smoke-fiscal-recurring-coerce.js — 财政「一次性误判为长期」纠偏护栏
 //   bug: LLM 偶把突发赏赐/赈济/抄没/缴获等一次性收支误标 recurring:true →
 //        被当长期年例逐回合重复结算(虚增岁入岁出·且当回合 scheduled 不入账)。
-//   fix(tm-ai-change-applier.js · fiscal_adjustments): 含明确一次性词且无长期年例词 → 强制 recurring:false。
+//   fix(generated/tm-ai-change-applier.bundle.js · fiscal_adjustments): 含明确一次性词且无长期年例词 → 强制 recurring:false。
 //   本测试逐字镜像 applier 中的两条正则·校验分类矩阵(保守纠偏·真年例不误伤)。
 'use strict';
 let A = 0;
 function assert(c, m) { if (!c) throw new Error('FAIL: ' + m); A++; console.log('  ✓ ' + m); }
 
-// —— 与 tm-ai-change-applier.js 内护栏逐字一致 ——
+// —— 与 generated/tm-ai-change-applier.bundle.js 内护栏逐字一致 ——
 const _oneTimeRe = /赏|赐|犒|赉|恤|赈|振济|抚恤|抄没|抄家|籍没|罚没|没入|查抄|缴获|赔款|赔偿|报效|进献|捐输|搜括|一次|临时|特支|特拨|特赐|赎银|犒军|犒赏/;
 const _recurRe = /岁|年例|年额|月饷|月粮|月例|常额|常例|常税|经制|经常|盐课|盐引|榷|关税|商税|田赋|加派|皇庄|俸|禄|每年|每岁|逐年|年度/;
 

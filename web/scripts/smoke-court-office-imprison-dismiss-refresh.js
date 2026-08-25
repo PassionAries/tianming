@@ -17,7 +17,7 @@ const vm = require('vm');
 
 const ROOT = path.resolve(__dirname, '..');
 const changchao = (fs.readFileSync(path.join(ROOT, 'tm-chaoyi-changchao-adapter.js'), 'utf8') + '\n' + fs.readFileSync(path.join(ROOT, 'tm-chaoyi-changchao.js'), 'utf8') + '\n' + fs.readFileSync(path.join(ROOT, 'tm-chaoyi-changchao-flows.js'), 'utf8'));
-const applier = fs.readFileSync(path.join(ROOT, 'tm-ai-change-applier.js'), 'utf8');
+const applier = fs.readFileSync(path.join(ROOT, 'modules/ai-change-applier/core.js'), 'utf8');
 
 let passed = 0;
 function assert(cond, msg) { if (!cond) throw new Error('FAIL: ' + msg); passed += 1; }

@@ -34,7 +34,9 @@ const endturnHelpers = read('tm-endturn-helpers.js');
 const endturnQiaozhi = read('tm-endturn-qiaozhi.js');
 const dataAccess = read('tm-data-access.js');
 const topbarVars = read('tm-topbar-vars.js');
-const aiChangeApplier = read('tm-ai-change-applier.js') + '\n' + read('tm-ai-change-applier-validators.js') + '\n' + read('tm-ai-change-applier-reconcile.js');
+const aiChangeApplier = read('modules/ai-change-applier/core.js') + '\n' +
+  read('modules/ai-change-applier/validators.js') + '\n' +
+  read('modules/ai-change-applier/reconcile.js');
 const indices = read('tm-indices.js');
 const officeSystem = read('tm-office-system.js');
 const editorAuthoringAgent = read('editor-authoring-agent.js');
@@ -326,7 +328,7 @@ assert.strictEqual(
   ['tm-keju.js', ['_kejuFindDivision']],
   ['phase8-formal-drafts.js', ['getEdictArchiveRows', 'getFormalEdictCategories', 'letterStateClassFormal']],
   ['phase8-formal-bridge.js', ['pendingEdictCount', 'pendingLetterCount', 'recordCount', 'showLegacy']],
-  ['tm-ai-change-applier.js', ['_tmExistsChar', '_tmExistsFaction']],
+  ['generated/tm-ai-change-applier.bundle.js', ['_tmExistsChar', '_tmExistsFaction']],
   ['tm-corruption-engine.js', ['setIfDef']],
   ['tm-wendui.js', ['setWenduiMode']],
   ['tm-chaoyi-changchao.js', ['_cc3_checkDeptAbsenceMalus']],

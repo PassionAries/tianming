@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 // scripts/smoke-ai-change-applier-baseline.js
 //
-// BASELINE smoke·锁 tm-ai-change-applier.js 当前对外暴露的 22 函数 + 8 全局快捷·
+// BASELINE smoke·锁 generated/tm-ai-change-applier.bundle.js 当前对外暴露的 17 函数 + 8 全局快捷·
 // 拆分前后必须保持·exports 数量 / 名称 / 签名 / 关键行为 一致。
 //
 // 拆分路线 (Slice 1-3) 之前·此 smoke 必须 PASS·
 // 拆分完成后·此 smoke 仍必须 PASS·任何 export 漂移都会被 catch。
 //
 // 范围·
-//   [A] structural: AIChangeApplier 上 22 函数 + 8 globals 都存在·VERSION === 1
+//   [A] structural: AIChangeApplier 上 17 函数 + 8 globals 都存在·VERSION === 1
 //   [B] signature: 每函数 .length arity 锁定
 //   [C] behavior:  pure helper / 不依赖 GM 的 helper 调一遍·不崩
 //   [D] heavy-API: 给最小 GM mock·调 applyAITurnChanges/onAppointment/onDismissal·不崩
@@ -25,7 +25,7 @@ function runFile(ctx, file) {
   vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), ctx, { filename: file });
 }
 
-// ── 22 public functions in AIChangeApplier export ──
+// ── 17 public functions in AIChangeApplier export ──
 const PUBLIC_FUNCS = [
   'applyAITurnChanges',
   'applyAIArmyChange',
@@ -143,9 +143,7 @@ function main() {
   runFile(ctx, 'tm-ai-change-pathutils.js');
   runFile(ctx, 'tm-ai-change-army.js');
   runFile(ctx, 'tm-ai-change-narrative.js');
-  runFile(ctx, 'tm-ai-change-applier.js');
-  runFile(ctx, 'tm-ai-change-applier-validators.js');
-  runFile(ctx, 'tm-ai-change-applier-reconcile.js');
+  runFile(ctx, 'generated/tm-ai-change-applier.bundle.js');
 
   // [A] structural ─────
   assert(ctx.AIChangeApplier, 'global.AIChangeApplier missing');

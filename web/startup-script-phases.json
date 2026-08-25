@@ -2,11 +2,11 @@
   "version": 2,
   "source": "index.html",
   "generatedBy": "web/scripts/build-startup-phase-manifest.js",
-  "scriptCount": 411,
+  "scriptCount": 409,
   "phaseCounts": {
     "menu": 14,
     "core": 80,
-    "world": 295,
+    "world": 293,
     "optional": 22
   },
   "deferredChangesApproved": 6,
@@ -9963,74 +9963,14 @@
       "reason": "Legacy eager script: document order remains observable, but adjacency is not represented as a dependency. Explicit split contracts remain owned by lint-split-contracts.js."
     },
     {
-      "script": "tm-ai-change-applier.js",
+      "script": "generated/tm-ai-change-applier.bundle.js",
       "order": 375,
       "phase": "world",
       "loadPolicy": "eager-ordered",
       "platform": "any",
       "sideEffects": "legacy-unknown",
       "provides": [
-        "AIChangeApplier",
-        "_TM_IMPRISON_RE",
-        "_arriveCharNow",
-        "_hasInstantArrivalRule",
-        "_resolveBinding",
-        "_syncFiscalScalars",
-        "_tmOfficeUiRefreshPending",
-        "_tmReasonIsImprison",
-        "advanceCharTravelByDays",
-        "applyAIArmyChange",
-        "applyAITurnChanges",
-        "applyAllegianceChange",
-        "buildFullAIContext",
-        "onAppointment",
-        "onDismissal",
-        "renderTurnReport"
-      ],
-      "consumes": [],
-      "dependsOn": [],
-      "mustLoadBefore": [],
-      "mustLoadAfter": [],
-      "lazySafe": false,
-      "reason": "Legacy eager script: document order remains observable, but adjacency is not represented as a dependency. Explicit split contracts remain owned by lint-split-contracts.js."
-    },
-    {
-      "script": "tm-ai-change-applier-validators.js",
-      "order": 376,
-      "phase": "world",
-      "loadPolicy": "eager-ordered",
-      "platform": "any",
-      "sideEffects": "legacy-unknown",
-      "provides": [],
-      "consumes": [],
-      "dependsOn": [],
-      "mustLoadBefore": [],
-      "mustLoadAfter": [],
-      "lazySafe": false,
-      "reason": "Legacy eager script: document order remains observable, but adjacency is not represented as a dependency. Explicit split contracts remain owned by lint-split-contracts.js."
-    },
-    {
-      "script": "tm-ai-change-applier-reconcile.js",
-      "order": 377,
-      "phase": "world",
-      "loadPolicy": "eager-ordered",
-      "platform": "any",
-      "sideEffects": "legacy-unknown",
-      "provides": [
-        "_applyBattleResult",
-        "_applyDirectiveCompliance",
-        "_applyFiscalDeficitPenalties",
-        "_applyOfficeDutyTick",
-        "_applyRegentDecisions",
-        "_applyTaxAuthorityGate",
-        "_reconcilePlayerFiscalReforms",
-        "_reconcilePlayerMovements",
-        "_resetDeficitStreakIfHealthy",
-        "_syncFiscalScalars",
-        "applyNormalizedAIWriteBackDeaths",
-        "normalizeAIWriteBackDeaths",
-        "preflightAIWriteBack",
-        "validateAIWriteBackBatch"
+        "_tmOfficeUiRefreshPending"
       ],
       "consumes": [],
       "dependsOn": [],
@@ -10041,7 +9981,7 @@
     },
     {
       "script": "tm-ai-npc-memorials.js",
-      "order": 378,
+      "order": 376,
       "phase": "world",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10060,7 +10000,7 @@
     },
     {
       "script": "tm-var-drawers.js",
-      "order": 379,
+      "order": 377,
       "phase": "world",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10090,7 +10030,7 @@
     },
     {
       "script": "editor-division-deep.js",
-      "order": 380,
+      "order": 378,
       "phase": "world",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10111,7 +10051,7 @@
     },
     {
       "script": "editor-office-deep.js",
-      "order": 381,
+      "order": 379,
       "phase": "world",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10128,7 +10068,7 @@
     },
     {
       "script": "editor-presets.js",
-      "order": 382,
+      "order": 380,
       "phase": "world",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10148,7 +10088,7 @@
     },
     {
       "script": "bundled-scenarios/manifest.js",
-      "order": 383,
+      "order": 381,
       "phase": "world",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10163,7 +10103,7 @@
     },
     {
       "script": "tm-official-scenario-loader.js",
-      "order": 384,
+      "order": 382,
       "phase": "world",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10180,7 +10120,7 @@
     },
     {
       "script": "tm-changelog.js",
-      "order": 385,
+      "order": 383,
       "phase": "world",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10197,7 +10137,7 @@
     },
     {
       "script": "tm-online-client.js",
-      "order": 386,
+      "order": 384,
       "phase": "world",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10214,7 +10154,7 @@
     },
     {
       "script": "tm-workshop-covers.js",
-      "order": 387,
+      "order": 385,
       "phase": "world",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10231,7 +10171,7 @@
     },
     {
       "script": "tm-zip-store.js",
-      "order": 388,
+      "order": 386,
       "phase": "world",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10248,7 +10188,7 @@
     },
     {
       "script": "tm-content-manager.js",
-      "order": 389,
+      "order": 387,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10269,7 +10209,7 @@
     },
     {
       "script": "tm-content-manager-community.js",
-      "order": 390,
+      "order": 388,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10286,7 +10226,7 @@
     },
     {
       "script": "preview/img/east-asia-basemap-data.js",
-      "order": 391,
+      "order": 389,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10303,7 +10243,7 @@
     },
     {
       "script": "phase8-formal-bridge-styles.js",
-      "order": 392,
+      "order": 390,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10320,7 +10260,7 @@
     },
     {
       "script": "phase8-formal-bridge.js",
-      "order": 393,
+      "order": 391,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10348,7 +10288,7 @@
     },
     {
       "script": "phase8-formal-topbar.js",
-      "order": 394,
+      "order": 392,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10363,7 +10303,7 @@
     },
     {
       "script": "phase8-formal-map.js",
-      "order": 395,
+      "order": 393,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10378,7 +10318,7 @@
     },
     {
       "script": "phase8-formal-map-dossier.js",
-      "order": 396,
+      "order": 394,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10393,7 +10333,7 @@
     },
     {
       "script": "phase8-formal-modules.js",
-      "order": 397,
+      "order": 395,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10410,7 +10350,7 @@
     },
     {
       "script": "phase8-formal-drafts.js",
-      "order": 398,
+      "order": 396,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10436,7 +10376,7 @@
     },
     {
       "script": "phase8-formal-drafts-message-panels.js",
-      "order": 399,
+      "order": 397,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10454,7 +10394,7 @@
     },
     {
       "script": "phase8-formal-records.js",
-      "order": 400,
+      "order": 398,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10469,7 +10409,7 @@
     },
     {
       "script": "tm-renwu-tuzhi.js",
-      "order": 401,
+      "order": 399,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10490,7 +10430,7 @@
     },
     {
       "script": "phase8-formal-rightrail.js",
-      "order": 402,
+      "order": 400,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10507,7 +10447,7 @@
     },
     {
       "script": "phase8-formal-rightrail-social.js",
-      "order": 403,
+      "order": 401,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10525,7 +10465,7 @@
     },
     {
       "script": "preview/scenario-editor-sandbox-bridge.js",
-      "order": 404,
+      "order": 402,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10542,7 +10482,7 @@
     },
     {
       "script": "tm-pause-fab.js",
-      "order": 405,
+      "order": 403,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10560,7 +10500,7 @@
     },
     {
       "script": "tm-capacitor-boot.js",
-      "order": 406,
+      "order": 404,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10577,7 +10517,7 @@
     },
     {
       "script": "tm-touch-gestures.js",
-      "order": 407,
+      "order": 405,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10592,7 +10532,7 @@
     },
     {
       "script": "tm-pinch-pan.js",
-      "order": 408,
+      "order": 406,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10610,7 +10550,7 @@
     },
     {
       "script": "tm-hover-fulltext.js",
-      "order": 409,
+      "order": 407,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",
@@ -10628,7 +10568,7 @@
     },
     {
       "script": "tm-startup-contract.js",
-      "order": 410,
+      "order": 408,
       "phase": "optional",
       "loadPolicy": "eager-ordered",
       "platform": "any",

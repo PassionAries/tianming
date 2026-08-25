@@ -21,7 +21,7 @@ assert.strictEqual(manifest.scriptCount, scriptNames.length, 'startup manifest s
 assert.deepStrictEqual(manifest.scripts.map((row) => row.script), scriptNames, 'startup manifest order should match index.html exactly');
 assert.strictEqual(manifest.version, 2, 'startup manifest should use the explicit feature-boundary schema');
 assert.strictEqual(manifest.deferredChangesApproved, 6, 'Feature Loader V2 should approve exactly the audited six-script cohort');
-assert.strictEqual(manifest.scriptCount, 411, 'Feature Loader V2 should reduce the eager startup chain from 416 to 411 scripts');
+assert.strictEqual(manifest.scriptCount, 409, 'Feature Loader V2 plus the AI applier bundle should reduce the eager startup chain from 416 to 409 scripts');
 assert(manifest.scripts.every((row) => row.lazySafe === false && row.loadPolicy === 'eager-ordered'), 'retained classic scripts should remain explicitly eager');
 assert(manifest.scripts.every((row) => Array.isArray(row.provides) && Array.isArray(row.consumes)), 'manifest should expose machine-readable provider and immediate-consumer inventories');
 assert(manifest.scripts.every((row) => row.mustLoadBefore.length === 0 && row.mustLoadAfter.length === 0), 'adjacent scripts must not be emitted as fake dependencies');

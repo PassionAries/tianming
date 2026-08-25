@@ -9,12 +9,12 @@ function ok(c, m){ if(!c) throw new Error('FAIL: '+m); A++; console.log('  ✓ '
 function read(f){ return fs.readFileSync(path.join(ROOT,f),'utf8'); }
 
 console.log('smoke-tier2-l10n');
-const applier = read('tm-ai-change-applier.js') + '\n' + read('tm-ai-change-applier-validators.js') + '\n' + read('tm-ai-change-applier-reconcile.js');
+const applier = read('modules/ai-change-applier/core.js') + '\n' + read('modules/ai-change-applier/reconcile.js');
 const hist = read('tm-history-events.js');
 const ea = read('tm-endturn-apply.js');
 const fm = read('phase8-formal-modules.js');
 
-// ── tm-ai-change-applier.js ──
+// ── generated/tm-ai-change-applier.bundle.js ──
 ok(/disaster_relief:'赈灾'[\s\S]{0,200}\[la\.type\]\|\|la\.type\) \+ ' ' \+ \(la\.amount/.test(applier), '地方官 toast 用中文映射(la.type 不再裸泄漏)');
 ok(applier.indexOf("anticorruption:'肃贪'") >= 0, '财政改革 fr.type 中文映射在位');
 ok(applier.indexOf('P-VWF 对账层') < 0, '★财政改革 toast 去工程黑话 P-VWF');

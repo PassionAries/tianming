@@ -892,7 +892,11 @@
     catch (e) { return []; }
   }
   function _saveMemoriesArr(arr) {
-    try { global.localStorage && global.localStorage.setItem(MEMDIR_KEY, JSON.stringify(arr.slice(0, 60))); return true; }
+    try {
+      if (!global.localStorage || typeof global.localStorage.setItem !== 'function') return false;
+      global.localStorage.setItem(MEMDIR_KEY, JSON.stringify(arr.slice(0, 60)));
+      return true;
+    }
     catch (e) { return false; }
   }
   function _prepareMemoryEntry(m) {
@@ -918,8 +922,9 @@
   function deleteMemory(idOrName) {
     var arr = _loadMemories(), n = arr.length;
     arr = arr.filter(function (x) { return x && x.id !== idOrName && x.name !== idOrName; });
-    _saveMemoriesArr(arr);
-    return { ok: arr.length < n, removed: n - arr.length };
+    if (arr.length === n) return { ok: false, removed: 0, error: '记忆不存在或已删除' };
+    if (!_saveMemoriesArr(arr)) return { ok: false, removed: 0, error: '记忆删除未能持久化' };
+    return { ok: true, removed: n - arr.length };
   }
   var _RECALL_TOOL = [{
     name: 'selectMemories',
@@ -991,7 +996,11 @@
     catch (e) { return []; }
   }
   function _saveUserSkills(arr) {
-    try { global.localStorage && global.localStorage.setItem(SKILLS_KEY, JSON.stringify(arr.slice(0, 40))); return true; }
+    try {
+      if (!global.localStorage || typeof global.localStorage.setItem !== 'function') return false;
+      global.localStorage.setItem(SKILLS_KEY, JSON.stringify(arr.slice(0, 40)));
+      return true;
+    }
     catch (e) { return false; }
   }
   function _prepareSkillEntry(s) {
@@ -1050,8 +1059,9 @@
   function deleteSkill(name) {
     var arr = _loadUserSkills(), n = arr.length;
     arr = arr.filter(function (x) { return x && x.name !== name; });
-    _saveUserSkills(arr);
-    return { ok: arr.length < n };
+    if (arr.length === n) return { ok: false, error: '技能不存在或已删除' };
+    if (!_saveUserSkills(arr)) return { ok: false, error: '技能删除未能持久化' };
+    return { ok: true };
   }
   function listAllSkills() {
     var seen = {}, out = [];
@@ -1128,9 +1138,23 @@
       return { name: p.name, version: p.version || '', description: p.description || '', builtin: !!p.builtin, enabled: _packEnabled(p.name), skills: (p.skills || []).length };
     });
   }
+  function _savePackState(state) {
+    try {
+      if (!global.localStorage || typeof global.localStorage.setItem !== 'function') return false;
+      global.localStorage.setItem(PACKS_STATE_KEY, JSON.stringify(state));
+      return true;
+    } catch (e) { return false; }
+  }
+  function _saveUserPacks(packs) {
+    try {
+      if (!global.localStorage || typeof global.localStorage.setItem !== 'function') return false;
+      global.localStorage.setItem(PACKS_KEY, JSON.stringify(packs.slice(0, 20)));
+      return true;
+    } catch (e) { return false; }
+  }
   function setPackEnabled(name, on) {
     var st = _packsState(); st[name] = !!on;
-    try { global.localStorage && global.localStorage.setItem(PACKS_STATE_KEY, JSON.stringify(st)); } catch (e) {}
+    if (!_savePackState(st)) return { ok: false, name: name, enabled: _packEnabled(name), error: '能力包启停状态未能持久化' };
     return { ok: true, name: name, enabled: !!on };
   }
   function _enabledPacks() {
@@ -1154,7 +1178,7 @@
       var arr = _loadUserPacks();
       var i = arr.findIndex(function (x) { return x && x.name === clean.name; });
       if (i >= 0) arr[i] = clean; else arr.unshift(clean);
-      try { global.localStorage && global.localStorage.setItem(PACKS_KEY, JSON.stringify(arr.slice(0, 20))); } catch (e2) {}
+      if (!_saveUserPacks(arr)) return { ok: false, error: '能力包导入未能持久化' };
       return { ok: true, imported: clean.name, skills: clean.skills.length };
     } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   }
@@ -1166,8 +1190,9 @@
   function removePack(name) {
     var arr = _loadUserPacks(), n = arr.length;
     arr = arr.filter(function (x) { return x && x.name !== name; });
-    try { global.localStorage && global.localStorage.setItem(PACKS_KEY, JSON.stringify(arr)); } catch (e) {}
-    return { ok: arr.length < n };
+    if (arr.length === n) return { ok: false, error: '能力包不存在或已卸载' };
+    if (!_saveUserPacks(arr)) return { ok: false, error: '能力包卸载未能持久化' };
+    return { ok: true };
   }
 
   // ═══════════════════════════════════════════════════════════════════

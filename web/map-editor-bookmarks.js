@@ -17,6 +17,10 @@
   var SLOTS = 4;
   var _bookmarks = null;     // { dynasty: [ {x,y,zoom,label} | null, ... ] }
   var _column = null;
+  var _initialized = false;
+  var _cameraTimer = null;
+  var _keydownHandler = null;
+  var _offMapLoaded = null;
 
   // ─── persist ───────────────────────────────────────────
 
@@ -141,6 +145,7 @@
   }
 
   function renderColumn(){
+    if (!_initialized) return;
     var col = ensureColumn();
     var slots = getSlots();
     var cur = currentSlot();
@@ -195,7 +200,8 @@
   // ─── 键盘 ──────────────────────────────────────────────
 
   function bindKeys(){
-    document.addEventListener('keydown', function(e){
+    if (_keydownHandler) return;
+    _keydownHandler = function(e){
       if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT')) return;
       var m = /^F([1-4])$/.exec(e.key);
       if (!m) return;
@@ -204,25 +210,63 @@
       if (e.shiftKey) setBookmark(idx);
       else if (e.altKey) clearBookmark(idx);
       else jumpBookmark(idx);
-    });
+    };
+    document.addEventListener('keydown', _keydownHandler);
   }
 
   // ─── init ──────────────────────────────────────────────
 
   function init(){
-    ensureColumn();
-    renderColumn();
-    bindKeys();
-    // camera 变·重 render column·indicator 跟随
-    var lastCam = { x: NaN, y: NaN, zoom: NaN };
-    setInterval(function(){
-      var c = ME.EDITOR.camera;
-      if (c.x !== lastCam.x || c.y !== lastCam.y || c.zoom !== lastCam.zoom){
-        lastCam.x = c.x; lastCam.y = c.y; lastCam.zoom = c.zoom;
-        renderColumn();
+    if (_initialized) return false;
+    _initialized = true;
+    try {
+      ensureColumn();
+      renderColumn();
+      bindKeys();
+      // camera 变·重 render column·indicator 跟随
+      var lastCam = { x: NaN, y: NaN, zoom: NaN };
+      _cameraTimer = setInterval(function(){
+        var c = ME.EDITOR.camera;
+        if (c.x !== lastCam.x || c.y !== lastCam.y || c.zoom !== lastCam.zoom){
+          lastCam.x = c.x; lastCam.y = c.y; lastCam.zoom = c.zoom;
+          renderColumn();
+        }
+      }, 500);
+      _offMapLoaded = ME.on('map-loaded', renderColumn);
+      if (typeof _offMapLoaded !== 'function' && typeof ME.off === 'function') {
+        _offMapLoaded = function(){ return ME.off('map-loaded', renderColumn); };
       }
-    }, 500);
-    ME.on('map-loaded', renderColumn);
+      return true;
+    } catch (error) {
+      dispose();
+      throw error;
+    }
+  }
+
+  function dispose(){
+    var hadResources = _initialized || _cameraTimer !== null || !!_keydownHandler || !!_offMapLoaded || !!_column;
+    var cleanupError = null;
+    _initialized = false;
+    if (_cameraTimer !== null){
+      clearInterval(_cameraTimer);
+      _cameraTimer = null;
+    }
+    if (_keydownHandler){
+      document.removeEventListener('keydown', _keydownHandler);
+      _keydownHandler = null;
+    }
+    if (typeof _offMapLoaded === 'function'){
+      try { _offMapLoaded(); }
+      catch (error) { cleanupError = error; }
+    }
+    _offMapLoaded = null;
+    if (_column && _column.parentNode) _column.parentNode.removeChild(_column);
+    _column = null;
+    if (cleanupError && global.console && typeof global.console.error === 'function') {
+      global.console.error('[bookmarks] map-loaded 退订失败', cleanupError);
+      return false;
+    }
+    return hadResources;
   }
 
   // ─── expose ────────────────────────────────────────────
@@ -231,6 +275,8 @@
   global.TM.MapEditor = global.TM.MapEditor || {};
   global.TM.MapEditor.bookmarks = {
     init: init,
+    dispose: dispose,
+    isInitialized: function(){ return _initialized; },
     set: setBookmark,
     jump: jumpBookmark,
     clear: clearBookmark,

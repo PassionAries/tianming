@@ -155,6 +155,48 @@ if (targetedRepair) {
   check(/_repairPreservesSemantics/.test(repairSource) && /repair-changed-business-semantics/.test(repairSource), 'targeted repairs must reject non-identity semantic changes in code');
 }
 
+const authoringUiParsed = parse('editor-authoring-agent-ui.js');
+const authoringUiFunctions = functionsByName(authoringUiParsed);
+['_commitUserWrite', 'rememberConvention', 'showConventionsUI', 'showMemoriesUI', 'showSkillsUI', 'showPacksUI'].forEach((name) => {
+  const fn = authoringUiFunctions.get(name);
+  check(!!fn, 'missing guarded authoring write function ' + name);
+  if (!fn || name === '_commitUserWrite') return;
+  const fnSource = authoringUiParsed.source.slice(fn.start, fn.end);
+  check(/_commitUserWrite\s*\(/.test(fnSource), name + ' must route user-visible writes through the confirmed commit boundary');
+});
+const authoringUiSource = authoringUiParsed.source;
+check(!/try\s*\{[^{}]*AA\.(?:memories\.remove|skills\.remove|packs\.(?:setEnabled|remove|importJSON))\s*\([^{}]*\)\s*;?\s*\}\s*catch\s*\([^)]*\)\s*\{\s*\}/.test(authoringUiSource),
+  'authoring user writes must not return to empty-catch false-success handling');
+
+const mapCoreParsed = parse('map-editor-core.js');
+const mapCoreFunctions = functionsByName(mapCoreParsed);
+const mapOn = mapCoreFunctions.get('on');
+const mapOff = mapCoreFunctions.get('off');
+const mapFire = mapCoreFunctions.get('fire');
+check(!!mapOn && !!mapOff && !!mapFire, 'map editor event hub must expose on/off/fire lifecycle functions');
+if (mapOn) check(/return function unsubscribe/.test(mapCoreParsed.source.slice(mapOn.start, mapOn.end)), 'map editor on() must return an unsubscribe disposer');
+if (mapFire) check(/\.slice\s*\(\s*\)/.test(mapCoreParsed.source.slice(mapFire.start, mapFire.end)), 'map editor fire() must dispatch over a stable listener snapshot');
+check(/\bon\s*:\s*on\s*,[\s\S]{0,80}\boff\s*:\s*off\s*,[\s\S]{0,80}\bfire\s*:\s*fire/.test(mapCoreParsed.source), 'map editor public event hub must publish off() alongside on()/fire()');
+
+const bookmarksParsed = parse('map-editor-bookmarks.js');
+const bookmarkFunctions = functionsByName(bookmarksParsed);
+const bookmarkInit = bookmarkFunctions.get('init');
+const bookmarkDispose = bookmarkFunctions.get('dispose');
+const bookmarkBindKeys = bookmarkFunctions.get('bindKeys');
+check(!!bookmarkInit && !!bookmarkDispose && !!bookmarkBindKeys, 'bookmark feature must expose explicit init/dispose/key binding boundaries');
+if (bookmarkInit) {
+  const source = bookmarksParsed.source.slice(bookmarkInit.start, bookmarkInit.end);
+  check(/if\s*\(\s*_initialized\s*\)\s*return false/.test(source), 'bookmark init must be idempotent');
+  check(/_cameraTimer\s*=\s*setInterval/.test(source) && /_offMapLoaded\s*=\s*ME\.on/.test(source), 'bookmark init must retain timer and map subscription handles');
+}
+if (bookmarkDispose) {
+  const source = bookmarksParsed.source.slice(bookmarkDispose.start, bookmarkDispose.end);
+  check(/clearInterval\s*\(\s*_cameraTimer\s*\)/.test(source), 'bookmark dispose must clear its camera timer');
+  check(/removeEventListener\s*\(\s*['"]keydown['"]\s*,\s*_keydownHandler\s*\)/.test(source), 'bookmark dispose must remove its key listener');
+  check(/_offMapLoaded\s*\(\s*\)/.test(source), 'bookmark dispose must unsubscribe from map-loaded');
+}
+check(/dispose\s*:\s*dispose/.test(bookmarksParsed.source) && /isInitialized\s*:/.test(bookmarksParsed.source), 'bookmark public API must expose lifecycle controls');
+
 const runtimeFiles = fs.readdirSync(WEB).filter((name) => name.endsWith('.js'));
 runtimeFiles.forEach((file) => {
   const parsed = parse(file);

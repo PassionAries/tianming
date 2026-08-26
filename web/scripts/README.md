@@ -1,6 +1,12 @@
-# scripts/ · 零依赖测试 + 重构工具基础设施
+# scripts/ · 低依赖测试 + 重构工具基础设施
 
-此目录下的工具**严格遵守项目 `_no_dependencies` 原则**——仅使用 Node.js 内置模块 (`fs`, `path`, `vm`, `child_process`)，不引入任何 npm 包。
+大部分工具只使用 Node.js 内置模块 (`fs`, `path`, `vm`, `child_process`)；AST 架构守卫使用根目录 `devDependencies` 中的 `acorn`。全新 clone 后先在仓库根目录运行：
+
+```bash
+npm ci --ignore-scripts
+```
+
+不安装依赖直接运行 AST 守卫时会得到明确的安装提示；正式 CI 也始终先执行上述命令。
 
 ## 一键检查（最常用）
 

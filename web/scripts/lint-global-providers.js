@@ -8,7 +8,16 @@
 
 const fs = require('fs');
 const path = require('path');
-const acorn = require('acorn');
+let acorn;
+try {
+  acorn = require('acorn');
+} catch (error) {
+  if (error && error.code === 'MODULE_NOT_FOUND' && /["']acorn["']/.test(String(error.message || ''))) {
+    console.error('[lint-global-providers] 缺少开发依赖 acorn。\n请先在仓库根目录运行：npm ci --ignore-scripts');
+    process.exit(2);
+  }
+  throw error;
+}
 const lib = require('./lib-arch-guard');
 
 const INDEX_FILE = path.join(lib.WEB_ROOT, 'index.html');

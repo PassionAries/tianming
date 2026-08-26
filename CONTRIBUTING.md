@@ -7,6 +7,8 @@
 
 ```bash
 git clone <本仓>
+cd tianming
+npm ci --ignore-scripts                  # 安装锁定依赖；AST 架构守卫需要 devDependency acorn
 git config core.hooksPath hooks        # 安装 pre-push 守卫（~12s 的 8 项架构 lint）
 ```
 

@@ -1718,17 +1718,6 @@
           });
         }
 
-        // ★2026-07-01 W2b硬版·记忆确定性影响办事:信重之臣(对朕好感≥40且心绪不恶)判逾期时多给1回合宽限(benefit of the doubt)。
-        //   仅正向(绝不缩短任何人的宽限=对谁都不会更严·安全无平衡风险)·点亮零调用的 getImpression/getMood·让记忆真正影响办事判定。
-        var _tmCommitGrace = function(npcName){
-          if (!npcName || typeof NpcMemorySystem === 'undefined') return 0;
-          var _pn = (typeof P !== 'undefined' && P.playerInfo && P.playerInfo.characterName) || '';
-          var _fv = (_pn && NpcMemorySystem.getImpression) ? NpcMemorySystem.getImpression(npcName, _pn) : 0;
-          var _md = NpcMemorySystem.getMood ? NpcMemorySystem.getMood(npcName) : '';
-          var _bad = (_md === '怒' || _md === '恨' || _md === '惧' || _md === '怨');
-          return (_fv >= 40 && !_bad) ? 1 : 0;
-        };
-
         // Codex修·MED:承诺履成的 canonical 结构化后果(query降腐败/intel入情报/finance提实征率)抽为共享·commitment_update 与 dialogue_commitment_feedback 两条完成路径都调·_canonFired 防双计。
         // Completion requires a task-bound receipt; no blanket finance/corruption bonuses.
         function _fireCommitCanon(found, foundNpc) {

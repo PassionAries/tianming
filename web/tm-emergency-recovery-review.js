@@ -89,7 +89,6 @@
   }
   function markDelivered(s,rows){rows.forEach(function(r){var id=s.paper.canonical.get(r.id);if(id){s.paper.seen.add(id);s.paper.pending.delete(id);}});}
   function coverage(s){var unread=Array.from(s.paper.required).filter(function(id){return !s.paper.seen.has(id)||s.paper.pending.has(id);});return {complete:unread.length===0,read:Array.from(s.paper.required).filter(function(id){return s.paper.seen.has(id)&&!s.paper.pending.has(id);}).length,required:s.paper.required.size,unread:unread};}
-  function quoteOkay(s,e){var text=s.sources[e&&e.source];return typeof text==='string'&&typeof e.quote==='string'&&e.quote.length>=Math.min(8,text.length)&&!!e.quote.length&&text.includes(e.quote);}
   function conditionPaths(op){
     if(!Array.isArray(op.postconditions)||!op.postconditions.length)throw fault('REVIEW_POSTCONDITION','每个修改必须声明预期结果 postconditions，不能仅凭工具返回成功');
     op.postconditions.forEach(function(c){

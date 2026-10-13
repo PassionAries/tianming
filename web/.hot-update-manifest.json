@@ -2780,11 +2780,6 @@
       "size": 364978
     },
     {
-      "path": "audit-report.txt",
-      "sha256": "98024e0c941938f06f2428149f0bee911b7c7926e3ff2b3031fc1894dbb74814",
-      "size": 11100
-    },
-    {
       "path": "battle/_BUNDLED_FROM.txt",
       "sha256": "5b670ee326d815e1eb4622e1d095cd6f29d91d85b44cda5d5b0e9865454d62e0",
       "size": 660
@@ -3935,51 +3930,6 @@
       "size": 63458
     },
     {
-      "path": "preview/edict-redesign-preview.v10-backup.html",
-      "sha256": "310a95adcaa296612548049d9762cfde2359b54e95802700ccd79352ff083522",
-      "size": 41533
-    },
-    {
-      "path": "preview/edict-redesign-preview.v11-backup.html",
-      "sha256": "533d4f5c9a2f5a7ff79d871150db5b4a9307e8d148d9ea543eec18712883e5e1",
-      "size": 44374
-    },
-    {
-      "path": "preview/edict-redesign-preview.v12-backup.html",
-      "sha256": "32030c0f9704af000035b303b5516ccc347fb7cead2aa36ef57c6ce118e5a407",
-      "size": 53163
-    },
-    {
-      "path": "preview/edict-redesign-preview.v13-backup.html",
-      "sha256": "3fa40980e416060eb57a964edc4e2c6664163720c3b9d536d4f56505a3d9f72a",
-      "size": 52791
-    },
-    {
-      "path": "preview/edict-redesign-preview.v14-backup.html",
-      "sha256": "e31c9eda2d7a5bb1e91955a3d6c171a0d99b51802a647da993b1766f28a48775",
-      "size": 58023
-    },
-    {
-      "path": "preview/edict-redesign-preview.v15-backup.html",
-      "sha256": "12299f99ad49a17740713086d700bd271e65209a178ab7b9cccf49405826428f",
-      "size": 60787
-    },
-    {
-      "path": "preview/edict-redesign-preview.v6-backup.html",
-      "sha256": "76cbf37bf13071c4b87ec2c39b54d34b632a62241be21c0f5895b20703398c0d",
-      "size": 31502
-    },
-    {
-      "path": "preview/edict-redesign-preview.v8-backup.html",
-      "sha256": "95148d0e31c8f4a41ed9fc4e2596436e64bb4debdd4d9e7b120496118b404727",
-      "size": 34446
-    },
-    {
-      "path": "preview/edict-redesign-preview.v9-backup.html",
-      "sha256": "8be438f4c0d6e7cfa70360595fc2b2898c22160a296c00ce7afd316662878e60",
-      "size": 35059
-    },
-    {
       "path": "preview/endturn-loading-preview.html",
       "sha256": "534bad963cf023475064b3de696cd1ba11be7f9f9cd5ab1cbda5ab2e14bc1339",
       "size": 71393
@@ -4008,16 +3958,6 @@
       "path": "preview/hongyan-redesign-preview.html",
       "sha256": "88a8599db91aa6943298b2c2b3048731d61a4eaef910afae61cda9dadce1448c",
       "size": 69214
-    },
-    {
-      "path": "preview/hongyan-redesign-preview.v1-reskin.html",
-      "sha256": "ec370804b0a4b4dd88afe26eabf384904b18da05e8090dbdf2d82db5ecc06fb4",
-      "size": 65064
-    },
-    {
-      "path": "preview/hongyan-redesign-preview.v2-changjuan.html",
-      "sha256": "9bca18c1bdcb19a72499bbab4c55a85675f19f00ef766b7aa40882d29ee2f026",
-      "size": 61165
     },
     {
       "path": "preview/img/action-annals-card.png",
@@ -4255,11 +4195,6 @@
       "size": 735306
     },
     {
-      "path": "preview/phase8-b-shell-preview.html.broken-encoding-20260511-1242.html",
-      "sha256": "d863fd7239500c951c4ea35c7912a049e60171257bf852fac7ee83ca78748bb6",
-      "size": 552577
-    },
-    {
       "path": "preview/phase8-edict-ui.js",
       "sha256": "2a14a225527da4611de24f09531b758635417c0e0adc62375c113fd3a6623301",
       "size": 19636
@@ -4288,21 +4223,6 @@
       "path": "preview/records-redesign-preview.html",
       "sha256": "e5745157c621b1e8c7c92d4110077e9cd67eb1d5c26991be857f25e3513e945c",
       "size": 74311
-    },
-    {
-      "path": "preview/records-redesign-preview.v1-juan.html",
-      "sha256": "73a0cd61e5d0f1fe6ef3e210d760740fff6775781c8831722c005848f50b834f",
-      "size": 38574
-    },
-    {
-      "path": "preview/records-redesign-preview.v2-db.html",
-      "sha256": "0afaf59b538a17894eb3d288f90d72ceac6fa2cdbc95a7aa058eebe88ec41032",
-      "size": 43715
-    },
-    {
-      "path": "preview/records-redesign-preview.v3-content.html",
-      "sha256": "b7b4e2b0e55e8c02101e07c4a0bb05f2922750dab3bba123b3d876c81082ec14",
-      "size": 56902
     },
     {
       "path": "preview/renwu-tuzhi-runtime-test.html",
@@ -4476,8 +4396,8 @@
     },
     {
       "path": "source-manifest.json",
-      "sha256": "11afae982437cb38cda79a7ba0eaff6d6e0221b3377c226ed9f1632ba329f40b",
-      "size": 31572
+      "sha256": "42f4cf8badf110de131e04dce8be9f08a6f1508b192e98d1892f3930f4f7656b",
+      "size": 30224
     },
     {
       "path": "startup-script-phases.json",

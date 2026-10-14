@@ -15,6 +15,7 @@ const vm = require('vm');
 
 const ROOT = path.resolve(__dirname, '..');
 const appFile = path.join(ROOT, 'preview', 'scenario-editor-reset-app.js');
+const seederFile = path.join(ROOT, 'tm-official-scenario-bundle.js');
 const bundleFile = path.join(ROOT, 'preview', 'official-scenarios-bundle.js');
 
 let passed = 0;
@@ -30,6 +31,7 @@ assert(fs.existsSync(bundleFile), 'official scenarios bundle must exist');
 const bundleSrc = fs.readFileSync(bundleFile, 'utf8');
 const sandbox = {};
 vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(seederFile, 'utf8'), sandbox, { filename: 'tm-official-scenario-bundle.js' });
 vm.runInContext(bundleSrc, sandbox, { filename: 'official-scenarios-bundle.js' });
 const bundle = sandbox.TM_OFFICIAL_SCENARIOS;
 assert(bundle && typeof bundle === 'object', 'bundle should expose TM_OFFICIAL_SCENARIOS');

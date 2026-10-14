@@ -43,7 +43,8 @@ function main() {
     ok(builtin.split('\n').length <= 20, entry.key + ' builtin remains reviewable compact output');
     const expression = serializeScenarioExpression(entry.data);
     ok(seeder.includes('"data":' + expression), entry.key + ' seeder includes lossless root expression');
-    ok(preview.includes('"' + entry.key + '":' + expression), entry.key + ' editor preview includes lossless root expression');
+    ok(preview.includes(JSON.stringify(entry.filename.replace(/\.json$/, '')) + ':' + JSON.stringify(entry.key)), entry.key + ' editor preview adapter maps the seeder filename to its key');
+    ok(!preview.includes(expression.slice(0, 200)), entry.key + ' editor preview no longer embeds a second data copy');
     if (entry.key === 'tianqi7') {
       const marker = '"scenario":';
       const start = reset.lastIndexOf(marker) + marker.length;

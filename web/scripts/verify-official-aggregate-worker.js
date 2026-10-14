@@ -6,7 +6,8 @@ const mode = process.argv[2];
 assert(['seeder','preview'].includes(mode), 'aggregate mode required');
 const files = {seeder:'web/tm-official-scenario-bundle.js',preview:'web/preview/official-scenarios-bundle.js'};
 const context = {};context.window=context;context.globalThis=context;vm.createContext(context);
-vm.runInContext(fs.readFileSync(path.join(root, files[mode]), 'utf8'), context, {timeout:90000});
+vm.runInContext(fs.readFileSync(path.join(root, files.seeder), 'utf8'), context, {timeout:90000});
+if (mode === 'preview') vm.runInContext(fs.readFileSync(path.join(root, files.preview), 'utf8'), context, {timeout:90000});
 const entries = require('./sync-official-scenarios.js').ENTRIES;
 let checks = 0;
 for (const entry of entries) {

@@ -4181,8 +4181,8 @@
     },
     {
       "path": "preview/official-scenarios-bundle.js",
-      "sha256": "910138abe5a8fa8ece3aaf71a6e64dcc5238a8471976f40c9dec513f12700cf5",
-      "size": 92821162
+      "sha256": "24aeddb5aea55f955f8e4dbb3d3246bc312dc4d991ba2e3999f13b94a6129847",
+      "size": 724
     },
     {
       "path": "preview/opening-redesign-preview.html",
@@ -4261,8 +4261,8 @@
     },
     {
       "path": "preview/scenario-editor-reset-preview.html",
-      "sha256": "397587edd462da9e052587122521f1fe15927c23c4ef66084e80de65b0d038f6",
-      "size": 33907
+      "sha256": "ae121e977e4704a7a81216e4a7afd1fb339c1251745b3b3852071290c62029e1",
+      "size": 33991
     },
     {
       "path": "preview/scenario-editor-reset-style.css",

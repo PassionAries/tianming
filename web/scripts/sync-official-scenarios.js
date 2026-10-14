@@ -4,7 +4,7 @@
 // 数据真源只有仓根 scenarios/*（官方）.json；本脚本只从真源向下生成：
 //   - web/scenarios/*.js                         网页/安卓内置注册脚本
 //   - web/tm-official-scenario-bundle.js         Electron seeder bundle
-//   - web/preview/official-scenarios-bundle.js   剧本编辑器 fallback bundle
+//   - web/preview/official-scenarios-bundle.js   剧本编辑器适配器（复用 seeder bundle，按文件名换 key）
 //   - web/preview/scenario-editor-reset-data.js  剧本编辑器 reset 基线
 //   - web/bundled-scenarios/*.json + manifest.json（Pages/热更按需加载素材）
 //
@@ -97,10 +97,17 @@ function serializeSeeder(entries) {
 }
 
 function serializePreview(entries) {
-  const bundle = '{' + entries.map((entry) => JSON.stringify(entry.key) + ':' + serializeScenarioExpression(entry.data)).join(',') + '}';
-  return '/* GENERATED FILE. Source: ../../scenarios/*（官方）.json. Run `node web/scripts/sync-official-scenarios.js`. */\n'
+  // 预览页不再自带 90MB 数据副本：先装 ../tm-official-scenario-bundle.js，这里只按文件名换成编辑器用的 key。
+  const keyByFilename = {};
+  entries.forEach((entry) => { keyByFilename[entry.filename.replace(/\.json$/, '')] = entry.key; });
+  return '/* GENERATED FILE. Source: ../tm-official-scenario-bundle.js（须先装载）. Run `node web/scripts/sync-official-scenarios.js`. */\n'
     + '(function(global){\n'
-    + '  global.TM_OFFICIAL_SCENARIOS = ' + bundle + ';\n'
+    + '  var KEY_BY_FILENAME = ' + JSON.stringify(keyByFilename) + ';\n'
+    + '  var list = global.TMOfficialScenarioBundle;\n'
+    + '  if (!Array.isArray(list)) throw new Error("official-scenarios-bundle.js: 须先装载 ../tm-official-scenario-bundle.js");\n'
+    + '  var out = {};\n'
+    + '  list.forEach(function(entry){ var key = entry && KEY_BY_FILENAME[entry.filename]; if (key) out[key] = entry.data; });\n'
+    + '  global.TM_OFFICIAL_SCENARIOS = out;\n'
     + '})(typeof window !== "undefined" ? window : globalThis);\n';
 }
 

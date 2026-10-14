@@ -10,8 +10,10 @@ function ok(c, m) { if (c) { pass++; console.log('  ✓ ' + m); } else { fail++;
 const clone = (x) => JSON.parse(JSON.stringify(x));
 
 // 载入真 bundle
+const seederSrc = fs.readFileSync(path.join(__dirname, '..', 'web', 'tm-official-scenario-bundle.js'), 'utf8');
 const src = fs.readFileSync(path.join(__dirname, '..', 'web', 'preview', 'official-scenarios-bundle.js'), 'utf8');
 const ctx = { console }; ctx.global = ctx; ctx.window = ctx;
+vm.runInNewContext(seederSrc, ctx, { filename: 'tm-official-scenario-bundle.js' });
 vm.runInNewContext(src, ctx, { filename: 'bundle.js' });
 const S = ctx.TM_OFFICIAL_SCENARIOS;
 const TQ = S.tianqi7, SS = S.shaosong;

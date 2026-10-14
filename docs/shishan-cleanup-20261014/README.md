@@ -65,6 +65,38 @@ Electron 七组未在本机跑（改动不含界面）。
 7. **88MB 双胞胎剧本包**：要省得改 sync-official-scenarios.js 和两处 parity 守卫，让 preview 复用主包。
 8. **index.html 479 个同步脚本**：真正的启动优化点（分期懒加载 / 合包），但要配 startup-script-phases 审计与 Electron 七组，另开专项。
 
+## 五、第二轮（10-15 凌晨·同志「按你的想法逐个开」）
+
+### 瘦身 `672b9097`：预览页剧本包改成 724 字节适配器
+web/preview/official-scenarios-bundle.js 原是 tm-official-scenario-bundle.js 的同数据副本（92.8MB），只是全局名不同；两份都进发布包。
+现在 sync-official-scenarios.js 把它生成为适配器：先装 ../tm-official-scenario-bundle.js，再按文件名换成 tianqi7/shaosong/tang840 三个 key。
+三个读预览包的脚本改为先装主包；奇偶校验改断言「适配器含映射、不再内嵌第二份数据」。release contract 的 bytes 572,655,263 → 479,834,904。
+顺带发现：仓里官方剧本其实有四份（scenarios/*.json 真源 90MB、web/scenarios/*.js 三个内建 92.8MB、seeder 主包 92.8MB、预览包）。
+seeder 主包与三个内建脚本还是一对双胞胎（发布包里再省 92.8MB 的目标），但 seeder 要的是「数组 + 文件名」、内建要的是「注册进 P.scenarios」，
+合并得改 tm-official-scenario-seeder.js 的装载方式并过 Electron 七组，留作下一轮。
+
+### 清理 `e582e821`：docs/ 移出 19 个超 1MB 的证据快照（102.9MB）
+docs/ 共 2167 个文件 166MB；19 个超 1MB 的 JSON 占 102.9MB，最大 65.9MB。核过没有脚本、守卫、工作流读它们。markdown 与小文件全留。
+
+### 去重 `3476a04b`：escHtml 只剩 tm-utils 一份
+tm-chaoyi-changchao.js 的一行版后装覆盖了全站。改成模块私有 `_ccEscHtml`（28 处调用），可单独装载的预览/测试不受影响。
+行为差异只在 0/false：以前全站 escHtml(0) 得空串，现在得「0」。白名单减一条。
+
+### 去重 `8f55bd30`：robustParseJSON 只剩 tm-utils 一份（正典=修复层版）
+正式游戏一直跑的是 tm-ai-infra-json.js 的修复层版（OOM 护栏、截断补闭合、并列多值主可解取主），tm-utils 的严格版只有编辑器在用，
+而 smoke-player-text-memory-regressions 钉的恰是编辑器那份——测试盯着游戏不用的函数。现在修复层版并回 tm-utils（游戏与编辑器共用），
+infra 文件删定义。_dbg 探测改 window._dbg，TM.platform 入 editor.html 跨入口悬空基线（与 TM.SimTime 同类）。三个 smoke 随动。白名单再减一条。
+
+### 没动：`_getDaysPerTurn`
+retention guard 明钉「兼容性重定义」，三个 smoke 单独装载 tm-edict-lifecycle.js；15 行，值不回票价，留着。
+
+### 评估：index.html 479 个同步脚本不是启动慢的主因
+新工具 `web/scripts/perf-startup-script-cost.js`（node vm + headless 桩，装载环境同 smoke-full-turn-flow）量了每个脚本的编译+顶层执行耗时，
+结果在本目录 `startup-script-cost.md`：479 个脚本 20.2MB 合计约 1.5 秒（5 轮：执行取最小、编译取首轮冷值；单轮噪声能差 10 倍，机器当时 CPU 82%），world 分期 318 个占 69%，
+最重的单个脚本 generated/tm-ai-change-applier.bundle.js 也只 23ms（几乎全是编译），前 30 名合计 319ms、占 21%。
+结论：把脚本改成分期懒加载最多省一秒上下，还要配 Electron 七组回归；开局慢的大头在剧本 JSON 解析、深读与地图首渲（见 perf 第七~九轮记录），
+不在脚本装载。本轮不动 index.html。
+
 ## 四、教训
 - 扫描死码时，去注释的正则遇到字符串里的 `image/*` 会把半个文件吞掉，产出 70 个假死函数——**最终以「全文整词计数 ≤1」为准，不去注释**。
 - 「被 smoke 引用」要用 `grep -rlw` 全目录核，别信自己脚本里的一次性判断（第一次漏了 14 个，smoke 抓回来 1 个）。

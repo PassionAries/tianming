@@ -3066,13 +3066,13 @@
     },
     {
       "path": "editor-authoring-agent-ui.js",
-      "sha256": "ecc4c234633a07e91ab75f074107744f913fbe6e6af5e08176f3d8f8d5b04f6b",
-      "size": 222671
+      "sha256": "76bc0a2575fff2f5a5c2a3b8b331161c970ab1d7ac1f2906617a5cdad54febf2",
+      "size": 226859
     },
     {
       "path": "editor-authoring-agent.js",
-      "sha256": "6a4891ad1e8ca16e6ece9e6a788c201b440c3aa69605959db6b1f75ea1676c8e",
-      "size": 313568
+      "sha256": "0a7c20dbd99bc477b3975dabb0d54d6255753cabfd67fce94e934b8742921650",
+      "size": 334333
     },
     {
       "path": "editor-core.js",
@@ -3416,8 +3416,8 @@
     },
     {
       "path": "map-editor-juben-handoff.js",
-      "sha256": "98c995c0a5fcf3e23b39a8ec10e4861b3ea18e9c31df67e3c437af2883c16882",
-      "size": 5839
+      "sha256": "6c470a6eb43e575d795be56f3015f5e288ed2455f72f9053af67a0f83ccd930f",
+      "size": 6667
     },
     {
       "path": "map-editor-layer-hotkey.js",
@@ -3581,8 +3581,8 @@
     },
     {
       "path": "map-editor-to-game.js",
-      "sha256": "01c95b2767d24bf4a151775254a46bd642d12f9f973475ba7bc583273818ec87",
-      "size": 24081
+      "sha256": "40e945cc992f9e422d8bc6e31582e8b81c5327c3d113d39a4dded40b36e5ce63",
+      "size": 24479
     },
     {
       "path": "map-editor-tools.js",
@@ -4401,8 +4401,8 @@
     },
     {
       "path": "startup-script-phases.json",
-      "sha256": "fcc765ae4d6c9dd8e5075b0315f54415a64c8b6ddf670b7cee9bc280cf893b39",
-      "size": 390410
+      "sha256": "e835bda373d665e384d563f5a4e2f2426bf2bc73fed5af972a2f62e739dfdfe6",
+      "size": 390600
     },
     {
       "path": "styles.css",
@@ -5106,13 +5106,13 @@
     },
     {
       "path": "tm-endturn-core.js",
-      "sha256": "dc9cc0fd209000983e8d9997190ef160f3cd24975970e210d38738faae5f7a03",
-      "size": 108164
+      "sha256": "2a450b607736d1ee27d67459144ae13a66a1404bdb45bbd1d7cd29a1ef09a4d7",
+      "size": 110707
     },
     {
       "path": "tm-endturn-edict.js",
-      "sha256": "d6fcad35cc0e9435306d8e56e9127dbb1ee0c35a703e2c02b264452d477a152a",
-      "size": 88852
+      "sha256": "d10454672e678114898afd8d12d04dba25861298406e3c2e081b242a909a961e",
+      "size": 90231
     },
     {
       "path": "tm-endturn-followup-helpers.js",
@@ -5156,8 +5156,8 @@
     },
     {
       "path": "tm-endturn-prep.js",
-      "sha256": "3f860a72481ae18d29bdbd47639399fc17d7f6736bc151b9fcad1f18d03bd4f3",
-      "size": 39388
+      "sha256": "1116d73324cbfaba6ca2631a30b5ff7b949b3bdeca5f1c92fa86becda14b1310",
+      "size": 39795
     },
     {
       "path": "tm-endturn-progress.js",
@@ -5226,8 +5226,8 @@
     },
     {
       "path": "tm-endturn-timing-ledger.js",
-      "sha256": "689d6258f97b4adb70458074c90641471587cad391ac59a5d9df0d0779be291a",
-      "size": 15459
+      "sha256": "f8215b34d9be2f7a81e1e88a75324db22a47c925623cfc1b1a78b663d0ebdc78",
+      "size": 17533
     },
     {
       "path": "tm-endturn-validity.js",
@@ -6491,8 +6491,8 @@
     },
     {
       "path": "tm-save-lifecycle.js",
-      "sha256": "5dab1e1add48a435bf52422fac004f97f14c7ddc8da67e3e42275b9ac15917b0",
-      "size": 169777
+      "sha256": "eff2671956110d218af797570550837ba5baac0c26bbb3a6cea787f23f602fb2",
+      "size": 171557
     },
     {
       "path": "tm-save-manager.js",
@@ -6501,8 +6501,8 @@
     },
     {
       "path": "tm-save-world-validation.js",
-      "sha256": "f4bda4cd928a699a895197c932c7de2165732eb77644760629fab840504efff1",
-      "size": 11208
+      "sha256": "cdb62ac74878c1c96565840ce89c5531b1c2285b45c547590f36cfa2bdd724b9",
+      "size": 22562
     },
     {
       "path": "tm-semantic-recall.js",
@@ -6591,7 +6591,7 @@
     },
     {
       "path": "tm-start-runtime-manifest.json",
-      "sha256": "6e9d3751ece643affa2bfcc6a26b2519a0ec6eb96419cbdcb81c0285b8df4110",
+      "sha256": "04a9dce1c5039576a8b9137b5b910f2f32063e2c894d7a05dd2f017da430a215",
       "size": 138846
     },
     {
@@ -6651,8 +6651,8 @@
     },
     {
       "path": "tm-tax-policy.js",
-      "sha256": "bf1ecac91e094095264780a51356ef987b3406622dc8eccf81828bed0650072e",
-      "size": 19497
+      "sha256": "f74b65e2e1a03f5c783fb0284fd3be12a9f307322ff0bf8b192dbe81cad22081",
+      "size": 21738
     },
     {
       "path": "tm-test-harness.js",

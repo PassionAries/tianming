@@ -4401,8 +4401,8 @@
     },
     {
       "path": "startup-script-phases.json",
-      "sha256": "e835bda373d665e384d563f5a4e2f2426bf2bc73fed5af972a2f62e739dfdfe6",
-      "size": 390600
+      "sha256": "d11714be83f976d2ee31ab2dc9357ba4cbdab5156f4f87c966dea9ac7e9fe8b0",
+      "size": 390576
     },
     {
       "path": "styles.css",
@@ -4446,8 +4446,8 @@
     },
     {
       "path": "tm-ai-infra-json.js",
-      "sha256": "f45b34d2fc0ee8682f15e567cd21ca5dc705505ed8735535242702434645c671",
-      "size": 14539
+      "sha256": "5e46171354b2f9d2613af0db3cd9e5aab3bf0ac3d660a7e4241bc4abb8213d71",
+      "size": 4484
     },
     {
       "path": "tm-ai-infra-model-detect.js",
@@ -4671,8 +4671,8 @@
     },
     {
       "path": "tm-chaoyi-changchao.js",
-      "sha256": "200c3f56acc886f9abff7024f80b208cd995b16088bd7451a3caf226b4ab95a6",
-      "size": 134907
+      "sha256": "a9356cb6c5d754ffe36cb6c802d5cfe468aca8102b238861b86695051fbf76d4",
+      "size": 135121
     },
     {
       "path": "tm-chaoyi-tinyi.js",
@@ -6591,8 +6591,8 @@
     },
     {
       "path": "tm-start-runtime-manifest.json",
-      "sha256": "04a9dce1c5039576a8b9137b5b910f2f32063e2c894d7a05dd2f017da430a215",
-      "size": 138846
+      "sha256": "cefee5fdb6f9903f6b314e81080a0c50a2d90810666252d06e17799dca66f41a",
+      "size": 138845
     },
     {
       "path": "tm-start-selector.js",
@@ -6741,8 +6741,8 @@
     },
     {
       "path": "tm-utils.js",
-      "sha256": "107b550af56a45015a03f9b28eaf381db9acef168af88af4ad0b4856e1439506",
-      "size": 103451
+      "sha256": "6db3b4343e3ddf2622520f16ba55616c3c8ad69d5e423a7dc9397ffe6c1b162b",
+      "size": 112457
     },
     {
       "path": "tm-var-drawers.js",

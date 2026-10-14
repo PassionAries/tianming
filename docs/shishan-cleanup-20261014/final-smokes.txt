@@ -56,3 +56,12 @@ hot-builder-gates 27、四项 --check 全绿。
 4. smoke-production-dependencies.js —— junction node_modules 的 ENOBUFS，同第一轮；CI 干净 npm ci 绿。
 
 结论：本分支相对主干 ac568161 无 smoke 回归，四个红全是本机负载或 junction 环境。门禁在 7ae3f136 全绿（lint-arch-all 15/15、release contract 176、hot-baseline --check、hot-builder-gates 27、startup-phase 与 native-preparation --check）；之后的记录提交只改 docs/。
+
+—— 第三轮（分支 claude/shishan-round3-20261015 @ 1201d8ae = 主干 8f05376d + 删 seeder 主包）——
+守卫/契约：lint-arch-all 15/15、verify-official-scenario-parity 46（builtin/game/preview 三模式）、release contract 176（files=809 bytes=387,020,170）、
+hot-builder-gates 27、sync-official --check（artifacts=10）、hot-baseline --check（files=800，容忍 595）、startup-phase --check（scripts=479）、native-preparation --check 全绿。
+改动族单跑：smoke-official-bundle-parity 23、smoke-official-scenario-seeder 24（新）、smoke-scenario-isolation 46、smoke-scenario-editor-reset-roundtrip、smoke-official-scenario-lazy-loader 全过。
+定向 run-smokes（16 族 --grep 并集，--jobs 2 --timeout 240 --no-retry）：72 PASS · 0 FAIL · 0 suspect（run-smokes 205s）；
+热更基线手摘旧条目后 hot-/manifest/release 三族复跑：7 PASS。
+根目录 scripts/smoke-scenario-no-bleed.js 改读注册表后 A3 仍红，与改前一致（不在 run-smokes 自动发现范围，主干既有）。
+全量 smoke 与 Electron 七组交 GitHub CI（PR → main），结果补在下面。

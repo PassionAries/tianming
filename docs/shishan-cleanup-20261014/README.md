@@ -62,7 +62,7 @@ Electron 七组未在本机跑（改动不含界面）。
 4. **240 条死 CSS**：动态拼类名的误报率不低，要人工逐条看；收益只有 27KB。
 5. **docs/ 164MB**：是 Codex 的证据目录，删不删是同志定；建议把 10MB 以上的快照 JSON 挪出仓（git 历史里有）。
 6. **24 个 preview-*.html 设计稿**：发版已按 `previewMockup` 排除，不进包；前端重做期间留着当参考。
-7. **88MB 双胞胎剧本包**：要省得改 sync-official-scenarios.js 和两处 parity 守卫，让 preview 复用主包。
+7. **88MB 双胞胎剧本包**：要省得改 sync-official-scenarios.js 和两处 parity 守卫，让 preview 复用主包。→ 第二轮预览包改适配器（「五」），第三轮 seeder 主包删掉（「七」）。
 8. **index.html 479 个同步脚本**：真正的启动优化点（分期懒加载 / 合包），但要配 startup-script-phases 审计与 Electron 七组，另开专项。
 
 ## 五、第二轮（10-15 凌晨·同志「按你的想法逐个开」）
@@ -101,12 +101,39 @@ retention guard 明钉「兼容性重定义」，三个 smoke 单独装载 tm-ed
 结论：把脚本改成分期懒加载最多省一秒上下，还要配 Electron 七组回归；开局慢的大头在剧本 JSON 解析、深读与地图首渲（见 perf 第七~九轮记录），
 不在脚本装载。本轮不动 index.html。
 
+## 七、第三轮（10-15 上午·同志「交给你了，一个一个完工」）
+
+### 瘦身 `1201d8ae`：删 92.8MB seeder 主包，桌面落盘器改经 loader 装内建脚本
+web/tm-official-scenario-bundle.js（92,821,491 字节）与 web/scenarios/*.js 三个内建是同一份数据的双胞胎，都由 sync-official-scenarios.js 生成，
+发布包、热更基线、仓各带两份。只用它的是桌面版落盘器 tm-official-scenario-seeder.js（首次启动把三部官方剧本写进用户剧本目录）和两个 node 校验。
+现在只剩内建一份：
+- 内建脚本模板：有 P 时照旧注册进 P.scenarios、不另留引用（loader 在 tm:p-restored 复位时才能把整份数据放掉）；
+  没有 P 的独立页面（剧本工坊预览、node 测试）只登进 TMOfficialScenarioBuiltins 注册表，不再每 200ms 轮询 P。
+- 落盘器：缺哪份就经 TMOfficialScenarioLoader.ensure(id) 装哪份（和玩家开卷同一条路），克隆后交 tianming.saveScenario；装不上整体失败、下次重试。
+- 预览适配器 preview/official-scenarios-bundle.js 改读注册表按 id 换 key；预览页改挂三个内建脚本。
+- 新 web/scripts/lib-official-builtins.js 统一 node 侧装载（默认静默 console：内建的「已注册」日志不再污染把 stdout 当结果读的父进程）；
+  parity 守卫的执行态对照改三模式 builtin/game/preview（46 条）；smoke-official-bundle-parity / scenario-isolation / editor-reset-roundtrip
+  与根目录 scripts/smoke-scenario-no-bleed 改读注册表；新增 smoke-official-scenario-seeder（24 项：对照表、非桌面跳过、只装缺的、深克隆、
+  并发共用一次运行、loader 缺失重试、单份失败、占位不落盘、落盘失败、源码契约）。
+- 随动：source-manifest.json 937→936；.hot-update-manifest.json 1396→1395（重生成工具只增不删，已删文件的旧条目手摘）；
+  startup-script-phases / tm-start-runtime-manifest / bundled-scenarios/manifest 重生成；lint-scenario-data 语料排除表去一条。
+release contract bytes 479,841,325 → 387,020,170；自第二轮开工前的 572,655,263 起，发布包共省约 185.6MB。
+
+### 门禁
+lint-arch-all 15/15、parity 46、release contract 176、hot-builder-gates 27、四项 --check 全绿。
+定向 run-smokes 72 条（official/scenario/preview/manifest/startup/hot-/release/split/retention/source/orphan/desktop/electron/seeder/editor-reset/lazy 诸族并集）全过，
+热更基线手摘旧条目后 hot-/manifest/release 三族复跑 7 条全过；根目录 smoke-scenario-no-bleed 的 A3 改前就红，与本轮无关。
+全量 smoke 与 Electron 七组交 GitHub CI（PR → main），结果见 final-smokes.txt。
+
 ## 四、教训
 - 扫描死码时，去注释的正则遇到字符串里的 `image/*` 会把半个文件吞掉，产出 70 个假死函数——**最终以「全文整词计数 ≤1」为准，不去注释**。
 - 「被 smoke 引用」要用 `grep -rlw` 全目录核，别信自己脚本里的一次性判断（第一次漏了 14 个，smoke 抓回来 1 个）。
 - `E:/tianming-main-port-20261014` 同时有别的会话在改，开工前 `git status` 干净不代表开工后还干净——动刀一律另开工作区。
 - 搬顶层函数的宿主文件后，要查「谁整装了旧宿主却没装新宿主」：vm 型 smoke 常按文件名整装一族、按名抽另一族，
   `grep -l 旧宿主文件名 web/scripts scripts` 逐个看上下文。调用点裹在 try/catch 里时 ReferenceError 不会让 smoke 红，得用探针核，别信「跑过了就是对的」。
+- 派生清单的重生成工具（patch-hot-baseline）只增不删：删了文件，.hot-update-manifest.json 里的旧条目要手摘；`--check` 会把它当「本 checkout 缺席的未跟踪资产」容忍过去（595→596），看不出来。
+- run-smokes 的 `--grep` 要重复给（`--grep a --grep b` 取并集），逗号串成一条一个都选不中。
+- vm 上下文里造的对象是另一个 realm，`assert.deepStrictEqual` 会因原型不同而失败，先 JSON 压平再比；async 函数每次调用都返回新 promise，别拿 promise 同一性当「并发共用」的契约。
 
 ## 六、提交号对照（10-15 变基到 ac568161 之后）
 
@@ -127,5 +154,7 @@ retention guard 明钉「兼容性重定义」，三个 smoke 单独装载 tm-ed
 | 7d90fb85 | b7509202 | — | 补漏：14 个 harness 补抽 robustParseJSON |
 | 2700552f | 756d345d | — | 第二轮记录 |
 | 7ae3f136 | — | — | 变基到 ac568161 后重生成派生清单（主干热更基线 19 项 stale 一并治好） |
+| 8f05376d | — | — | 变基后全量 smoke 记录（已上主干） |
+| 1201d8ae | — | — | 第三轮：删 seeder 主包，落盘器改经 loader（分支 claude/shishan-round3-20261015） |
 
 final-smokes.txt 里各段标注的「分支 @ xxx」是每次跑 smoke 时的实际分支头，按这张表换算。

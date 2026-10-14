@@ -122,6 +122,7 @@
   function renderSummary(summary, notes, suggestions, stream) {
     if (!ui.els || !ui.els.summary) return;
     var s = (summary || '').trim();
+    ui._lastSummary = s;   // 应用时记进改动账
     var sug = (suggestions || []).filter(Boolean);
     if (!s && (!notes || !notes.length) && !sug.length) { ui.els.summary.style.display = 'none'; return; }
     var html = '';

@@ -963,7 +963,7 @@
     else if (act === 'orchestrate') runOrchestratedUI();
     else if (act === 'critics') _armCritics();
     else if (act === 'checkpoint') manualCheckpoint();
-    else if (act === 'undo') undoLastApply();
+    else if (act === 'undo') _undoLatest();
     else if (act === 'attach') { var fin = ui.els && ui.els.panel && ui.els.panel.querySelector('#tm-aa-file'); if (fin) fin.click(); }
     else if (act === 'import' || act === 'batch' || act === 'bundle' || act === 'ledger' || act === 'settings' || act === 'keys' || act === 'macros') _toggleSheet(act, true);
   }
@@ -1628,6 +1628,199 @@
     var c = ui._reply; if (!c) return;
     try { var d = c.querySelector('.tm-aa-diff') || c; d.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) {}
   }
+
+  // ═══ 改动账（S2）：应用后记一笔；回复卡与改动史里可撤销（反向差异·连带之后几笔）、可恢复 ═══
+  function Ledger() { return global.TM && global.TM.AuthoringLedger; }
+  function _fmtWhen(ts) {
+    try {
+      var d = new Date(ts), now = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; };
+      var hm = p(d.getHours()) + ':' + p(d.getMinutes());
+      if (d.toDateString() === now.toDateString()) return '今天 ' + hm;
+      var y = new Date(now); y.setDate(now.getDate() - 1);
+      if (d.toDateString() === y.toDateString()) return '昨天 ' + hm;
+      return (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + hm;
+    } catch (e) { return ''; }
+  }
+  function _entryTitle(e) {
+    var t = String(e.request || '').replace(/\s+/g, ' ').trim();
+    if (!t) t = String(e.summary || '').replace(/[#*`>\-]/g, '').replace(/\s+/g, ' ').trim();
+    return (t || '国师的改动').slice(0, 60);
+  }
+  function _entryNames(e, max) {
+    var C = __aaU._COLL_CN || {};
+    return (e.names || []).slice(0, max || 6).map(function (n) {
+      var opTx = n.op === 'add' ? '新增' : (n.op === 'rm' ? '删除' : '修改');
+      return '<span class="lg-chip ' + n.op + '">' + opTx + ' ' + esc((C[n.top] || n.top) + (n.name ? '「' + n.name + '」' : '')) + '</span>';
+    }).join('') + ((e.names || []).length > (max || 6) ? '<span class="lg-chip">…还有 ' + ((e.names || []).length - (max || 6)) + ' 项</span>' : '');
+  }
+  function _paintAppliedTag(card, e) {
+    var tag = card && card.querySelector('.reply-tag'); if (!tag || !e) return;
+    card.setAttribute('data-ledger', e.id);
+    if (e.undone) {
+      card.classList.add('undone');
+      tag.innerHTML = '<span>这次应用已撤销（' + esc(_fmtWhen(e.undoneAt || Date.now())) + '）</span><button type="button" class="rt-act" data-lg-redo="' + esc(e.id) + '">恢复</button>';
+    } else {
+      card.classList.remove('undone');
+      tag.innerHTML = _icon('check', 13) + '<span>已应用 ' + (e.total || (e.diffs || []).length) + ' 处</span><button type="button" class="rt-act" data-lg-undo="' + esc(e.id) + '" title="只回退国师改过的这几处；你别处的手工编辑不动">撤销</button>';
+    }
+  }
+  ui._onApplied = function (card, tag, info) {
+    var L = Ledger(); if (!L || !info || !(info.diffs || []).length) return;
+    var sm = L.summarize(info.diffs, info.after, info.before);
+    var entry = { fileKey: _fileKey(), fileLabel: _fileLabel(), sessId: ui._sessId || null,
+      request: String(info.request || '').slice(0, 300), summary: String(info.summary || '').slice(0, 600),
+      diffs: L.strip(info.diffs), counts: sm.counts, names: sm.names, total: sm.total };
+    L.record(entry).then(function (e) { _paintAppliedTag(card, e); _refreshLedgerSheet(); }, function () {});
+  };
+  function _refreshLedgerSheet() {
+    var p = ui.els && ui.els.panel; if (!p || ui._sheetKind !== 'ledger') return;
+    var el = p.querySelector('.tm-aa-sheet'); if (el && !el.hidden) _renderLedger(el);
+  }
+  function _repaintLedgerTags(entries) {
+    if (!ui.els || !ui.els.log) return;
+    (entries || []).forEach(function (e) {
+      var card = ui.els.log.querySelector('.tm-aa-reply[data-ledger="' + e.id + '"]');
+      if (card) _paintAppliedTag(card, e);
+    });
+  }
+  // 确认框：连带哪几笔、哪几处冲突；按钮执行或作罢
+  function _confirmBox(host, html, okLabel, onOk, danger) {
+    if (!host) return;
+    var box = host.querySelector(':scope > .lg-confirm');
+    if (!box) { box = document.createElement('div'); box.className = 'lg-confirm'; host.appendChild(box); }
+    box.innerHTML = '<div class="lg-cf-msg">' + html + '</div><div class="lg-cf-acts"><button type="button" class="tm-aa-btn' + (danger ? ' danger' : ' primary') + '" data-cf="ok">' + esc(okLabel) + '</button><button type="button" class="tm-aa-btn ghost" data-cf="no">算了</button></div>';
+    box.onclick = function (ev) {
+      var b = ev.target.closest && ev.target.closest('[data-cf]'); if (!b) return;
+      ev.stopPropagation();
+      if (b.getAttribute('data-cf') === 'ok') { box.remove(); onOk(); } else box.remove();
+    };
+    try { box.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) {}
+  }
+  function _conflictHtml(conflicts) {
+    var fp = __aaU._friendlyPath || function (x) { return x; };
+    return '<ul class="lg-cf-list">' + (conflicts || []).slice(0, 6).map(function (c) { return '<li>' + esc(fp(c.path)) + '</li>'; }).join('') + ((conflicts || []).length > 6 ? '<li>…还有 ' + (conflicts.length - 6) + ' 处</li>' : '') + '</ul>';
+  }
+  function _undoEntry(id, opts) {
+    opts = opts || {};
+    if (ui.running) { setStatus('国师还在忙，先停下再撤销'); return; }
+    if (ui.draft && (ui._lastDiffs || []).length && !ui._pendingPlan) { setStatus('眼下还有没应用的改动：先应用或放弃它，再撤销以前的'); return; }
+    var L = Ledger(); if (!L) { setStatus('改动账没载入'); return; }
+    L.list(_fileKey(), _fileLabel()).then(function (lst) {
+      var all = lst.mine.concat(lst.kin);
+      var target = all.filter(function (x) { return x.id === id; })[0];
+      if (!target) { setStatus('这笔账找不到了'); return; }
+      if (target.undone) { setStatus('这次应用已经撤销过了'); return; }
+      var pool = all.filter(function (x) { return x.fileKey === target.fileKey; });
+      var chain = L.chainFor(pool, target);
+      var n = chain.reduce(function (s, e) { return s + (e.total || (e.diffs || []).length); }, 0);
+      if (!opts.confirmed) {
+        var msg = chain.length > 1
+          ? '撤销这一次，会连带撤销它之后的 ' + (chain.length - 1) + ' 次应用（一共 ' + n + ' 处），不然会留下新旧混着的半截：<ul class="lg-cf-list">' + chain.map(function (e) { return '<li>' + esc(_fmtWhen(e.ts)) + ' · ' + esc(_entryTitle(e)) + '</li>'; }).join('') + '</ul>'
+          : '撤销这次应用的 ' + n + ' 处？只回退国师改过的地方，你别处的手工编辑不动。';
+        _confirmBox(opts.host, msg, chain.length > 1 ? '都撤销' : '撤销', function () { _undoEntry(id, Object.assign({}, opts, { confirmed: true })); });
+        return;
+      }
+      var res;
+      try { res = L.applyChain(ui.adapter.getScenario(), chain, { force: !!opts.force }); }
+      catch (e) { setStatus('没撤成：' + ((e && e.message) || e)); return; }
+      if (!res.ok) {
+        _confirmBox(opts.host, '这几处在国师改完之后又被手工改过，撤销会把它们冲回改前：' + _conflictHtml(res.conflicts), '仍要撤销（覆盖这几处）', function () { _undoEntry(id, Object.assign({}, opts, { confirmed: true, force: true })); }, true);
+        setStatus('有 ' + res.conflicts.length + ' 处后来被手工改过，等你定');
+        return;
+      }
+      try { _commitCurrent(res.scenario, _captureOwner()); }
+      catch (e2) { setStatus('没撤成：' + ((e2 && e2.message) || e2)); return; }
+      var now = Date.now();
+      Promise.all(chain.map(function (e) { return L.update(e.id, { undone: true, undoneAt: now }); })).then(function (upd) {
+        _repaintLedgerTags(upd.filter(Boolean)); _refreshLedgerSheet();
+      });
+      try { var app = global.TM_SCENARIO_EDITOR_RESET_APP; var first = chain[chain.length - 1].diffs[0]; if (first && app && typeof app.revealPath === 'function') app.revealPath(first.path); } catch (e3) {}
+      ui._exemplarsCache = null;
+      setStatus('撤销了 ' + (chain.length > 1 ? chain.length + ' 次应用、' : '') + n + ' 处' + (opts.force ? '（覆盖了后来手改的几处）' : '') + '。想要回来，在改动史里点「恢复」');
+    });
+  }
+  function _redoEntry(id, opts) {
+    opts = opts || {};
+    if (ui.running) { setStatus('国师还在忙，先停下再恢复'); return; }
+    if (ui.draft && (ui._lastDiffs || []).length && !ui._pendingPlan) { setStatus('眼下还有没应用的改动：先应用或放弃它'); return; }
+    var L = Ledger(); if (!L) return;
+    L.list(_fileKey(), _fileLabel()).then(function (lst) {
+      var target = lst.mine.concat(lst.kin).filter(function (x) { return x.id === id; })[0];
+      if (!target || !target.undone) { setStatus('这笔账不用恢复'); return; }
+      var res;
+      try { res = L.redoChain(ui.adapter.getScenario(), [target], { force: !!opts.force }); }
+      catch (e) { setStatus('没恢复成：' + ((e && e.message) || e)); return; }
+      if (!res.ok) {
+        _confirmBox(opts.host, '这几处眼下的样子跟撤销后不一样了，恢复会覆盖它们：' + _conflictHtml(res.conflicts), '仍要恢复', function () { _redoEntry(id, Object.assign({}, opts, { force: true })); }, true);
+        return;
+      }
+      try { _commitCurrent(res.scenario, _captureOwner()); }
+      catch (e2) { setStatus('没恢复成：' + ((e2 && e2.message) || e2)); return; }
+      L.update(id, { undone: false, undoneAt: null, redoneAt: Date.now() }).then(function (e) { _repaintLedgerTags([e]); _refreshLedgerSheet(); });
+      ui._exemplarsCache = null;
+      setStatus('恢复了这次应用的 ' + (target.total || (target.diffs || []).length) + ' 处');
+    });
+  }
+  // 「撤销上次应用」：有账就撤最近一笔（持久、可恢复）；没账才退回页内检查点
+  function _undoLatest() {
+    var L = Ledger();
+    if (!L) { undoLastApply(); return; }
+    L.list(_fileKey(), _fileLabel()).then(function (lst) {
+      var last = lst.mine.filter(function (e) { return !e.undone; })[0];
+      if (!last) { if (ui._checkpoints.length) undoLastApply(); else setStatus('这个剧本上还没有可撤销的国师改动'); return; }
+      _toggleSheet('ledger', true);
+      setTimeout(function () {
+        var item = ui.els.panel.querySelector('.lg-item[data-id="' + last.id + '"]');
+        if (item) { try { item.scrollIntoView({ block: 'nearest' }); } catch (e) {} _undoEntry(last.id, { host: item }); }
+      }, 60);
+    });
+  }
+  // 改动史（叠页）
+  function _renderLedger(el) {
+    var L = Ledger();
+    var parts = _sheetFill(el, '改动史', '<p class="sh-hint">国师应用到这个剧本上的每一次改动。撤销只回退国师改过的那几处，你别处的手工编辑不动；撤销较早的一次会连带它之后的几次。刷新、关页都还在。</p><div class="lg-list"><div class="lg-empty">读取中…</div></div>');
+    if (!L) { parts.body.querySelector('.lg-list').innerHTML = '<div class="lg-empty">改动账没载入。</div>'; return; }
+    L.list(_fileKey(), _fileLabel()).then(function (lst) {
+      function item(e, kin) {
+        var c = e.counts || {};
+        return '<div class="lg-item' + (e.undone ? ' undone' : '') + '" data-id="' + esc(e.id) + '">'
+          + '<div class="lg-hd"><span class="lg-t" title="' + esc(e.request || '') + '">' + esc(_entryTitle(e)) + '</span>'
+          + (e.undone ? '<span class="lg-badge undone">已撤销</span>' : '') + (kin ? '<span class="lg-badge">上次载入</span>' : '')
+          + '<span class="lg-m">' + esc(_fmtWhen(e.ts)) + ' · ' + (e.total || (e.diffs || []).length) + ' 处</span></div>'
+          + '<div class="lg-chips">' + ((e.names || []).length > 5 ? (c.add ? '<span class="lg-chip add">新增 ' + c.add + '</span>' : '') + (c.chg ? '<span class="lg-chip chg">修改 ' + c.chg + '</span>' : '') + (c.rm ? '<span class="lg-chip rm">删除 ' + c.rm + '</span>' : '') : '') + _entryNames(e, 5) + '</div>'
+          + '<div class="lg-acts">' + (e.undone ? '<button type="button" class="tm-aa-btn" data-lg-redo="' + esc(e.id) + '">' + _icon('retry', 13) + '恢复</button>' : '<button type="button" class="tm-aa-btn" data-lg-undo="' + esc(e.id) + '">' + _icon('undo', 13) + '撤销</button>')
+          + '<button type="button" class="tm-aa-btn ghost" data-lg-more="' + esc(e.id) + '">看改动</button></div>'
+          + '<div class="lg-detail" hidden></div></div>';
+      }
+      var html = lst.mine.length ? lst.mine.map(function (e) { return item(e, false); }).join('') : '<div class="lg-empty">这个剧本上还没有国师应用过的改动。<br>应用一次，这里就会记下来。</div>';
+      if (lst.kin.length) html += '<div class="sh-sec-h" style="margin-top:18px">同名剧本以前的记录（' + lst.kin.length + '）</div><p class="sh-hint">剧本没存进案卷库时，每次载入身份不同，按名字把旧账找回来。撤销照样会先查冲突。</p>' + lst.kin.slice(0, 30).map(function (e) { return item(e, true); }).join('');
+      var cps = listCheckpoints();
+      if (cps.length) html += '<div class="sh-sec-h" style="margin-top:18px">检查点（只在这次打开的页面里）</div>' + cps.map(function (c) { return '<div class="tm-aa-row"><div class="rw-main"><div class="rw-t">' + esc(c.label) + '</div>' + (String(c.label).indexOf(c.when) >= 0 ? '' : '<div class="rw-d">' + esc(c.when) + '</div>') + '</div><button type="button" class="tm-aa-btn" data-restore="' + c.id + '">回到这里</button></div>'; }).join('');
+      parts.body.querySelector('.lg-list').innerHTML = html;
+      parts.body.onclick = function (ev) {
+        var t = ev.target;
+        var u = t.closest && t.closest('[data-lg-undo]'); if (u) { _undoEntry(u.getAttribute('data-lg-undo'), { host: u.closest('.lg-item') }); return; }
+        var r = t.closest && t.closest('[data-lg-redo]'); if (r) { _redoEntry(r.getAttribute('data-lg-redo'), { host: r.closest('.lg-item') }); return; }
+        var cp = t.closest && t.closest('[data-restore]'); if (cp) { restoreCheckpoint(+cp.getAttribute('data-restore')); _renderLedger(el); return; }
+        var m = t.closest && t.closest('[data-lg-more]');
+        if (m) {
+          var it = m.closest('.lg-item'), det = it && it.querySelector('.lg-detail');
+          if (!det) return;
+          if (!det.hidden) { det.hidden = true; m.textContent = '看改动'; return; }
+          var e = lst.mine.concat(lst.kin).filter(function (x) { return x.id === m.getAttribute('data-lg-more'); })[0];
+          var fp = __aaU._friendlyPath || function (x) { return x; }, sv = __aaU._shortVal || function (x) { return String(x); };
+          det.innerHTML = (e && e.diffs || []).slice(0, 60).map(function (d) {
+            var k = esc(fp(d.path));
+            if (d.type === 'added') return '<div class="ch-field"><span class="cf-k">' + k + '</span><span class="cf-new">＋ ' + esc(sv(d.after, 80)) + '</span></div>';
+            if (d.type === 'removed') return '<div class="ch-field"><span class="cf-k">' + k + '</span><span class="cf-old">' + esc(sv(d.before, 60)) + '</span><span class="cf-arrow">删去</span></div>';
+            return '<div class="ch-field"><span class="cf-k">' + k + '</span><span class="cf-old">' + esc(sv(d.before, 50)) + '</span><span class="cf-arrow">→</span><span class="cf-new">' + esc(sv(d.after, 80)) + '</span></div>';
+          }).join('') + ((e && e.diffs || []).length > 60 ? '<div class="sh-hint">…还有 ' + (e.diffs.length - 60) + ' 处</div>' : '');
+          det.hidden = false; m.textContent = '收起';
+        }
+      };
+    });
+  }
+  ui._renderLedger = _renderLedger;
 
   // ═══ 叠页：设置 / 改动史 / 导入素材 / 批量扩写 / 实体捆绑 / 模板 / 快捷键 ═══
   //   盖在面板正文之上（顶栏留着），Esc 或 × 收起。工坊原先那层折叠块、弹窗与快捷键速查都收到这里。
@@ -2759,6 +2952,10 @@
         if (tx && mb._fullText) { var open = more.getAttribute('data-open') === '1'; tx.textContent = open ? mb._fullText.slice(0, _MSG_FOLD) + '…' : mb._fullText; more.setAttribute('data-open', open ? '0' : '1'); more.textContent = open ? '展开全文（' + mb._fullText.length + ' 字）' : '收起'; }
         return;
       }
+      var lgU = ev.target && ev.target.closest ? ev.target.closest('.rt-act[data-lg-undo]') : null;
+      if (lgU) { _undoEntry(lgU.getAttribute('data-lg-undo'), { host: lgU.closest('.tm-aa-reply') }); return; }
+      var lgR = ev.target && ev.target.closest ? ev.target.closest('.rt-act[data-lg-redo]') : null;
+      if (lgR) { _redoEntry(lgR.getAttribute('data-lg-redo'), { host: lgR.closest('.tm-aa-reply') }); return; }
       var btn = ev.target && ev.target.closest ? ev.target.closest('.mu-act') : null;
       if (!btn) return;
       var bubble = btn.closest('.tm-aa-msg-user'); if (!bubble) return;
@@ -3115,6 +3312,7 @@
     resetResults(true);   // 聊天化：保留对话流（结果作为新卡 append，不清历史）
     _setDraftFromBase(cur, res.scenario); ui.conversation = null; ui._pendingPlan = false; ui._pendingClarify = false;
     var renamedN = res.renamed ? Object.keys(res.renamed).length : 0;
+    ui._lastRequest = '导入实体捆绑包';
     var sm = '已合并捆绑包：势力 +' + res.added.factions + ' · 人物 +' + res.added.characters + ' · 关系 +' + res.added.relations + (renamedN ? ' · 重名已改 ' + renamedN + ' 个' : '');
     _logRun('导入捆绑', '捆绑包导入', { summary: sm, tokensUsed: 0, iterations: 0, stopReason: 'imported' });   // 方向M · 记历史 + 让 markLastApplied 生效
     _beginReplyCard('导入捆绑');
@@ -3306,6 +3504,7 @@
     resetResults(true);   // 聊天化：保留对话流（结果作为新卡 append，不清历史）
     ui.els.req.value = ''; _autoGrowReq();
     _appendUserMsg(request, { kind: 'orchestrate', input: request });   // UI·B 会话流 + UI·Y 重试派发
+    ui._lastRequest = request;
     _prepareRunDraft('runOrchestrated');
     ui.conversation = null; ui._pendingPlan = false;
     setRunning(true);
@@ -3401,6 +3600,7 @@
     resetResults(true);   // 聊天化：保留对话流（结果作为新卡 append，不清历史）
     ui.els.req.value = ''; _autoGrowReq();
     _appendUserMsg(request, { kind: 'critics', input: request });
+    ui._lastRequest = request;
     _prepareRunDraft('runWithCritics');
     ui.conversation = null; ui._pendingPlan = false;
     setRunning(true);
@@ -3540,6 +3740,7 @@
     var _attN = (_imgs ? _imgs.length : 0) + _attState().files.length;
     resetResults(continuing);   // UI·B · 会话流：续接保留线程+消息流、新对话清空
     _appendUserMsg(request + (_attN ? '（附 ' + _attN + ' 件）' : ''), { input: request });    // 回显用户消息气泡
+    if (!/^继续完成上面尚未完成的改动/.test(request)) ui._lastRequest = request;   // 记进改动账的标题（自动续做那句不算）
     ui.els.req.value = ''; _autoGrowReq();   // 发出去就清空输入框（运行中再打字就是插话）
     setRunning(true);
     var _autoPrefix = _autoSelection ? ('自动选择 → ' + _autoSelection.label + '（' + _autoSelection.reason + '）· ') : '';

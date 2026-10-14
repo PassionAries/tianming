@@ -3940,6 +3940,7 @@
         "_scrollRibbon",
         "_scrollTitle",
         "_tmLoadGen",
+        "_tmSerializeExportParts",
         "_updateSaveIndex",
         "_validatePreEndturnSnapshot",
         "closeSaveManager",

@@ -1,7 +1,7 @@
 # 屎山清理·第一轮（2026-10-14）
 
 同志令：「看看天命的史山代码情况，清理、优化一下」。本轮先摸底，再只动「能被门禁和 smoke 验证」的两刀；
-其余列成账，等拍板。工作区 `E:/tianming-shishan-20261014`，分支 `claude/shishan-cleanup-20261014`，基于 origin/main `bddd3c51`；10-14 夜变基到主干最新 `d41e534a`（提交号以变基后为准）。
+其余列成账，等拍板。工作区 `E:/tianming-shishan-20261014`，分支 `claude/shishan-cleanup-20261014`，基于 origin/main `bddd3c51`；10-14 夜变基到主干最新 `d41e534a`，10-15 再变基到 `ac568161`（本目录的提交号都已换成这次变基后的最终号，新旧对照见「六」）。
 
 ## 一、摸底（bddd3c51）
 
@@ -22,7 +22,7 @@
 
 ## 二、本轮做了什么
 
-### 第一刀 `dd63e1b5`（变基前 68c6ed22）：删 31 个零引用函数（445 行，15 个文件）
+### 第一刀 `1a41d8db`：删 31 个零引用函数（445 行，15 个文件）
 口径：任意缩进的 `function` 声明与函数表达式赋值，标识符在全部运行时文本 + web/scripts + scripts 里整词只出现一次。
 按原始字节切行删除，混排的 CRLF/LF 不动。清单在提交信息里。
 
@@ -31,15 +31,15 @@
 `_seedRecordFromP1ForApplyFailure`（lib-player-error-regression.js）、`_fireCommitCanon`（smoke-sc1q-sc19-upgrade.js）、`rightIssueRows`（smoke-right-panel-lag-guards.js）。
 要删它们得先改这些 smoke 的契约，属于另一刀。
 
-### 第二刀 `cf1d38a4`（变基前 b93b69ac）：删 127 个一次性垃圾文件（19.9MB）
+### 第二刀 `550dee3f`：删 127 个一次性垃圾文件（19.9MB）
 - web/ 根 4 件废 JSON/脚本/报告；web/preview/ 45 件备份与 codemod；release-hot/ 78 件旧推送脚本（只留 `.env.local.example`）。
 - 随动：package.json / release-excludes.json / verify-release-contract.js 去掉已无对象的排除项；PROJECT-STRUCTURE.md 改 release-hot 口径；
   `.hot-update-manifest.json` 删 16 条条目并对齐哈希；`source-manifest.json` 删 37 条已删路径。
 
-### 第三刀 `0cb4fd94`：本目录两份记录
+### 第三刀 `2fe0d0e0`：本目录两份记录
 README 与 final-smokes.txt。
 
-### 第四刀：变基后补齐派生清单
+### 第四刀 `b77bb369`：变基后补齐派生清单（记录随后补在 `4ddcf633`）
 主干 26ec4c81～d41e534a 那几笔改了 13 个文件的字节却没重生成派生清单，`sync-hot-baseline --check` 报 13 项 stale、
 `build-startup-phase-manifest --check` 也 stale，GitHub guards 工作流的「Cross-release contract」在 d41e534a 上因此红。
 这一刀按脚本顺序重生成：lint-global-providers 报告 → startup-script-phases.json → tm-start-runtime-manifest.json → 重打 .hot-update-manifest.json。
@@ -67,7 +67,7 @@ Electron 七组未在本机跑（改动不含界面）。
 
 ## 五、第二轮（10-15 凌晨·同志「按你的想法逐个开」）
 
-### 瘦身 `672b9097`：预览页剧本包改成 724 字节适配器
+### 瘦身 `07a8d10f`：预览页剧本包改成 724 字节适配器
 web/preview/official-scenarios-bundle.js 原是 tm-official-scenario-bundle.js 的同数据副本（92.8MB），只是全局名不同；两份都进发布包。
 现在 sync-official-scenarios.js 把它生成为适配器：先装 ../tm-official-scenario-bundle.js，再按文件名换成 tianqi7/shaosong/tang840 三个 key。
 三个读预览包的脚本改为先装主包；奇偶校验改断言「适配器含映射、不再内嵌第二份数据」。release contract 的 bytes 572,655,263 → 479,834,904。
@@ -75,18 +75,18 @@ web/preview/official-scenarios-bundle.js 原是 tm-official-scenario-bundle.js �
 seeder 主包与三个内建脚本还是一对双胞胎（发布包里再省 92.8MB 的目标），但 seeder 要的是「数组 + 文件名」、内建要的是「注册进 P.scenarios」，
 合并得改 tm-official-scenario-seeder.js 的装载方式并过 Electron 七组，留作下一轮。
 
-### 清理 `e582e821`：docs/ 移出 19 个超 1MB 的证据快照（102.9MB）
+### 清理 `fb8f2bad`：docs/ 移出 19 个超 1MB 的证据快照（102.9MB）
 docs/ 共 2167 个文件 166MB；19 个超 1MB 的 JSON 占 102.9MB，最大 65.9MB。核过没有脚本、守卫、工作流读它们。markdown 与小文件全留。
 
-### 去重 `3476a04b`：escHtml 只剩 tm-utils 一份
+### 去重 `4f7d2d68`：escHtml 只剩 tm-utils 一份
 tm-chaoyi-changchao.js 的一行版后装覆盖了全站。改成模块私有 `_ccEscHtml`（28 处调用），可单独装载的预览/测试不受影响。
 行为差异只在 0/false：以前全站 escHtml(0) 得空串，现在得「0」。白名单减一条。
 
-### 去重 `8f55bd30`：robustParseJSON 只剩 tm-utils 一份（正典=修复层版）
+### 去重 `f551b276`：robustParseJSON 只剩 tm-utils 一份（正典=修复层版）
 正式游戏一直跑的是 tm-ai-infra-json.js 的修复层版（OOM 护栏、截断补闭合、并列多值主可解取主），tm-utils 的严格版只有编辑器在用，
 而 smoke-player-text-memory-regressions 钉的恰是编辑器那份——测试盯着游戏不用的函数。现在修复层版并回 tm-utils（游戏与编辑器共用），
 infra 文件删定义。_dbg 探测改 window._dbg，TM.platform 入 editor.html 跨入口悬空基线（与 TM.SimTime 同类）。三个 smoke 随动。白名单再减一条。
-补漏（10-15，全量 smoke 抓到）：smoke-building-appraisal-compat 一条 FAIL。它和另外 13 个 harness 整装 tm-ai-infra-json.js、却只按名抽 tm-utils.js 的几个函数，
+补漏 `7d90fb85`（10-15，全量 smoke 抓到）：smoke-building-appraisal-compat 一条 FAIL。它和另外 13 个 harness 整装 tm-ai-infra-json.js、却只按名抽 tm-utils.js 的几个函数，
 以前靠 infra 文件顺带定义的 robustParseJSON 就没了；唯一调用点裹在 try/catch 里，ReferenceError 被当「解析失败」吞掉，只有走兜底解析路径的断言才露馅
 （探针显示 smoke-secondary-task-retries 也静默走到过一次、仍 17/17 通过——假绿）。改共享装载器 lib-turn-reliability.js（12 个用户）与 3 个单独 smoke，
 按名抽 robustParseJSON 进上下文；23 条受影响 smoke 用探针（钩 vm.runInContext 查 typeof）核过上下文齐全、全过。
@@ -94,7 +94,7 @@ infra 文件删定义。_dbg 探测改 window._dbg，TM.platform 入 editor.html
 ### 没动：`_getDaysPerTurn`
 retention guard 明钉「兼容性重定义」，三个 smoke 单独装载 tm-edict-lifecycle.js；15 行，值不回票价，留着。
 
-### 评估：index.html 479 个同步脚本不是启动慢的主因
+### 评估 `4fe88d81`：index.html 479 个同步脚本不是启动慢的主因
 新工具 `web/scripts/perf-startup-script-cost.js`（node vm + headless 桩，装载环境同 smoke-full-turn-flow）量了每个脚本的编译+顶层执行耗时，
 结果在本目录 `startup-script-cost.md`：479 个脚本 20.2MB 合计约 1.5 秒（5 轮：执行取最小、编译取首轮冷值；单轮噪声能差 10 倍，机器当时 CPU 82%），world 分期 318 个占 69%，
 最重的单个脚本 generated/tm-ai-change-applier.bundle.js 也只 23ms（几乎全是编译），前 30 名合计 319ms、占 21%。
@@ -107,3 +107,25 @@ retention guard 明钉「兼容性重定义」，三个 smoke 单独装载 tm-ed
 - `E:/tianming-main-port-20261014` 同时有别的会话在改，开工前 `git status` 干净不代表开工后还干净——动刀一律另开工作区。
 - 搬顶层函数的宿主文件后，要查「谁整装了旧宿主却没装新宿主」：vm 型 smoke 常按文件名整装一族、按名抽另一族，
   `grep -l 旧宿主文件名 web/scripts scripts` 逐个看上下文。调用点裹在 try/catch 里时 ReferenceError 不会让 smoke 红，得用探针核，别信「跑过了就是对的」。
+
+## 六、提交号对照（10-15 变基到 ac568161 之后）
+
+分支在 10-14 夜变基到 d41e534a、10-15 再变基到 ac568161，每次变基提交号都会换；本目录正文一律用最终号，旧号只在这里留档（远端分支已强推，旧号不在主干历史里）。
+
+| 最终号（ac568161 底） | d41e534a 底 | bddd3c51 底 | 内容 |
+| --- | --- | --- | --- |
+| 1a41d8db | dd63e1b5 | 68c6ed22 | 删 31 个零引用函数 |
+| 550dee3f | cf1d38a4 | b93b69ac | 删 127 个一次性垃圾文件 |
+| 2fe0d0e0 | 0cb4fd94 | — | 第一轮记录 |
+| b77bb369 | 3fe8b545 | — | 变基后补齐派生清单（主干漏更 13 项） |
+| 4ddcf633 | 1416152d | — | 记录补充 |
+| 07a8d10f | 672b9097 | — | 预览页剧本包改适配器 |
+| fb8f2bad | e582e821 | — | docs/ 移出 19 个大快照 |
+| 4f7d2d68 | 3476a04b | — | escHtml 只留一份 |
+| f551b276 | 8f55bd30 | — | robustParseJSON 只留一份 |
+| 4fe88d81 | 25f766ac | — | 启动脚本成本实测 |
+| 7d90fb85 | b7509202 | — | 补漏：14 个 harness 补抽 robustParseJSON |
+| 2700552f | 756d345d | — | 第二轮记录 |
+| 7ae3f136 | — | — | 变基到 ac568161 后重生成派生清单（主干热更基线 19 项 stale 一并治好） |
+
+final-smokes.txt 里各段标注的「分支 @ xxx」是每次跑 smoke 时的实际分支头，按这张表换算。

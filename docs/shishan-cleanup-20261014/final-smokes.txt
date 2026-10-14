@@ -1,4 +1,5 @@
 全量 smoke 记录 · 分支 claude/shishan-cleanup-20261014 @ b93b69ac · 2026-10-14
+（各段「分支 @ xxx」是当时跑 smoke 的实际分支头；分支后来两次变基换了号，最终号对照见 README「六」。）
 命令：cd web && node scripts/ci-smokes.js --jobs 2（本机 Node v24.14.0，node_modules 为 junction → E:/tianming-edict-efficacy-20260924/node_modules）
 
 [run-smokes] 完成：1154 PASS · 3 FAIL · 0 SKIP · 2 WAIVED / 1159 executed · 0 suspect · 总耗时 2726s
@@ -35,3 +36,23 @@
 未跑到的 379 条（字母序 office-seat-dept-prefix 之后）本轮没有全量结论，待机器空闲补跑。
 已另核：触及族定向 run-smokes 75 条、四刀各自的随动 smoke、lint-arch-all 15/15（b7509202 后复跑）、release contract 176、
 hot-builder-gates 27、四项 --check 全绿。
+
+—— 变基到 origin/main ac568161 之后（分支 @ 7ae3f136 = 上述 12 笔 + 「变基后重生成派生清单」）——
+主干 ac568161 的 guards 工作流红在 canonical hot baseline stale 19 项（主干改了脚本字节没重打热更基线），Electron 七组、bridge、mobile 契约全绿。
+变基只撞两份派生 JSON（-X theirs），之后按序重生成：global-providers 报告 → startup-script-phases.json（内容已同主干）→ tm-start-runtime-manifest.json
+→ .hot-update-manifest.json；四项 --check、release contract 176（bytes 479,841,325）、hot-builder-gates 27、lint-arch-all 15/15 全绿。
+
+完整全量（串行）：node scratchpad/ci-smokes-serial.js = ci-smokes 同款门禁（--all --no-retry、run-id、证据校验、HEAD 与用例集不变），
+只多 --jobs 1 --timeout 240（本机被别的会话占到 CPU 90%+、提交额度到顶，120 秒并发会误伤）。
+开跑前后台守候内存：空闲与提交余量都 >5GB 连续三分钟才起跑（此前两次后台重活被 Claude Code 因内存吃紧收掉）。
+[run-smokes] 完成：1161 PASS · 4 FAIL · 0 SKIP · 2 WAIVED / 1167 executed · 0 suspect · 总耗时 2674s（主干新增 3 条 smoke，总数 1164→1167）
+四个 FAIL 逐个复核：
+1. smoke-tang840-opening-ledgers.js —— vm 内 60 秒墙钟超时（变基前 383 条串行里 71s 过）。单跑：分支 7ae3f136 PASS（68s）、主干 ac568161 基线工作树 PASS（144s，同负载）。负载，不是回归。
+2. smoke-full-turn-flow.js —— doActualStart 那段 vm 10 秒墙钟，同第一轮；99% CPU 下单跑仍超时。守候 240 分钟 CPU 从没连续 3 分钟低于 50%（别的会话一直在跑），
+   改同负载 A/B：07:00 前后 CPU 70%+ 时，分支 7ae3f136 单跑 PASS（159s），主干 ac568161 基线工作树单跑 PASS（160s）。负载，不是回归。
+3. smoke-perf-save-preparation.js —— 五个子用例共用 290 秒预算，90%+ 负载下四个就耗完、第五个（failure checks）没轮到；第一轮同机空闲 169s 过。
+   全量里前四个子用例各 3/3 PASS（12 条断言）；第五个单独跑（--case 4，不占共用预算）PASS（49s）：13 条断言在分支上全部执行通过，只是本机负载下塞不进一个 290 秒窗口。
+   整条重跑与主干基线的同负载计时对照两次都被 Claude Code 以「内存吃紧」收掉（每个子用例要装一整份官方剧本），没拿到计时数；本轮改动不碰存档准备路径（见 README）。
+4. smoke-production-dependencies.js —— junction node_modules 的 ENOBUFS，同第一轮；CI 干净 npm ci 绿。
+
+结论：本分支相对主干 ac568161 无 smoke 回归，四个红全是本机负载或 junction 环境。门禁在 7ae3f136 全绿（lint-arch-all 15/15、release contract 176、hot-baseline --check、hot-builder-gates 27、startup-phase 与 native-preparation --check）；之后的记录提交只改 docs/。

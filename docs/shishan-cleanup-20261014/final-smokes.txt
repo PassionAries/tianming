@@ -1,0 +1,16 @@
+全量 smoke 记录 · 分支 claude/shishan-cleanup-20261014 @ b93b69ac · 2026-10-14
+命令：cd web && node scripts/ci-smokes.js --jobs 2（本机 Node v24.14.0，node_modules 为 junction → E:/tianming-edict-efficacy-20260924/node_modules）
+
+[run-smokes] 完成：1154 PASS · 3 FAIL · 0 SKIP · 2 WAIVED / 1159 executed · 0 suspect · 总耗时 2726s
+
+三个 FAIL 逐个复核（都不是本轮改动造成）：
+1. smoke-npc-composite-official.js —— 并行跑 121s 超时。单跑 --jobs 1：PASS（90.7s）。
+2. smoke-full-turn-flow.js —— doActualStart 那段 vm 10 秒限时超时（vm 的 timeout 按墙钟算，本机当时有别的会话在跑 node/codex）。
+   在未改动的 bddd3c51 基线工作树（E:/tianming-tmp/base-bddd3c51，同 junction、同剧本包）单跑：同一位置同样超时。
+   机器空下来后在本分支再单跑：PASS（整个用例 210s）。
+3. smoke-production-dependencies.js —— 用例跑 `npm ls --omit=dev --all --json`，默认 maxBuffer 1MB；
+   本机 node_modules 是 junction，几百个 dev 依赖被 npm 报成 extraneous，stderr 撑爆 → spawnSync ENOBUFS。
+   bddd3c51 基线同样 ENOBUFS。GitHub CI 用干净 npm ci 不会有这问题（bddd3c51 的 guards 工作流 10-09 绿）。
+
+结论：本分支相对 bddd3c51 无 smoke 回归。两个超时用例在本机属负载敏感，production-dependencies 属 junction 环境问题。
+最慢 Top 3：smoke-perf-save-preparation 169s · smoke-npc-composite-official 121s · smoke-circuit-governor-effects-tang 110s。

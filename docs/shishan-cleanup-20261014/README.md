@@ -86,6 +86,10 @@ tm-chaoyi-changchao.js 的一行版后装覆盖了全站。改成模块私有 `_
 正式游戏一直跑的是 tm-ai-infra-json.js 的修复层版（OOM 护栏、截断补闭合、并列多值主可解取主），tm-utils 的严格版只有编辑器在用，
 而 smoke-player-text-memory-regressions 钉的恰是编辑器那份——测试盯着游戏不用的函数。现在修复层版并回 tm-utils（游戏与编辑器共用），
 infra 文件删定义。_dbg 探测改 window._dbg，TM.platform 入 editor.html 跨入口悬空基线（与 TM.SimTime 同类）。三个 smoke 随动。白名单再减一条。
+补漏（10-15，全量 smoke 抓到）：smoke-building-appraisal-compat 一条 FAIL。它和另外 13 个 harness 整装 tm-ai-infra-json.js、却只按名抽 tm-utils.js 的几个函数，
+以前靠 infra 文件顺带定义的 robustParseJSON 就没了；唯一调用点裹在 try/catch 里，ReferenceError 被当「解析失败」吞掉，只有走兜底解析路径的断言才露馅
+（探针显示 smoke-secondary-task-retries 也静默走到过一次、仍 17/17 通过——假绿）。改共享装载器 lib-turn-reliability.js（12 个用户）与 3 个单独 smoke，
+按名抽 robustParseJSON 进上下文；23 条受影响 smoke 用探针（钩 vm.runInContext 查 typeof）核过上下文齐全、全过。
 
 ### 没动：`_getDaysPerTurn`
 retention guard 明钉「兼容性重定义」，三个 smoke 单独装载 tm-edict-lifecycle.js；15 行，值不回票价，留着。
@@ -101,3 +105,5 @@ retention guard 明钉「兼容性重定义」，三个 smoke 单独装载 tm-ed
 - 扫描死码时，去注释的正则遇到字符串里的 `image/*` 会把半个文件吞掉，产出 70 个假死函数——**最终以「全文整词计数 ≤1」为准，不去注释**。
 - 「被 smoke 引用」要用 `grep -rlw` 全目录核，别信自己脚本里的一次性判断（第一次漏了 14 个，smoke 抓回来 1 个）。
 - `E:/tianming-main-port-20261014` 同时有别的会话在改，开工前 `git status` 干净不代表开工后还干净——动刀一律另开工作区。
+- 搬顶层函数的宿主文件后，要查「谁整装了旧宿主却没装新宿主」：vm 型 smoke 常按文件名整装一族、按名抽另一族，
+  `grep -l 旧宿主文件名 web/scripts scripts` 逐个看上下文。调用点裹在 try/catch 里时 ReferenceError 不会让 smoke 红，得用探针核，别信「跑过了就是对的」。

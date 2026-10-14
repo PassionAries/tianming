@@ -1822,6 +1822,128 @@
   }
   ui._renderLedger = _renderLedger;
 
+  // ═══ 编辑重发（S3）：点自己说过的话，改了重发——对话回到那句话之前；那之后应用过的改动可一并撤销 ═══
+  //   每句话发出时记下：当时的对话（数组浅拷）、当时没应用的草稿相对开工剧本的差异（只存差异，不存整份剧本）、发出时刻。
+  function _stampUserMsg(b, kind) {
+    if (!b) return;
+    b._kind = kind || 'generate';
+    b._ts = Date.now();
+    b._convBefore = (ui.conversation && ui.conversation.length) ? ui.conversation.slice() : null;
+    b._draftDiff = null;
+    try { if (ui.draft && ui.baseScenario && (ui._lastDiffs || []).length) b._draftDiff = AA.computeDiff(ui.baseScenario, ui.draft); } catch (e) { b._draftDiff = null; }
+  }
+  function _laterApplies(b) {
+    var L = Ledger();
+    if (!L || !b || !b._ts) return Promise.resolve([]);
+    return L.list(_fileKey(), _fileLabel()).then(function (lst) {
+      return lst.mine.filter(function (e) { return !e.undone && e.ts >= b._ts; }).sort(function (a, c) { return c.ts - a.ts; });
+    }, function () { return []; });
+  }
+  function _cancelEdit() {
+    var ed = ui._editing; if (!ed) return;
+    ui._editing = null;
+    if (ed.box && ed.box.parentNode) ed.box.parentNode.removeChild(ed.box);
+    if (ed.bubble) ed.bubble.style.display = '';
+    Array.prototype.forEach.call(ui.els.log.querySelectorAll('.doomed'), function (n) { n.classList.remove('doomed'); });
+  }
+  ui._editPrompt = function (bubble, text, kind) {
+    if (ui.running) { setStatus('国师还在忙，先停下再改'); return; }
+    _cancelEdit();
+    var box = document.createElement('div');
+    box.className = 'tm-aa-msg-edit';
+    box.innerHTML = '<textarea aria-label="改这句话"></textarea><div class="me-note"></div><div class="me-bar"><span class="tm-aa-flex"></span><button type="button" class="tm-aa-btn ghost" data-me="cancel">取消（Esc）</button><button type="button" class="tm-aa-btn primary" data-me="send">' + _icon('send', 14) + '重发（Enter）</button></div>';
+    bubble.parentNode.insertBefore(box, bubble.nextSibling);
+    bubble.style.display = 'none';
+    var ta = box.querySelector('textarea'); ta.value = text;
+    // 这句之后的都会被替掉：先变淡
+    var after = [], n = box.nextSibling;
+    while (n) { if (n.nodeType === 1 && !n.classList.contains('tm-aa-live')) { n.classList.add('doomed'); after.push(n); } n = n.nextSibling; }
+    ui._editing = { box: box, bubble: bubble, kind: kind, undoAfter: true, later: [] };
+    var note = box.querySelector('.me-note');
+    var bits = [];
+    if (after.length) bits.push('这句之后的对话会被替掉。');
+    if (ui.draft && (ui._lastDiffs || []).length) bits.push('眼下没应用的改动会退回到这句话发出时的样子。');
+    note.innerHTML = esc(bits.join('') || '改好直接重发。');
+    _laterApplies(bubble).then(function (later) {
+      if (!ui._editing || ui._editing.box !== box) return;
+      ui._editing.later = later;
+      if (!later.length) return;
+      var nAll = later.reduce(function (s, e) { return s + (e.total || (e.diffs || []).length); }, 0);
+      var opt = document.createElement('label');
+      opt.className = 'me-opt';
+      opt.innerHTML = '<button type="button" class="tm-aa-switch on" aria-pressed="true"></button><span>同时撤销这句之后应用的 ' + nAll + ' 处改动（' + later.length + ' 次）</span>';
+      note.parentNode.insertBefore(opt, note.nextSibling);
+      opt.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        var sw = opt.querySelector('.tm-aa-switch'), on = !sw.classList.contains('on');
+        sw.classList.toggle('on', on); sw.setAttribute('aria-pressed', on ? 'true' : 'false');
+        ui._editing.undoAfter = on;
+      });
+    });
+    function send() {
+      var t = ta.value.trim();
+      if (!t) { ta.focus(); return; }
+      _resendFrom(bubble, t, kind);
+    }
+    box.addEventListener('click', function (ev) {
+      var b = ev.target.closest && ev.target.closest('[data-me]'); if (!b) return;
+      if (b.getAttribute('data-me') === 'cancel') _cancelEdit(); else send();
+    });
+    ta.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); _cancelEdit(); return; }
+      if ((ev.key === 'Enter' || ev.keyCode === 13) && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); send(); }
+    });
+    ta.style.height = 'auto'; ta.style.height = Math.min(240, Math.max(64, ta.scrollHeight)) + 'px';
+    try { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); box.scrollIntoView({ block: 'nearest' }); } catch (e) {}
+    setStatus('改好按 Enter 重发，Esc 作罢');
+  };
+  function _resendFrom(bubble, text, kind) {
+    var ed = ui._editing; if (!ed || ed.bubble !== bubble) return;
+    if (ui.running) { setStatus('国师还在忙，先停下再重发'); return; }
+    var later = (ed.undoAfter && ed.later) ? ed.later : [];
+    var step = Promise.resolve(true);
+    if (later.length) {
+      var L = Ledger();
+      step = Promise.resolve().then(function () {
+        var chain = L.chainFor(later.concat([]), later[later.length - 1]);   // 最早那一笔连带其后
+        var res = L.applyChain(ui.adapter.getScenario(), chain);
+        if (!res.ok) { setStatus('这句之后应用的改动里有 ' + res.conflicts.length + ' 处又被手工改过，没自动撤销。可以关掉「同时撤销」再重发，或去改动史里处理'); return false; }
+        _commitCurrent(res.scenario, _captureOwner());
+        var now = Date.now();
+        return Promise.all(chain.map(function (e) { return L.update(e.id, { undone: true, undoneAt: now }); })).then(function () { return true; });
+      });
+    }
+    step.then(function (okGo) {
+      if (!okGo) return;
+      // 草稿回到这句话发出时：当时没应用的差异落回当前剧本（冲突就作罢、从当前剧本起新草稿）
+      var dd = bubble._draftDiff;
+      _clearDraft();
+      if (dd && dd.length) {
+        try {
+          var live = ui.adapter.getScenario();
+          var restored = AA.applySelectedDiffs(live, null, dd);
+          _setDraftFromBase(live, AA.makeDraft(restored));
+        } catch (e) { _clearDraft(); }
+      }
+      ui.conversation = bubble._convBefore ? bubble._convBefore.slice() : null;
+      ui._conversationOwner = ui.conversation ? _captureOwner() : null;
+      ui._pendingPlan = false; ui._pendingClarify = false; ui._autoCont = 0; ui._restoredTodos = null;
+      // 流里删掉这句及之后
+      _cancelEdit();
+      var n = bubble;
+      while (n) { var next = n.nextSibling; if (n.nodeType === 1 && !n.classList.contains('tm-aa-live')) n.parentNode.removeChild(n); n = next; }
+      ui._reply = null; ui._thinkEl = null;
+      _syncEmpty(); _refreshPending();
+      ui.els.req.value = text; _autoGrowReq();
+      if (kind === 'review') runReview();
+      else if (kind === 'qa') runQaUI();
+      else if (kind === 'explain') runExplainUI();
+      else if (kind === 'orchestrate') runOrchestratedUI();
+      else if (kind === 'critics') runWithCriticsUI();
+      else onGenerate();
+    }, function (e) { setStatus('没重发成：' + ((e && e.message) || e)); });
+  }
+
   // ═══ 叠页：设置 / 改动史 / 导入素材 / 批量扩写 / 实体捆绑 / 模板 / 快捷键 ═══
   //   盖在面板正文之上（顶栏留着），Esc 或 × 收起。工坊原先那层折叠块、弹窗与快捷键速查都收到这里。
   function _sheetEl() {
@@ -2243,7 +2365,7 @@
     var i = 0;
     while (i < conv.length) {
       var turn = conv[i];
-      if (turn && turn.role === 'user') { var t = _rawReq(turn.text); if (t) _appendUserMsg(t, { input: t }); i++; continue; }
+      if (turn && turn.role === 'user') { var t = _rawReq(turn.text); if (t) { var ub = _appendUserMsg(t, { input: t }); if (ub) { ub._kind = 'generate'; ub._convBefore = i ? conv.slice(0, i) : null; } } i++; continue; }
       var lastTxt = '', tools = 0;
       while (i < conv.length && conv[i] && conv[i].role !== 'user') {
         var a = conv[i];
@@ -3245,7 +3367,7 @@
     var focus = (ui.els.req.value || '').trim();
     if (!_guardPendingDraft('审阅')) { ui.els.req.value = focus; return; }
     ui.els.req.value = ''; _autoGrowReq();
-    _appendUserMsg(focus || '审阅整个剧本', { kind: 'review', input: focus });   // UI·B 会话流 + UI·Y 重试派发
+    _stampUserMsg(_appendUserMsg(focus || '审阅整个剧本', { kind: 'review', input: focus }), 'review');   // 会话流 + 重试/改了重发派发
     _prepareRunDraft('runAuthoringLoop');   // 重试复用原草稿/恢复点，正常审阅另起只读快照。
     ui.conversation = null; ui._pendingPlan = false;
     setRunning(true);
@@ -3355,7 +3477,7 @@
     var _attTxt = _attachPrefix(), _textAttachments = _takeTextAttachments();
     resetResults(true);   // 聊天化：保留对话流（结果作为新卡 append，不清历史）
     ui.els.req.value = ''; _autoGrowReq();
-    _appendUserMsg(question, { kind: 'qa', input: question });   // UI·B 会话流 + UI·Y 重试派发
+    _stampUserMsg(_appendUserMsg(question, { kind: 'qa', input: question }), 'qa');   // 会话流 + 重试/改了重发派发
     _prepareRunDraft('runAuthoringLoop');   // 只读快照或同案卷恢复点
     ui.conversation = null; ui._pendingPlan = false; ui._pendingClarify = false;
     setRunning(true);
@@ -3400,7 +3522,7 @@
     if (!_guardPendingDraft('讲解')) return;
     resetResults(true);   // 聊天化：保留对话流（结果作为新卡 append，不清历史）
     ui.els.req.value = ''; _autoGrowReq();
-    _appendUserMsg(focus || '讲解剧本', { kind: 'explain', input: focus });   // UI·B 会话流 + UI·Y 重试派发
+    _stampUserMsg(_appendUserMsg(focus || '讲解剧本', { kind: 'explain', input: focus }), 'explain');   // 会话流 + 重试/改了重发派发
     _prepareRunDraft('runAuthoringLoop');   // 只读快照或同案卷恢复点
     ui.conversation = null; ui._pendingPlan = false; ui._pendingClarify = false;
     setRunning(true);
@@ -3503,7 +3625,7 @@
     if (!_guardPendingDraft('分解编排')) return;
     resetResults(true);   // 聊天化：保留对话流（结果作为新卡 append，不清历史）
     ui.els.req.value = ''; _autoGrowReq();
-    _appendUserMsg(request, { kind: 'orchestrate', input: request });   // UI·B 会话流 + UI·Y 重试派发
+    _stampUserMsg(_appendUserMsg(request, { kind: 'orchestrate', input: request }), 'orchestrate');   // 会话流 + 重试/改了重发派发
     ui._lastRequest = request;
     _prepareRunDraft('runOrchestrated');
     ui.conversation = null; ui._pendingPlan = false;
@@ -3599,7 +3721,7 @@
     if (!_guardPendingDraft('三堂会审')) return;
     resetResults(true);   // 聊天化：保留对话流（结果作为新卡 append，不清历史）
     ui.els.req.value = ''; _autoGrowReq();
-    _appendUserMsg(request, { kind: 'critics', input: request });
+    _stampUserMsg(_appendUserMsg(request, { kind: 'critics', input: request }), 'critics');
     ui._lastRequest = request;
     _prepareRunDraft('runWithCritics');
     ui.conversation = null; ui._pendingPlan = false;
@@ -3739,7 +3861,9 @@
     var _textAttachments = _takeTextAttachments(); // 大文件正文由 readAttachment 分段读取
     var _attN = (_imgs ? _imgs.length : 0) + _attState().files.length;
     resetResults(continuing);   // UI·B · 会话流：续接保留线程+消息流、新对话清空
-    _appendUserMsg(request + (_attN ? '（附 ' + _attN + ' 件）' : ''), { input: request });    // 回显用户消息气泡
+    var _ub = _appendUserMsg(request + (_attN ? '（附 ' + _attN + ' 件）' : ''), { input: request });    // 回显用户消息气泡
+    _stampUserMsg(_ub, 'generate');
+    if (_ub && !continuing) { _ub._convBefore = null; _ub._draftDiff = null; }   // 这句开的是新话头
     if (!/^继续完成上面尚未完成的改动/.test(request)) ui._lastRequest = request;   // 记进改动账的标题（自动续做那句不算）
     ui.els.req.value = ''; _autoGrowReq();   // 发出去就清空输入框（运行中再打字就是插话）
     setRunning(true);

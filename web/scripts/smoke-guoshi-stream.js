@@ -128,6 +128,16 @@ console.log('smoke-guoshi-stream');
     const r = await f.call(cfgOA, { stream: true });
     assert.equal(bodies.length, 2); assert.equal(r.streamOff, true); assert.equal(r.text, '整段');
   });
+  await test('正文传坏（不成 JSON）：仍只重取一次，不因流式再多花一次', async () => {
+    let n = 0; const bodies = [];
+    const f = fixture(async (url, o) => { n++; bodies.push(JSON.parse(o.body)); return response(frame({ choices: [{ delta: { content: '半' } }] }) + 'data: {invalid PRIVATE-RESPONSE}\n\ndata: [DONE]\n\n'); });
+    await assert.rejects(f.call(cfgOA, { stream: true, onDelta: collect() }), e => { assert.doesNotMatch(String(e.message), /PRIVATE-RESPONSE/); return true; });
+    assert.equal(n, 2, '原请求 + 一次重取'); assert.equal(bodies[1].stream, true, '重取时不改传输方式');
+  });
+  await test('界面：流式回复被传坏时，错误卡给一键关掉实时显示', async () => {
+    assert.match(ui, /if \(_streamOn\(\) && \(\/\^authoring-response-\(invalid-json\|incomplete-stream\|invalid-event\)\$\/\.test\(ecode\)/);
+    assert.match(ui, /ec-stream-off'\)\.addEventListener\('click', function \(\) \{ _setStreamPref\(false\);/);
+  });
   await test('其它 400 照旧走文本兜底（不误判成流式问题）', async () => {
     let n = 0;
     const f = fixture(async () => ++n === 1 ? new Response('tools unsupported', { status: 400 }) : response(frame({ choices: [{ delta: { content: JSON.stringify({ tool_calls: [{ name: 'finish', input: { summary: '文本回退完成' } }] }) }, finish_reason: 'stop' }] }) + 'data: [DONE]\n\n'));
@@ -149,9 +159,9 @@ console.log('smoke-guoshi-stream');
     assert.match(core, /var quiet = review \? \{ stream: false, onDelta: undefined \} : \{\};/);
     assert.match(core, /baseClean\(Object\.assign\(\{\}, extra \|\| \{\}, quiet, \{ resumeState/);
   });
-  await test('界面：抠半截参数里的字符串（转义还原，半个转义先不显示）', async () => {
-    const src = ui.match(/function _partialJsonStr\(src, key\) \{[\s\S]*?\n  \}\n/)[0];
-    const fn = new Function(src + '; return _partialJsonStr;')();
+  await test('抠半截参数里的字符串（转义还原，半个转义先不显示；核心一份，两个国师面板共用）', async () => {
+    const fn = require(path.join(web, 'editor-authoring-agent.js')).partialJsonString;
+    assert.match(ui, /function _partialJsonStr\(src, key\) \{ return AA\.partialJsonString\(src, key\); \}/);
     assert.deepEqual(fn('{"status":"completed","summary":"改了三处：\\n- **袁', 'summary'), { text: '改了三处：\n- **袁', done: false });
     assert.deepEqual(fn('{"summary":"他说\\"好\\"。"}', 'summary'), { text: '他说"好"。', done: true });
     assert.deepEqual(fn('{"answer":"\\u8881\\u5d07', 'answer'), { text: '袁崇', done: false });
@@ -160,13 +170,19 @@ console.log('smoke-guoshi-stream');
     assert.equal(fn('{"path":"x"', 'summary'), null);
   });
   await test('界面接线：统一入口开流式、偏好可关、线路不认记下、正式卡不重放打字机', async () => {
-    assert.match(ui, /if \(options\.stream == null && _streamOn\(\)\) \{ options\.stream = true; options\.onDelta = _onDelta; \}/);
-    assert.match(ui, /\['onStep', 'onText', 'onSubtask', 'onCritique', 'onDelta'\]/);
+    assert.match(ui, /if \(options\.stream == null && _streamOn\(\)\) \{/);
+    assert.match(ui, /options\.stream = true; options\.onDelta = function \(ev\) \{ if \(current\(\)\) _onDelta\(ev\); \};/, '只管显示：案卷换了就不画');
+    assert.match(ui, /\['onStep', 'onText', 'onSubtask', 'onCritique'\]\.forEach/, '实时显示不进「过期就中断」那组回调（中断时机留给步骤回调）');
+    assert.match(ui, /function _showThinking\(\) \{ return _prefOn\('tm_aa_show_thinking', false\); \}/, '思考原文默认不上屏');
+    assert.match(ui, /if \(s\.think\.trim\(\) && _showThinking\(\)\) \{/);
+    assert.match(ui, /_swHtml\('thinking', _showThinking\(\), '显示思考原文'/);
     assert.match(ui, /function _streamOn\(\) \{ return _prefOn\('tm_aa_stream', true\) && !_streamOffMap\(\)\[_streamLineKey\(\)\]; \}/);
     assert.match(ui, /ev\.kind === 'stream-off'\) \{ _rememberStreamOff\(\);/);
     assert.match(ui, /if \(stream && ui\._liveSaid\) \{ stream = false; ui\._liveSaid = false; \}/);
     assert.match(ui, /_swHtml\('stream', _streamOn\(\), '实时显示'/);
-    assert.match(ui, /else if \(id === 'stream'\) \{/);
+    assert.match(ui, /else if \(id === 'stream'\) _setStreamPref\(on\);/);
+    assert.match(ui, /k: 'stream', t: '实时显示'[\s\S]{0,120}_setStreamPref\(!_streamOn\(\)\)/, '命令面板也能开关');
+    assert.match(ui, /function _setStreamPref\(on\) \{[\s\S]{0,200}delete m\[_streamLineKey\(\)\]/, '重开时清掉这条线路的「不支持」记号');
     assert.match(ui, /_LIVE_ANSWER_KEY = \{ finish: 'summary', submitAnswer: 'answer'/);
     assert.match(ui, /ui\._runOutcome = null; _lvClear\(true\); ui\._liveSaid = false; \}/);
   });

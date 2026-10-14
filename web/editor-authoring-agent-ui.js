@@ -108,8 +108,11 @@
       options.resumeState = recovery.state;
     }
     function current() { return ui._activeUiRun === run && draft === ui.draft && _ownerCurrent(owner); }
-    if (options.stream == null && _streamOn()) { options.stream = true; options.onDelta = _onDelta; }   // S4 · 实时显示（设置·偏好可关）
-    ['onStep', 'onText', 'onSubtask', 'onCritique', 'onDelta'].forEach(function(key) {
+    if (options.stream == null && _streamOn()) {   // S4 · 实时显示（设置·偏好可关）
+      // 只管显示：案卷换了就不画，但不像下面那些回调去中断国师——中断时机留给真正的步骤回调
+      options.stream = true; options.onDelta = function (ev) { if (current()) _onDelta(ev); };
+    }
+    ['onStep', 'onText', 'onSubtask', 'onCritique'].forEach(function(key) {
       var callback = options[key];
       if (typeof callback !== 'function') return;
       options[key] = function() {
@@ -187,7 +190,7 @@
   function _renderIncomplete(res, kind, request) {
     _beginReplyCard(kind);
     var status = res.completion && res.completion.status || 'blocked';
-    var label = status === 'cancelled' ? '停下了，没做完' : (status === 'partial' ? '只做完了一部分' : '没做完');
+    var label = status === 'cancelled' ? '停下了，任务未完成' : (status === 'partial' ? '只完成了一部分' : '任务未完成');
     var remaining = (res.completion && res.completion.unresolved || []).map(function(f) { return f.tool + '：' + (f.targets || []).join('、'); });
     remaining = remaining.concat(res.completion && res.completion.pendingTodos || []);
     renderSummary('**' + label + '**' + (res.summary ? '：' + res.summary : '') + (remaining.length ? '\n\n还差：\n' + remaining.slice(0, 8).map(function (r) { return '- ' + r; }).join('\n') : ''), res.notes, res.suggestedConventions, false);
@@ -199,15 +202,15 @@
     _recoveryButtons(ui.els.summary, ui._lastErr);
     var hasPending = (ui._lastDiffs || []).length > 0 || (ui._pendingSideEffects || []).length > 0;
     ui.els.actions.style.display = hasPending ? '' : 'none';
-    ui.els.apply.textContent = '只应用已有的改动（任务没做完）';
+    ui.els.apply.textContent = '只应用已有的改动（任务未完成）';
     ui.els.apply.className = 'reply-apply warn';
     ui.els.discard.textContent = '放弃本轮草稿';
-    setStatus(label + '：草稿留着没应用，可以接着做没做完的，或从当前剧本重来');
+    setStatus(label + '：草稿留着没应用，可以继续未完成的部分，或从当前剧本重来');
   }
   function _recoveryButtons(container, record) {
     if (!container) return;
     var actions = document.createElement('div'); actions.className = 'ec-acts tm-aa-recovery-actions';
-    var retry = document.createElement('button'); retry.type = 'button'; retry.className = 'ec-retry'; retry.innerHTML = _icon('retry', 13) + (ui._recovery ? '接着做没做完的' : '再试一次');
+    var retry = document.createElement('button'); retry.type = 'button'; retry.className = 'ec-retry'; retry.innerHTML = _icon('retry', 13) + (ui._recovery ? '继续未完成的部分' : '再试一次');
     retry.addEventListener('click', function() { _retryLast(record); }); actions.appendChild(retry);
     var restart = document.createElement('button'); restart.type = 'button'; restart.className = 'ec-restart'; restart.textContent = '从当前剧本重来';
     restart.addEventListener('click', function() {
@@ -1003,6 +1006,7 @@
       { k: 'perm-auto', t: '权限·放行', d: '做完且没带来新问题就直接应用', ic: 'shield', run: function () { var p = _loadPerm(); p.mode = 'auto'; _applyPerm(p); setStatus(_PERM_TIP.auto); } },
       { k: 'notify', t: '完成通知', d: '页面在后台时，跑完弹系统通知（开/关）', ic: 'bell', run: function () { _toggleNotify(); } },
       { k: 'microplan', t: '歧义先对齐', d: '需求有几种做法时先给微计划确认（开/关）', ic: 'chat', run: function () { _toggleMicroPlan(); } },
+      { k: 'stream', t: '实时显示', d: '国师边想边说，字一个个冒出来（开/关）', ic: 'pen', run: function () { _setStreamPref(!_streamOn()); } },
       { k: 'settings', t: '设置', d: '连接与模型、权限、约定、偏好', ic: 'gear', run: function () { _plusAct('settings'); } },
       { k: 'theme', t: '切换主题', d: '漆案（深色）/ 宣纸（浅色）', ic: 'contrast', run: function () { if (ui.els.theme) ui.els.theme.click(); } },
       { k: 'keys', t: '快捷键', d: '国师面板里的键位', ic: 'keyboard', run: function () { _plusAct('keys'); } }
@@ -1544,7 +1548,7 @@
     var tail = [];
     if (sec) tail.push('用时 ' + _fmtDur(sec));
     if (res && res.tokensUsed) tail.push('约 ' + _fmtTok(res.tokensUsed) + ' token');
-    var body = head || '做完了';
+    var body = head || '完成了';
     if (n) body += '，' + n + ' 处改动等你过目';
     else if (fx) body += '，' + fx + ' 条记忆/技能等你批准';
     else if (res && res.completion && res.completion.status === 'unchanged') body += '，这一轮没改剧本';
@@ -1556,6 +1560,7 @@
   }
   // 还有没应用的改动时，审阅/问答/讲解/编排/会审会另起草稿把它们扔掉：先提醒，再点一次才照做
   function _guardPendingDraft(what) {
+    if (ui._resumeNext && ui._recovery) { ui._pendingGuard = null; return true; }   // 续做没做完的：接着用这份草稿，不扔
     var n = (ui.draft && !ui._pendingPlan) ? (ui._lastDiffs || []).length : 0;
     if (!n) { ui._pendingGuard = null; return true; }
     if (ui._pendingGuard === what) { ui._pendingGuard = null; return true; }
@@ -1832,29 +1837,20 @@
   var _LIVE_ANSWER_KEY = { finish: 'summary', submitAnswer: 'answer', submitReview: 'summary', submitExplanation: 'summary', submitSummary: 'summary', remonstrate: 'concern' };
   function _streamOffMap() { try { return JSON.parse(localStorage.getItem(_STREAM_OFF_KEY) || '{}') || {}; } catch (e) { return {}; } }
   function _streamLineKey() { var c = _loadApiCfg() || {}; return String(c.url || '') + '|' + String(c.model || ''); }
+  // 显示思考原文：模型的推理原文默认不上屏（只原样回传给它续轮）；这里是玩家自己选择要看
+  function _showThinking() { return _prefOn('tm_aa_show_thinking', false); }
   function _streamOn() { return _prefOn('tm_aa_stream', true) && !_streamOffMap()[_streamLineKey()]; }
+  // 开：连这条线路上回记下的「不支持」一起清掉，再试一次
+  function _setStreamPref(on) {
+    _prefSet('tm_aa_stream', on);
+    if (on) { var m = _streamOffMap(); delete m[_streamLineKey()]; try { localStorage.setItem(_STREAM_OFF_KEY, JSON.stringify(m)); } catch (e) {} }
+    setStatus(on ? '实时显示已开' : '实时显示已关，回复收齐后整段出来');
+  }
   function _rememberStreamOff() {
     var m = _streamOffMap(); m[_streamLineKey()] = Date.now();
     try { localStorage.setItem(_STREAM_OFF_KEY, JSON.stringify(m)); } catch (e) {}
   }
-  // 从还没写完的工具参数 JSON 里抠出某个字符串字段已到的部分（转义按 JSON 还原；半个转义先不显示）
-  function _partialJsonStr(src, key) {
-    var m = new RegExp('"' + key + '"\\s*:\\s*"').exec(src || '');
-    if (!m) return null;
-    var i = m.index + m[0].length, out = '', ESC = { n: '\n', t: '\t', r: '', b: '', f: '', '"': '"', '\\': '\\', '/': '/' };
-    while (i < src.length) {
-      var ch = src.charAt(i);
-      if (ch === '"') return { text: out, done: true };
-      if (ch === '\\') {
-        var nx = src.charAt(i + 1);
-        if (!nx) break;
-        if (nx === 'u') { var hex = src.substr(i + 2, 4); if (!/^[0-9a-fA-F]{4}$/.test(hex)) break; out += String.fromCharCode(parseInt(hex, 16)); i += 6; continue; }
-        out += ESC[nx] != null ? ESC[nx] : nx; i += 2; continue;
-      }
-      out += ch; i++;
-    }
-    return { text: out, done: false };
-  }
+  function _partialJsonStr(src, key) { return AA.partialJsonString(src, key); }   // 核心里那份：地图国师也用
   function _fmtChars(n) { return n >= 1000 ? (Math.round(n / 100) / 10) + 'k 字' : n + ' 字'; }
   // 正在拟的那一步：从半截参数里认出路径/名字，借「思考与查阅」的说法讲给人听
   function _toolDraftLabel(t) {
@@ -1877,6 +1873,7 @@
     if (s.timer) clearTimeout(s.timer);
     if (s.raf) { try { cancelAnimationFrame(s.raf); } catch (e) {} }
     _lvDrop(s.textEl);
+    if (s.thinkEl && !_showThinking()) keepThought = false;
     if (s.thinkEl) {
       var full = s.think.trim();
       if (keepThought && full) {
@@ -1899,7 +1896,7 @@
     if (ev.kind === 'done') { _lvPaint(true); _lvClear(true); return; }
     if (!ui.running) return;
     var s = _lvState();
-    if (ev.kind === 'think') s.think += ev.text || '';
+    if (ev.kind === 'think') { s.think += ev.text || ''; s.thinking = true; }
     else if (ev.kind === 'text') s.text += ev.text || '';
     else if (ev.kind === 'tool' || ev.kind === 'args') {
       var k = String(ev.index != null ? ev.index : 0), t = s.tools[k];
@@ -1918,8 +1915,9 @@
     var s = _lv; if (!s || !ui.els || !ui.els.log) return;
     s.last = Date.now();
     var blk = null;
-    // 想法：贴在「思考与查阅」里，边想边长；活动行同步最新一句
-    if (s.think.trim()) {
+    // 想法：默认只在活动行说一句「正在想…」；打开「显示思考原文」才把原文贴进「思考与查阅」，边想边长
+    if (s.thinking && !_showThinking() && !final) __aaU._setLive('正在想…', true);
+    if (s.think.trim() && _showThinking()) {
       blk = __aaU._ensureExecBlock();
       if (!s.thinkEl || !s.thinkEl.isConnected) {
         s.thinkEl = document.createElement('div');
@@ -1940,7 +1938,7 @@
         blk.querySelector('.tm-aa-think-body').appendChild(s.textEl);
       }
       s.textEl.textContent = s.text.replace(/^\s+/, '').slice(0, 2000);
-      if (!final && !s.think.trim()) __aaU._setLive(s.text.replace(/\s+/g, ' ').trim(), true);
+      if (!final && !(s.think.trim() && _showThinking())) __aaU._setLive(s.text.replace(/\s+/g, ' ').trim(), true);
     }
     // 工具：收尾说明/回答直接在预览卡里成形；改剧本的那几步在活动行报「正在拟」
     var answer = null, drafting = null;
@@ -2205,7 +2203,8 @@
       var dark = !(ui.els.panel && ui.els.panel.getAttribute('data-theme') === 'light');
       var streamLineOff = _prefOn('tm_aa_stream', true) && !_streamOn();
       html = '<div class="sh-sec"><div class="sh-sec-h">外观与显示</div><div class="tm-aa-seg" data-seg="theme"><button type="button" data-v="dark"' + (dark ? ' class="on"' : '') + '>漆案（深色）</button><button type="button" data-v="light"' + (!dark ? ' class="on"' : '') + '>宣纸（浅色）</button></div>'
-        + _swHtml('stream', _streamOn(), '实时显示', streamLineOff ? '这条线路上回不支持流式，已自动改成整段返回。打开会再试一次。' : '国师边想边说：字一个个冒出来，想法也看得到。个别中转不支持时会自动退回整段返回。')
+        + _swHtml('stream', _streamOn(), '实时显示', streamLineOff ? '这条线路上回不支持流式，已自动改成整段返回。打开会再试一次。' : '国师边查边说，字一个个冒出来。个别中转不支持时会自动退回整段返回。')
+        + _swHtml('thinking', _showThinking(), '显示思考原文', '有的模型会先想一段再动手。默认不显示这段原文（它是模型的草稿，杂乱，也可能夹着像工具调用的字样），打开后在「思考与查阅」里能看到。')
         + '</div>'
         + '<div class="sh-sec"><div class="sh-sec-h">国师的做法</div>'
         + _swHtml('microplan', _microPlanOn(), '歧义先对齐', '要求有几种做法、影响面大时，先给一份小计划让你点头再动手。')
@@ -2229,11 +2228,8 @@
         if (id === 'danger') { var p0 = _loadPerm(); p0.allowDestructive = on; _applyPerm(p0); }
         else if (id === 'microplan') { try { if (on) localStorage.removeItem('tm_aa_microplan'); else localStorage.setItem('tm_aa_microplan', '0'); } catch (e) {} }
         else if (id === 'exemplars') { _prefSet('tm_aa_exemplars', on); ui._exemplarsCache = null; ui._exemplarsSc = null; }
-        else if (id === 'stream') {
-          _prefSet('tm_aa_stream', on);
-          if (on) { var offM = _streamOffMap(); delete offM[_streamLineKey()]; try { localStorage.setItem(_STREAM_OFF_KEY, JSON.stringify(offM)); } catch (e) {} }
-          setStatus(on ? '实时显示已开' : '实时显示已关，回复收齐后整段出来');
-        }
+        else if (id === 'stream') _setStreamPref(on);
+        else if (id === 'thinking') { _prefSet('tm_aa_show_thinking', on); setStatus(on ? '会显示模型的思考原文' : '不再显示思考原文'); }
         else if (id === 'guard') { _prefSet('tm_aa_guard', on); try { global._jeGuardSetEnabled(on); } catch (e) {} }
         else if (id === 'notify') {
           if (on) _toggleNotifyOn(function (ok) { if (!ok) { sw.classList.remove('on'); sw.setAttribute('aria-pressed', 'false'); } });
@@ -2469,19 +2465,23 @@
       kill.forEach(function (k) { try { localStorage.removeItem(k); } catch (e0) {} });
     } catch (e) {}
   }
+  // 先写新、后删旧：读不懂或写不进（配额满）时旧记录原样留着，下回再迁，不会两头落空
   function _migrateLegacyThread() {
     try {
       var raw = localStorage.getItem(THREAD_KEY); if (!raw) return;
-      localStorage.removeItem(THREAD_KEY);
-      var pack = JSON.parse(raw);
-      if (!pack || !Array.isArray(pack.conversation) || !pack.conversation.length) return;
+      var pack;
+      try { pack = JSON.parse(raw); } catch (e0) { return; }
+      if (!pack || !Array.isArray(pack.conversation) || !pack.conversation.length) { localStorage.removeItem(THREAD_KEY); return; }
       var same = pack.sid && pack.sid === _scenKey();
       var id = 's' + (pack.ts || Date.now()) + '-mig';
       var meta = { id: id, ts: pack.ts || Date.now(), created: pack.ts || Date.now(),
         fileKey: same ? _fileKey() : ('name:' + (pack.sid || 'default')), fileLabel: same ? _fileLabel() : String(pack.sid || ''),
         title: _rawReq(pack.conversation[0] && pack.conversation[0].text) || '上次会话', msgs: pack.conversation.length, tokens: 0, kind: '编辑', summary: '' };
       localStorage.setItem(SESS_BODY + id, JSON.stringify({ id: id, ts: meta.ts, todos: pack.todos || [], conversation: pack.conversation }));
-      var idx = _sessIndex(); idx.unshift(meta); _sessIndexSave(idx);
+      var idx = _sessIndex();
+      if (!idx.some(function (m) { return m && m.id === id; })) { idx.unshift(meta); _sessIndexSave(idx); }
+      if (!_sessIndex().some(function (m) { return m && m.id === id; })) return;   // 索引没存进去：旧记录先留着
+      localStorage.removeItem(THREAD_KEY);
     } catch (e) {}
   }
   // 每轮跑完落盘到当前会话（无则新建）：meta 进索引·正文分键存（压缩副本·体量上限护 quota）
@@ -3013,8 +3013,9 @@
   // 刀③(2026-07-10 智能升级D2)：运行教训回喂——最近数次运行结局一行一条·新对话首轮注入（此前审计日志与上下文割裂·每次从零）
   function _runHistoryBrief() {
     try {
-      var h = _loadHistory();
-      if (!h || !h.length) return '';
+      var fk = _fileKey();
+      var h = (_loadHistory() || []).filter(function (r) { return r && r.fileKey && r.fileKey === fk; });   // 只看本剧本的结局
+      if (!h.length) return '';
       return h.slice(-5).map(function (r) {
         var outcome = (r.stopReason === 'finish' || r.stopReason === 'imported') ? ('完成' + (r.applied ? '·玩家已应用' : '')) : ('未完成:' + (r.stopReason || '?'));
         return '· [' + (r.kind || '?') + '] ' + String(r.request || '').slice(0, 40) + ' → ' + outcome + (r.summary ? '（' + String(r.summary).slice(0, 60) + '）' : '');
@@ -3029,6 +3030,7 @@
       ts: Date.now(),
       when: (function() { try { return new Date().toLocaleString('zh-CN', { hour12: false }); } catch (e) { return ''; } })(),
       kind: kind,
+      fileKey: _fileKey(),   // 教训回喂与版本说明按剧本分开
       request: String(request || '').slice(0, 200),
       summary: String(_runSummaryOf(res) || '').slice(0, 240),
       tokensUsed: (res && res.tokensUsed) || 0,
@@ -3063,8 +3065,8 @@
   function buildChangelog(opts) {
     opts = opts || {};
     var onlyApplied = opts.onlyApplied !== false;   // 默认只汇总已应用的（真落地的改动）
-    var h = _loadHistory();   // 旧→新
-    var changes = h.filter(function(r) { return _CHANGE_KINDS[r.kind] && (!onlyApplied || r.applied); });
+    var h = _loadHistory(), fk = _fileKey();   // 旧→新
+    var changes = h.filter(function(r) { return r.fileKey === fk && _CHANGE_KINDS[r.kind] && (!onlyApplied || r.applied); });
     if (!changes.length) return { text: '', count: 0 };
     var lines = ['## 本次更新', ''];
     changes.forEach(function(r) {
@@ -3515,7 +3517,7 @@
       renderSummary(res.summary, res.notes, res.suggestedConventions, true);   // UI·P · 流式
       renderDiff(_draftDiff(), res.uncertainties);   // 以开工基线审阅，实时剧本留到应用时做冲突合并
       var _vdPlan = _finishReplyActions(res.finalValidation, ui._lastDiffs || []);
-      setStatus(_doneStatus(res, '按计划做完了'));
+      setStatus(_doneStatus(res, '按计划完成了'));
       _autoApplyFinished(res, _vdPlan);
     }).catch(function(err) { renderError('plan-execute', '(按计划执行)', err); });   // UI·AC · 错误卡+重试
   }
@@ -3610,23 +3612,39 @@
   }
 
   // 方向O · 生成版本说明（确定性·无需 API）：汇总已应用改动 + 一键复制
+  function _changelogFromLedger(ents) {
+    var C = __aaU._COLL_CN || {}, lines = ['## 本次更新', ''];
+    ents.forEach(function (e) {
+      var sum = String(e.summary || '').replace(/\*\*|__|`/g, '').replace(/^\s*[-*#>]+\s*/gm, '').replace(/\s+/g, ' ').trim();
+      if (!sum) sum = String(e.request || '').replace(/\s+/g, ' ').trim();
+      if (sum.length > 160) sum = sum.slice(0, 158) + '…';
+      var nm = (e.names || []).slice(0, 8).map(function (n) { return (n.op === 'add' ? '新增' : (n.op === 'rm' ? '删除' : '修改')) + (C[n.top] || n.top) + (n.name ? '「' + n.name + '」' : ''); });
+      if ((e.names || []).length > 8) nm.push('等 ' + e.names.length + ' 项');
+      lines.push('- ' + (sum || '国师的改动') + (nm.length ? '（' + nm.join('、') + '）' : ''));
+    });
+    return { text: lines.join('\n'), count: ents.length };
+  }
   function runChangelogUI() {
     if (ui.running) { setStatus('请等当前运行结束'); return; }
-    resetResults(true);   // 聊天化：保留对话流（结果作为新卡 append，不清历史）
-    var cl = buildChangelog();
-    if (!cl.count) { setStatus('还没有应用过的改动可汇总（应用过国师的改动后，版本说明会自动攒起来）'); return; }
-    _beginReplyCard('版本说明');
-    if (ui.els.summary) {
-      ui.els.summary.innerHTML = '<b>版本说明（' + cl.count + ' 项改动）<button type="button" class="tm-aa-cl-copy">复制</button></b>'
-        + '<div class="tm-aa-cl-md">' + _md(cl.text) + '</div>';
-      ui.els.summary.style.display = '';
-      var btn = ui.els.summary.querySelector('.tm-aa-cl-copy');
-      if (btn) btn.addEventListener('click', function() {
-        try { navigator.clipboard.writeText(cl.text).then(function() { btn.textContent = '已复制 ✓'; }, function() { btn.textContent = '复制失败'; }); }
-        catch (e) { btn.textContent = '复制失败'; }
+    // 只认改动账：运行记录不知道哪些后来撤销了，拿它兜底会把撤销过的又写进说明
+    var L = Ledger();
+    var src = L ? L.list(_fileKey(), _fileLabel()).then(function (lst) { return lst.mine || []; }, function () { return []; }) : Promise.resolve([]);
+    src.then(function (mine) {
+      var ents = mine.filter(function (e) { return !e.undone; }).sort(function (a, b) { return a.ts - b.ts; });
+      if (!ents.length) { setStatus(mine.length ? '这个剧本应用过的改动都已撤销，没有要写进版本说明的' : '这个剧本还没有应用过的改动可汇总（应用过国师的改动后，版本说明会自动攒起来）'); return; }
+      var cl = _changelogFromLedger(ents);
+      _infoCard('版本说明', function () {   // 只读信息卡：不顶掉正在待审的那张
+        ui.els.summary.innerHTML = '<b>版本说明（' + cl.count + ' 次改动）<button type="button" class="tm-aa-cl-copy">复制</button></b>'
+          + '<div class="tm-aa-cl-md">' + _md(cl.text) + '</div>';
+        ui.els.summary.style.display = '';
+        var btn = ui.els.summary.querySelector('.tm-aa-cl-copy');
+        if (btn) btn.addEventListener('click', function() {
+          try { navigator.clipboard.writeText(cl.text).then(function() { btn.textContent = '已复制 ✓'; }, function() { btn.textContent = '复制失败'; }); }
+          catch (e) { btn.textContent = '复制失败'; }
+        });
       });
-    }
-    setStatus('版本说明已生成（' + cl.count + ' 项）· 可复制');
+      setStatus('版本说明已生成（' + cl.count + ' 次改动，撤销过的不算）· 可复制');
+    });
   }
 
   // 方向L · 剧本问答（只读）：玩家问关于剧本的问题，agent 查清后直接回答，不碰剧本
@@ -3756,6 +3774,15 @@
     if (ui.els.val) ui.els.val.style.display = 'none';
     if (ui.els.actions) ui.els.actions.style.display = 'none';
     _recoveryButtons(ui.els.summary.querySelector('.tm-aa-errcard'), ui._lastErr);
+    // 流式回复在路上被传坏（正文不成 JSON / 事件流断开）：多半是中转不善流式，给个一键关掉实时显示
+    var ecode = (err && (err.code || (err.cause && err.cause.code))) || '';
+    if (_streamOn() && (/^authoring-response-(invalid-json|incomplete-stream|invalid-event)$/.test(ecode) || /事件流|不符合 JSON 格式/.test(ui._lastErr.message))) {
+      var ec = ui.els.summary.querySelector('.tm-aa-errcard'), tip = document.createElement('div');
+      tip.className = 'note ec-stream';
+      tip.innerHTML = '有的中转会把边说边传的回复传坏。关掉「实时显示」后回复整段返回，通常就好了。<button type="button" class="tm-aa-btn ghost ec-stream-off">关掉实时显示</button>';
+      ec.insertBefore(tip, ec.querySelector('.ec-acts'));
+      tip.querySelector('.ec-stream-off').addEventListener('click', function () { _setStreamPref(false); this.disabled = true; this.textContent = '已关，再试一次即可'; });
+    }
     var cp = ui.els.summary.querySelector('.ec-copy');
     if (cp) cp.addEventListener('click', function() {
       try { navigator.clipboard.writeText(ui._lastErr.message).then(function() { cp.textContent = '已复制'; setTimeout(function() { cp.innerHTML = _icon('copy', 13) + '复制错误'; }, 900); }, function() {}); } catch (e) {}
@@ -3839,7 +3866,7 @@
       var diffs = _draftDiff();
       renderDiff(diffs);
       var _vdOr = _finishReplyActions(res.finalValidation, diffs);
-      setStatus(_doneStatus(res, res.orchestrated ? '分成 ' + res.steps.length + ' 步做完了' : '做完了'));
+      setStatus(_doneStatus(res, res.orchestrated ? '分成 ' + res.steps.length + ' 步完成了' : '完成了'));
       _autoApplyFinished(res, _vdOr);
     }).catch(function(err) { renderError('orchestrate', request, err); });   // UI·AC · 错误卡+重试
   }
@@ -4087,7 +4114,7 @@
         renderPlan(res.plan);
         ui.els.actions.style.display = '';
         ui.els.apply.className = 'reply-apply plan-approve';
-        ui.els.apply.textContent = '批准，照这个做';
+        ui.els.apply.textContent = '批准并执行';
         ui.els.discard.textContent = '不要这个计划';
         ui._pendingPlan = true;
         setStatus('计划出来了：批准就照着做；想改就直接说哪里不对');
@@ -4104,7 +4131,7 @@
         renderDiff(diffs, res.uncertainties);   // 置信度标注：高亮没把握的改动
         var _vdGen = (diffs.length || (ui._pendingSideEffects || []).length) ? _finishReplyActions(res.finalValidation, diffs) : renderValidation(res.finalValidation);
         if (!diffs.length) { ui.els.diffSec.style.display = 'none'; ui.els.diff.style.display = 'none'; if (_vdGen.ok) ui.els.val.style.display = 'none'; }
-        setStatus(_doneStatus(res, res.completion && res.completion.status === 'unchanged' ? '看过了' : '做完了'));
+        setStatus(_doneStatus(res, res.completion && res.completion.status === 'unchanged' ? '看过了' : '完成了'));
         // 放行：做完且没带来新问题就自动应用（无需点）
         _autoApplyFinished(res, _vdGen);
       }
@@ -4161,8 +4188,8 @@
     var unfinished = !!(!ui._pendingClarify && !ui._pendingPlan && ui._completion && !/^(completed|unchanged|planned)$/.test(ui._completion.status));
     if (unfinished && !ui._partialApplyConfirmed) {
       ui._partialApplyConfirmed = true;
-      ui.els.apply.textContent = '再点一下：只应用这些';
-      setStatus('任务还没做完。再点一下就只应用眼下采纳的这几处，没做完的另说'); return;
+      ui.els.apply.textContent = '再点一下：确认应用部分结果';
+      setStatus('任务还没完成。再点一下就只应用眼下采纳的这几处，没完成的另说'); return;
     }
     if (ui._pendingClarify) {   // 方向K · 提交澄清回答 → 续接 onGenerate（输入框里是玩家的回答）
       if (!(ui.els.req.value || '').trim()) { setStatus('请先在输入框回答问题'); return; }
@@ -4243,12 +4270,12 @@
         if (_firstPath && _app && typeof _app.revealPath === 'function') _app.revealPath(_firstPath);
       } catch (e) {}
       var _accN = diffs.length - rej.size;
-      setStatus('应用了 ' + _accN + ' 处' + (partial ? '（没要的 ' + rej.size + ' 处留在外面）' : '') + (unfinished ? '，任务还有没做完的' : '') + (_fxN ? '，另存了 ' + _fxN + ' 条记忆/技能' : '') + ((_fixN || _dropN) ? '，顺手修好 ' + _fixN + ' 条格式不对的条目' + (_dropN ? '、丢掉 ' + _dropN + ' 条读不懂的' : '') : '') + '。接着说就在同一段对话里');
+      setStatus('已应用到剧本：' + _accN + ' 处' + (partial ? '（没要的 ' + rej.size + ' 处留在外面）' : '') + (unfinished ? '，任务仍有未完成项' : '') + (_fxN ? '，另存了 ' + _fxN + ' 条记忆/技能' : '') + ((_fixN || _dropN) ? '，已自动修复 ' + _fixN + ' 条格式不对的条目' + (_dropN ? '、丢弃 ' + _dropN + ' 条读不懂的' : '') : '') + '。接着说就在同一段对话里');
       if (ui._reply) {
         ui._reply.classList.add('applied');
         var _atag = ui._reply.querySelector('.reply-tag');
         if (_atag) {
-          _atag.innerHTML = _icon('check', 13) + '<span>已应用 ' + _accN + ' 处' + (unfinished ? '（任务没做完）' : '') + (partial ? '，没要 ' + rej.size + ' 处' : '') + '</span>';
+          _atag.innerHTML = _icon('check', 13) + '<span>已应用 ' + _accN + ' 处' + (unfinished ? '（任务未完成）' : '') + (partial ? '，没要 ' + rej.size + ' 处' : '') + '</span>';
           if (typeof ui._onApplied === 'function') { try { ui._onApplied(ui._reply, _atag, { diffs: (ui._lastDiffs || []).filter(function (d) { return !rej.has(d.__idx); }), before: _liveBefore, after: _finalSc, request: ui._lastRequest || '', summary: ui._lastSummary || '' }); } catch (eA) {} }
         }
       }
@@ -4259,7 +4286,7 @@
     } catch (e) {
       if (e && e.code === 'edit-conflict') {
         var paths = (e.conflicts || []).slice(0, 3).map(function(c) { return __aaU._friendlyPath ? __aaU._friendlyPath(c.path) : c.path; }).join('、');
-        setStatus('国师干活期间这几处被手工改过，一处都没应用' + (paths ? '：' + paths : '') + '。可以让国师按现在的剧本重做');
+        setStatus('和你的手工改动冲突：国师干活期间这几处被改过，一处都没应用' + (paths ? '：' + paths : '') + '。可以让国师按现在的剧本重做');
       } else setStatus('没应用成：' + (e && e.message || e));
     }
   }

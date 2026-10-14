@@ -121,6 +121,7 @@
       '#tm-aa-fab{position:fixed;right:18px;bottom:18px;z-index:9001;display:inline-flex;align-items:center;gap:9px;background:#18130e;color:#ede3cd;border:1px solid rgba(201,164,92,.42);',
       'border-radius:999px;padding:7px 16px 7px 8px;font:13px/1 "Microsoft YaHei UI","Microsoft YaHei",sans-serif;letter-spacing:.14em;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.42);transition:transform .14s,border-color .14s}',
       '#tm-aa-fab:hover{transform:translateY(-1px);border-color:rgba(201,164,92,.75)}',
+      'body:has(#tm-aa-panel.open) #tm-aa-fab{display:none}',   // 面板开着（窄屏浮在页面上时）启动钮会压住输入区右下角：收起，关面板用顶栏 ×
       '#tm-aa-fab .fab-seal{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:5px;background:#b3301d;color:#fdeedd;font-family:"GS-MaShanZheng","STKaiti","KaiTi",serif;font-size:15px;letter-spacing:0;box-shadow:inset 0 0 0 1.5px #b3301d,inset 0 0 0 2.5px rgba(253,238,221,.55)}',
 
       // ── 面板窗体 ──
@@ -162,7 +163,7 @@
       '#tm-aa-body{position:relative;flex:1 1 auto;min-height:0;display:flex;flex-direction:column}',
       '#tm-aa-logwrap{position:relative;flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:16px 16px 10px}',
       '#tm-aa-loglist{display:flex;flex-direction:column;gap:14px}',
-      P + '.fs #tm-aa-loglist,' + P + '.fs .tm-aa-composer-in,' + P + '.fs .tm-aa-empty>*{max-width:860px;margin-left:auto;margin-right:auto;width:100%}',
+      P + '.fs #tm-aa-loglist,' + P + '.fs .tm-aa-composer-in,' + P + '.fs .tm-aa-empty>*:not(.emp-seal){max-width:860px;margin-left:auto;margin-right:auto;width:100%}',   // 印章保持方印，不跟着撑满
       '.tm-aa-sec{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--tx3);letter-spacing:.06em;font-family:var(--f-kai)}',
       '.tm-aa-sec[data-sec="log"]{display:none!important}',
       '.tm-aa-tobottom{position:sticky;bottom:6px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:4px;margin:6px auto 0;padding:4px 12px;font-size:12px;color:var(--tx);background:var(--bg3);border:1px solid var(--line2);border-radius:999px;cursor:pointer;box-shadow:var(--pop);z-index:4}',
@@ -376,7 +377,10 @@
       '.tm-aa-errcard{padding:10px 12px;border:1px solid var(--rm-bg);border-left:3px solid var(--bad);border-radius:9px;background:var(--rm-bg)}',
       '.tm-aa-errcard .ec-head{font-weight:600;color:var(--bad);margin-bottom:3px;display:flex;align-items:center;gap:6px}',
       '.tm-aa-errcard .ec-msg{font-size:13px;color:var(--tx);white-space:pre-wrap;word-break:break-word}',
+      '.tm-aa-errcard .ec-stream{margin-top:8px;font-size:12.5px;color:var(--tx2);line-height:1.6}',
+      '.tm-aa-errcard .ec-stream .tm-aa-btn{margin-left:8px;padding:2px 10px;font-size:12px}',
       '.ec-acts,.tm-aa-recovery-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}',
+      '.tm-aa-recovery-actions button{height:36px}',   // 出错后最要紧的两颗键：点按区不小于 36px（桌面版无障碍回归钉着）
       // 进度清单（分解编排 / 三堂会审）
       '.tm-aa-checklist{align-self:stretch;padding:9px 12px;background:var(--bg2);border:1px solid var(--line2);border-radius:10px}',
       '.tm-aa-checklist .cl-head{font-family:var(--f-kai);font-size:14px;color:var(--gold-hi);letter-spacing:.08em;margin-bottom:5px;font-weight:600}',

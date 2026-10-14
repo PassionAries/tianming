@@ -33,6 +33,14 @@ function decide(messages, toolNames, allText, userText) {
   const aTurns = messages.filter(function (m) { return m.role === 'assistant'; }).length;
   const didMutate = messages.some(function (m) { return m.role === 'assistant' && /applyPush|applyEdit|multiEdit|bulkAdd/.test(JSON.stringify(m.tool_calls || [])); });
 
+  // ── 连通性自检 / 会话起名（设置里「测试连接」、跑完自动起标题）──
+  if (has('ping')) return [tc('ping', { ok: true })];
+  if (has('setTitle')) {
+    const req = (/玩家需求：([^\n]*)/.exec(userText) || [])[1] || '';
+    const t = req.replace(/^(演示|请教|长文|报错)[：:]\s*/, '').replace(/[，。,.!！?？].*$/, '').slice(0, 12);
+    return [tc('setTitle', { title: t || '剧本编辑' })];
+  }
+
   // ── 审阅模式（史官 / 谏官 / 通用体检）──
   if (has('submitReview')) {
     if (/史官/.test(allText)) return [tc('submitReview', { summary: '（mock·史官）史实大体可考，一处纪年需复核', findings: [{ dimension: '史实合理性', severity: '中', location: '新增人物', issue: '任职年份与设定时代纪年可能错位', suggestion: '核对正史纪年；拿不准改保守措辞并标存疑' }] })];
@@ -49,6 +57,8 @@ function decide(messages, toolNames, allText, userText) {
   const turnsSince = messages.slice(lastUser + 1).filter(function (m) { return m.role === 'assistant'; }).length;
   const d = demo(messages.slice(lastUser + 1), has, turnsSince, userText);
   if (d) return d;
+  const m = mapDemo(messages.slice(lastUser + 1), has, turnsSince, userText);
+  if (m) return m;
   // 会审修订阶段
   if (/三堂会审[··].*修订|据.*意见.*修订/.test(userText)) {
     if (!didMutate && has('applyEdit')) return [tc('applyEdit', { path: 'worldSettings.note', value: '（mock）已据史官·谏官意见修订：纪年改保守措辞、新势力资源下调一档' })];
@@ -78,6 +88,25 @@ function decide(messages, toolNames, allText, userText) {
 }
 
 // 演示剧本：返回 tool_calls 数组（可带 .content 旁白）或 null
+// 地图编辑器的国师（需求里带「地图：」）：检索地块 → （要改名就）改第一块 → 收尾
+function mapDemo(messages, has, aTurns, userText) {
+  if (!has('mapEditorOverview') || !/地图[：:]/.test(userText)) return null;
+  let divs = [];
+  for (let i = 0; i < messages.length; i++) {   // 取这句话之后第一次检索的结果（改名前的名字）
+    if (messages[i].role !== 'tool') continue;
+    try { const o = JSON.parse(messages[i].content); if (o && Array.isArray(o.divisions)) { divs = o.divisions; break; } } catch (e) {}
+  }
+  const rename = /改名为([^\s，。,.]+)/.exec(userText);
+  if (aTurns === 0) return Object.assign([tc('mapEditorOverview', { limit: 20 })], { content: '先看看这张图上有哪些地块。' });
+  if (rename && has('mapEditorEdit') && aTurns === 1 && divs.length) {
+    return Object.assign([tc('mapEditorEdit', { edits: [{ id: divs[0].id, patch: { name: rename[1] } }] })], { content: '第一块是「' + divs[0].name + '」，照你说的改名。' });
+  }
+  const names = divs.slice(0, 12).map(function (x) { return x.name; }).filter(Boolean);
+  return [tc('finish', { summary: rename
+    ? '把「' + ((divs[0] && divs[0].name) || '第一块地') + '」改名为「' + rename[1] + '」，其余属性没动。'
+    : (names.length ? '这张图上有 ' + divs.length + ' 块：' + names.join('、') + (divs.length > 12 ? ' 等' : '') + '。' : '这张图上还没有地块。') })];
+}
+
 function demo(messages, has, aTurns, userText) {
   function say(text, calls) { calls = calls || []; calls.content = text; return calls; }
   if (/报错/.test(userText)) return { error: 401 };
@@ -130,6 +159,8 @@ function _thought(calls) {
   if (names.indexOf('applyPush') >= 0 || names.indexOf('applyEdit') >= 0) return '查到了：袁崇焕眼下挂的还是旧衔。崇祯元年四月起复，加兵部尚书兼右副都御史、督师蓟辽——但确切月份各书说法不一，改完得标个待核。\n\n补文官要挑这一年真在朝或刚起复的东林人：文震孟、郑三俊都合适，得有表字、籍贯、性格和五常，不能是空壳。';
   if (names.indexOf('validateDraft') >= 0) return '改了一处、加了两人，自查一遍引用和必填字段。';
   if (names.indexOf('askClarification') >= 0) return '「再补几位文官」太宽了：补几位、哪一派、什么品级都没说。先问清楚再动手，免得白写。';
+  if (names.indexOf('mapEditorEdit') >= 0) return '找到了要改的那块。地名照你说的改，势力归属、边界这些都不动。';
+  if (names.indexOf('mapEditorOverview') >= 0) return '先把这张图上的地块列出来，拿到稳定的编号再动手——同名的地块不能凭名字猜。';
   if (names.indexOf('searchEntities') >= 0) return '先看剧本里现在是什么样，别凭印象改。袁崇焕在不在、挂的什么官；朝廷里已经有哪些文官，免得重名。';
   return '想一想从哪里下手。';
 }

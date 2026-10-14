@@ -920,7 +920,8 @@
   }
 
   function preflight(draft) {
-    var groups = Object.keys(_checks);   // 体检跑全部检查（结构 + 运行时）
+    // 体检跑全部检查（结构 + 运行时）；原生开局契约只查有 nativeStart 的剧本（与 validateDraft 同口径，旧剧本查它只会自己崩）
+    var groups = Object.keys(_checks).filter(function(g) { return g !== 'native-start' || !!(draft && draft.nativeStart); });
     var results = {}, blockers = [], warnings = [];
     groups.forEach(function(g) {
       var r;
@@ -3108,7 +3109,7 @@
       '④【落改】bulkAdd/multiEdit 一次多改提效；同一字段按条件成批调（「辽东诸将武力+5」类）用 bulkUpdate 一步到位（先 limit:3 试跑核对再放开）；配平数值前先 statsAggregate 读真账。改名优先 renameEntity（联动所有引用、不留死链）；地图地块/省名改名用 renameRegion（同步 map/mapData 双镜像·如需联动其他引用再补 renameEntity）；删除实体前先 findReferences 查谁引用了它，再 removeEntity。改地图归属（把某地块划给某势力、调整疆域）先 mapOverview 看清地块/归属/势力，再 mapAssignOwner 按地块名+势力名改（自动上色、同步双镜像）。玩家配了生图 API 时，可用 generateImage 给人物立绘(characters.N.portrait)/势力旗徽生成图像（未配置会明确报错，届时用文字描述代替，不要反复重试）；生成的图要复用/挪到别的字段用 copyField(from,to) 直拷——图片值极大，绝不要 getField 读出来再 applyEdit 写回。与用户需求相关的必需缺口顺手补齐，让剧本完整可玩。',
       '⑤【自查与收尾】每改完一批用 validateDraft 自查，有违规继续修（写类工具的返回已回挂变更后的当前值 nowValue/nowValues/collectionLength，据此确认改动已落地，无需再 getField 重读确认）。改好后用 preflight 跑运行时体检（确保游戏能正常加载），有 blockers 继续修到 bootable，再调用 finish——summary 要向玩家说清「改了什么、为什么这么改」（具体到关键实体/字段，2-4 句中文），不要只写"完成"。finish 有质量闸：运行时必崩项与关系一致性不得比开工时更糟（quality-gate-worse 被顶回=你本次改动引入了新问题·按提示修掉再收尾）。relations 是开放关系图（党派/阶层/未出场人物可作节点）；只有确需绑定 characters 名册的边才设 strictRefs:true。动过人物名/删过人后仍须 findReferences 并跑 validateDraft {group:"relation-consistency"}。大改（结构性重构/批量数值/新系统）收尾时在 summary 里建议玩家点「快测·首回合真跑」；下次协作先 readQuickTestReport 看有无报告——报告里的错误/异常是运行时真后果·优先修它。',
       '⑥ 若发现该玩家/剧本有值得长期沿用的约定（命名规律、文风、设定惯例），可调 recordConvention 记一条（仅在确有发现时，别凑数）；从对话中了解到**推导不出来的背景**（玩家是谁与偏好/玩家给的做法反馈/创作长线目标/外部资料指引），用 saveMemory 存对应类型的记忆供下次共事召回——剧本里本就有的数据与本次改动明细不要存。⑦ 用户消息可能附图（编辑器截图/史料素材/手绘草图）——图即需求的一部分，按图中信息办。⑧ 对没把握的改动（史实存疑、靠推测填充）调 flagUncertain 标一下路径，提醒玩家重点复核（只标真没把握的）；运行中若在工具结果里收到「（插话）」注入，那是玩家的实时补充指令——完成当前一步后必须优先处理它，勿忽略。',
-      '⑨【填实·禁空内容·铁律】新增或改写实体必须填到可直接用的质量，绝不留空：先用 listCollection / searchEntities 看一两个剧本里已有的同类实体（或 genReference 看生成范式），照着它们的字段集与丰满度，把新实体的所有相关字段都填上有意义的中文内容——身份/官衔/数值(能力/人口/兵力等)/背景小传/性格/目标/关系/履历等该有的都要有，数值要符合设定区间、彼此自洽。禁止留空字符串、0 占位（除非数值确为 0）、"待补/TODO/未知/暂无"之类占位词，也禁止只填 name 就交差。createEntity 模板只是最小骨架，拿到后必须逐字段补全。宁可少加一个实体，也要把加的每个都填实、达到与官方实体同等的完整度。',
+      '⑨【填实·禁空内容·铁律】新增或改写实体必须填到可直接用的质量，绝不留空：先用 listCollection / searchEntities 看一两个剧本里已有的同类实体（或 genReference 看生成范式），照着它们的字段集与丰满度，把新实体的所有相关字段都填上有意义的中文内容——身份/官衔/数值(能力/人口/兵力等)/背景小传/性格/目标/关系/履历等该有的都要有，数值要符合设定区间、彼此自洽。禁止留空字符串、0 占位（除非数值确为 0）、"待补/TODO/未知/暂无"之类占位词，也禁止只填 name 就交差。describeSchema / genReference 给的只是最小骨架，照着写也必须逐字段补全。宁可少加一个实体，也要把加的每个都填实、达到与官方实体同等的完整度。',
       '⑩【高权限·可写任意字段】你对剧本草稿有完全的写入权限：applyEdit/applyPush 可以创建任意新字段、新嵌套结构，包括剧本编辑器当前没有专门面板/不在结构速查/fieldContract 查不到的"非标准/自定义"字段——编辑器会自动吸收并展示这些字段，不会丢。fieldContract 返回"不在游戏字段契约中"只表示它是扩展/自定义字段（正式游戏不直接读），并不代表禁止写；只要对实现用户需求有用就大胆写。唯一不可改的是：剧本唯一 id、下划线开头的内部字段、ai/conf/meta 等配置（改这些会损坏剧本）。其余一切随需求自由创建与修改。',
       ruleRemonstrate,
       ruleSelfCheck,
@@ -4447,6 +4448,26 @@
     return null;
   }
 
+  // 实时显示用（国师重做 S4/S6）：从还没写完的工具参数 JSON 里抠出某个字符串字段已到的部分。
+  //   转义按 JSON 还原；半个转义先不显示。剧本工坊与地图编辑器的国师面板共用。
+  function partialJsonString(src, key) {
+    var m = new RegExp('"' + key + '"\\s*:\\s*"').exec(src || '');
+    if (!m) return null;
+    var i = m.index + m[0].length, out = '', ESC = { n: '\n', t: '\t', r: '', b: '', f: '', '"': '"', '\\': '\\', '/': '/' };
+    while (i < src.length) {
+      var ch = src.charAt(i);
+      if (ch === '"') return { text: out, done: true };
+      if (ch === '\\') {
+        var nx = src.charAt(i + 1);
+        if (!nx) break;
+        if (nx === 'u') { var hex = src.substr(i + 2, 4); if (!/^[0-9a-fA-F]{4}$/.test(hex)) break; out += String.fromCharCode(parseInt(hex, 16)); i += 6; continue; }
+        out += ESC[nx] != null ? ESC[nx] : nx; i += 2; continue;
+      }
+      out += ch; i++;
+    }
+    return { text: out, done: false };
+  }
+
   // ── Export ──
   var TM = global.TM = global.TM || {};
   TM.AuthoringAgent = {
@@ -4507,7 +4528,8 @@
     computeDiff: computeDiff,
     makeOldEditorAdapter: makeOldEditorAdapter,
     makeResetEditorAdapter: makeResetEditorAdapter,
-    detectAdapter: detectAdapter
+    detectAdapter: detectAdapter,
+    partialJsonString: partialJsonString   // 实时显示：半截参数里的字符串
   };
 
   if (typeof module !== 'undefined' && module.exports) {

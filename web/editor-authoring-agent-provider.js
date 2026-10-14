@@ -13,6 +13,13 @@
     return url.indexOf('anthropic.com') >= 0 || url.indexOf('api.anthropic') >= 0;
   }
 
+  // Anthropic 端点规整：已写到 /messages 原样；以 /v1 结尾补 /messages；否则补 /v1/messages（不再拼成 /v1/v1/messages）
+  function _anthropicEndpoint(url) {
+    if (/\/messages(\?|#|$)/.test(url)) return url;
+    var base = String(url || '').replace(/\/+$/, '');
+    return /\/v1$/i.test(base) ? base + '/messages' : base + '/v1/messages';
+  }
+
   // OpenAI 兼容端点规整：裸域名→/v1/chat/completions·.../v1→/chat/completions·完整端点原样。
   // 让第三方中转的各种 URL 写法都能拼对（成功调用中转的常见坑）。
   function _openaiEndpoint(url) {
@@ -677,8 +684,9 @@
       if (!/[?&]key=/i.test(endpoint)) headers['x-goog-api-key'] = cfg.key;
       body = _toGemini(conversation, system, tools, maxTok, cfg.temp);
     } else if (anthropic) {
-      endpoint = cfg.url.indexOf('/messages') < 0 ? cfg.url + '/v1/messages' : cfg.url;
-      headers = { 'Content-Type': 'application/json', 'x-api-key': cfg.key, 'anthropic-version': '2023-06-01' };
+      endpoint = _anthropicEndpoint(cfg.url);
+      // 网页版直连 api.anthropic.com 要这个头才过跨域；桌面版带着也无妨
+      headers = { 'Content-Type': 'application/json', 'x-api-key': cfg.key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' };
       body = _toAnthropic(conversation, system, tools, maxTok, cfg.model);
       if (wantStream) body.stream = true;
     } else {
@@ -752,11 +760,12 @@
       // 刀G8 · 超限识别:400+超窗文案 → 不做注定失败的文本兜底(更长)·标 overflow 供 loop 压缩自救
       var _msg0 = String((e && e.message) || '');
       var _ovf0 = !!(e && e.status === 400 && _OVERFLOW_RE.test(_msg0));
-      // S4 · 实时显示退路：中转不认流式（400 里提到 stream，或事件流协议对不上）→ 关掉流式整段重取一次。
+      // S4 · 实时显示退路：中转不认流式（400 里提到 stream，或事件协议本身对不上）→ 关掉流式整段重取一次。
       //   不当作「模型不支持 tools」，也不进文本兜底；之后几轮由 loop 记着不再开。
+      //   正文损坏/断流（invalid-json、incomplete-stream）不在此列：_fetchJSON 已按「只重取一次」处理，不能再多花一次。
       if (wantStream && !streamOff && !streamRepaired && opts.explicitStream !== true && e && (
           (e.status === 400 && /stream/i.test(_msg0))
-          || /^authoring-response-(unsupported-stream|mixed-stream|incomplete-stream|invalid-json|invalid-event|after-completion)$/.test(e.code || ''))) {
+          || /^authoring-response-(unsupported-stream|mixed-stream|after-completion)$/.test(e.code || ''))) {
         streamOff = true; delete body.stream; delete body.stream_options;
         _telemetry(opts, { type: 'stream-off', code: e.code || ('http-' + e.status) });
         if (typeof opts.onDelta === 'function') { try { opts.onDelta({ kind: 'stream-off' }); } catch (_) {} }
@@ -812,7 +821,7 @@
         }
         return {
           ok: true,
-          provider: _isAnthropic(cfg.url) ? 'anthropic' : 'openai-compat',
+          provider: _isGeminiNative(cfg.url) ? 'gemini' : (_isAnthropic(cfg.url) ? 'anthropic' : 'openai-compat'),
           model: cfg.model,
           detail: '连通成功 · ' + (r.fallback ? '端点不支持原生 tools，已用文本兜底（仍可用）' : '原生 tool-calling 可用')
         };

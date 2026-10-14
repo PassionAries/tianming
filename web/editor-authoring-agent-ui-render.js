@@ -211,11 +211,15 @@
     if (step && step.iteration != null) ui._lastIter = step.iteration;
     var execBlk = _ensureExecBlock();
     var r = step.result || {};
-    var bad = r.ok === false;
+    // 国师自查（validateDraft）按开工时的剧本比：只把这次改出来的新问题算「没成」，剧本原有的不吓人
+    var dl = null;
+    if (step.name === 'validateDraft' && r.ok === false && Array.isArray(r.violations)) { try { dl = validationDelta(r); } catch (e) { dl = null; } }
+    var bad = dl ? !dl.ok : r.ok === false;
     var cls = (step.name === 'finish' && r.ok) ? 'fin' : (bad ? 'bad' : 'ln');
     var why = bad ? (r.reason || r.error || '') : '';
-    if (bad && r.violations && r.violations.length) why += '（' + r.violations.slice(0, 2).join('；') + '）';
-    var text = _friendlyStep(step);
+    if (bad && dl) { var vmap = _idNameMap(); why += '（' + dl.fresh.slice(0, 2).map(function(x) { return _readableViolation(x, vmap); }).join('；') + '）'; }
+    else if (bad && r.violations && r.violations.length) why += '（' + r.violations.slice(0, 2).join('；') + '）';
+    var text = dl ? (dl.ok ? '校验：没有新问题' + (dl.old.length ? '（剧本原有 ' + dl.old.length + ' 处提示）' : '') : '校验：这次改动带来 ' + dl.fresh.length + ' 处新问题') : _friendlyStep(step);
     var card = document.createElement('details');
     card.className = 'tm-aa-step ' + cls;
     var inputStr = step.input && Object.keys(step.input).length ? _pretty(step.input, 1600) : '';

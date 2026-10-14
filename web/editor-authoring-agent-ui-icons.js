@@ -221,8 +221,12 @@
       '.tm-aa-live .lv-tx{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.tm-aa-live .lv-tx.think{font-style:italic}',
       '@keyframes tm-aa-spin{to{transform:rotate(360deg)}}',
-      '.tm-aa-stream-live{font-size:14px;line-height:1.78;color:var(--tx);white-space:pre-wrap;word-break:break-word;padding-left:13px}',
-      '.tm-aa-stream-live.reason{font-size:12.5px;color:var(--tx3);font-style:italic}',
+      // 实时显示（S4）：边收边长的想法与话；想法收完留作一条，长的点开看全
+      '.tm-aa-think .tk-line.streaming{border-left:2px solid var(--gold);padding-left:8px;margin:2px 0}',
+      '.tm-aa-think .tk-line.reason.long{max-height:7.4em;overflow:hidden;cursor:pointer;-webkit-mask-image:linear-gradient(180deg,#000 55%,transparent);mask-image:linear-gradient(180deg,#000 55%,transparent)}',
+      '.tm-aa-think .tk-line.reason.long:hover{color:var(--tx2)}',
+      '.tm-aa-think .tk-line.reason.long.open{max-height:none;-webkit-mask-image:none;mask-image:none}',
+      '.tm-aa-reply.streaming .reply-who b{background:linear-gradient(90deg,var(--tx) 0%,var(--gold-hi) 50%,var(--tx) 100%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:tm-aa-shimmer 2.2s linear infinite}',
 
       // 国师的回复卡
       '.tm-aa-reply{align-self:stretch;display:flex;flex-direction:column;gap:9px;animation:tm-aa-rise .22s ease-out}',

@@ -15,6 +15,7 @@
 //   「长文」  收尾说明很长（标题、列表、表格、代码），看排版
 //   「报错」  回 401，看错误卡
 // 环境变量 MOCK_DELAY_MS=毫秒：每次回复前等一会儿，好截「运行中」。
+// 请求带 stream:true 时回 OpenAI 事件流（带想法 reasoning_content），MOCK_STREAM_MS 调吐字快慢。
 
 const http = require('http');
 const PORT = 8799;
@@ -120,6 +121,41 @@ function reply(res, toolCalls) {
   }));
 }
 
+// 流式（国师重做 S4）：请求带 stream:true 时按 OpenAI 事件流一小段一小段吐——先想法（reasoning_content），
+//   再旁白，再工具名与参数；末尾 finish_reason、用量、[DONE]。MOCK_STREAM_MS 调每段间隔（默认 25ms）。
+const STREAM_MS = Math.max(0, Number(process.env.MOCK_STREAM_MS || 25) || 0);
+function _thought(calls) {
+  const names = (calls || []).map(function (c) { return c.function.name; });
+  if (names.indexOf('finish') >= 0) return '都改完、校验也过了。收尾要把改了什么、为什么这么改讲清楚：袁崇焕那条点明月份待核；两位新人说清出身和派系，免得读的人以为是随手编的。';
+  if (names.indexOf('applyPush') >= 0 || names.indexOf('applyEdit') >= 0) return '查到了：袁崇焕眼下挂的还是旧衔。崇祯元年四月起复，加兵部尚书兼右副都御史、督师蓟辽——但确切月份各书说法不一，改完得标个待核。\n\n补文官要挑这一年真在朝或刚起复的东林人：文震孟、郑三俊都合适，得有表字、籍贯、性格和五常，不能是空壳。';
+  if (names.indexOf('validateDraft') >= 0) return '改了一处、加了两人，自查一遍引用和必填字段。';
+  if (names.indexOf('askClarification') >= 0) return '「再补几位文官」太宽了：补几位、哪一派、什么品级都没说。先问清楚再动手，免得白写。';
+  if (names.indexOf('searchEntities') >= 0) return '先看剧本里现在是什么样，别凭印象改。袁崇焕在不在、挂的什么官；朝廷里已经有哪些文官，免得重名。';
+  return '想一想从哪里下手。';
+}
+function _pieces(str, n) { const out = []; const a = Array.from(str || ''); for (let i = 0; i < a.length; i += n) out.push(a.slice(i, i + n).join('')); return out; }
+function streamReply(res, toolCalls, body) {
+  const id = 'mock-' + (++_seq), frames = [];
+  const frame = function (delta, finish) { return 'data: ' + JSON.stringify({ id: id, object: 'chat.completion.chunk', model: 'mock-guoshi', choices: [{ index: 0, delta: delta, finish_reason: finish || null }] }) + '\n\n'; };
+  frames.push(frame({ role: 'assistant', content: '' }));
+  _pieces(_thought(toolCalls), 3).forEach(function (p) { frames.push(frame({ reasoning_content: p })); });
+  _pieces((toolCalls && toolCalls.content) || '', 2).forEach(function (p) { frames.push(frame({ content: p })); });
+  (toolCalls || []).forEach(function (c, i) {
+    frames.push(frame({ tool_calls: [{ index: i, id: c.id, type: 'function', function: { name: c.function.name, arguments: '' } }] }));
+    _pieces(c.function.arguments, 6).forEach(function (p) { frames.push(frame({ tool_calls: [{ index: i, function: { arguments: p } }] })); });
+  });
+  frames.push(frame({}, (toolCalls && toolCalls.length) ? 'tool_calls' : 'stop'));
+  if (body && body.stream_options && body.stream_options.include_usage) frames.push('data: ' + JSON.stringify({ id: id, object: 'chat.completion.chunk', choices: [], usage: { prompt_tokens: 100, completion_tokens: 60, total_tokens: 160 } }) + '\n\n');
+  frames.push('data: [DONE]\n\n');
+  res.writeHead(200, Object.assign({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }, CORS));
+  let k = 0;
+  (function next() {
+    if (k >= frames.length) { res.end(); return; }
+    res.write(frames[k++]);
+    setTimeout(next, STREAM_MS);
+  })();
+}
+
 http.createServer(function (req, res) {
   if (req.method === 'OPTIONS') { res.writeHead(204, CORS); res.end(); return; }
   if (req.method !== 'POST') { res.writeHead(200, CORS_JSON); res.end(JSON.stringify({ ok: true, hint: 'POST /v1/chat/completions' })); return; }
@@ -142,7 +178,7 @@ http.createServer(function (req, res) {
         res.end(JSON.stringify({ error: { message: '（mock）Incorrect API key provided. 你填的 Key 不对或已失效。', type: 'invalid_request_error', code: 'invalid_api_key' } }));
         return;
       }
-      reply(res, calls);
+      if (body.stream === true) streamReply(res, calls, body); else reply(res, calls);
     }, DELAY);
   });
 }).listen(PORT, '127.0.0.1', function () {

@@ -3406,7 +3406,10 @@
         }
       } });
       if(opts.workbenchTask&&control.workbench){tracked.beforeRequest=function(info){return _WORKBENCH.reserveCall(control.workbench,info.bodyBytes);};}
-      return Promise.resolve().then(function(){return actualCaller(conv,offered,tracked);}).then(function(r){if(!responses){metrics.responses++;addUsage(r && r.usage);}return r;}).finally(function(){metrics.requestElapsedMs+=Date.now()-began;});
+      return Promise.resolve().then(function(){return actualCaller(conv,offered,tracked);}).then(function(r){if(!responses){metrics.responses++;addUsage(r && r.usage);}return r;}).finally(function(){
+        metrics.requestElapsedMs+=Date.now()-began;
+        if (typeof tracked.onDelta === 'function') { try { tracked.onDelta({ kind: 'done' }); } catch (_) {} }   // 这一问收完：界面上旁听的半截可以收起
+      });
     }
     var maxIterations = opts.maxIterations || 48;     // 刀D · 自主度：放宽到 48 轮·持续调用直到完成（UI 还会自动续接）
     var maxTokens = opts.maxTokens || 260000;         // 刀D · 自主度：token 预算放宽·覆盖长任务一次跑完
@@ -3524,6 +3527,7 @@
     var noToolNudges = 0, maxNoToolNudges = (opts.maxNoToolNudges != null ? opts.maxNoToolNudges : 2);
     var textToolFallback = !!(resume && resume.textToolFallback);
     var explicitStream = !!(resume && resume.explicitStream); // 只记本任务已协商的传输方式，不写 API 设置。
+    var streamOff = false;   // S4 · 实时显示：这条路不认流式时，本次余下几轮不再开
     var provenToolFormat = resume && resume.provenToolFormat || '';
     var apiDiagnostics = resume && Array.isArray(resume.apiDiagnostics) ? _agentClone(resume.apiDiagnostics).slice(-4) : [];
     function assistantTurn(resp, text, calls) {
@@ -3647,7 +3651,9 @@
       if (tokensUsed >= maxTokens) { stopReason = 'tokenBudget'; return Promise.resolve(); }   // 刀G8 · 硬停挪到压缩之后(先自救再认命)
       iterations++;
       var issuedTools = Object.assign({},executableTools);
-      return Promise.resolve(caller(conversation, tools, { maxTok: _curMaxTok || opts.maxTok, cfg: opts.cfg, system: system, signal: control.signal, textToolFallback: textToolFallback, explicitStream: explicitStream }))
+      var liveStream = opts.stream === true && !streamOff;
+      return Promise.resolve(caller(conversation, tools, { maxTok: _curMaxTok || opts.maxTok, cfg: opts.cfg, system: system, signal: control.signal, textToolFallback: textToolFallback, explicitStream: explicitStream,
+        stream: liveStream, onDelta: liveStream && typeof opts.onDelta === 'function' ? opts.onDelta : undefined }))
         .then(function(resp) {
           stepRetries = 0;   // 成功一轮即重置：每个停顿点各容忍 maxStepRetries 次抖动
           var text = (resp && resp.text) || '';
@@ -3655,6 +3661,7 @@
           if (resp && resp.responseInfo) { apiDiagnostics.push(_agentClone(resp.responseInfo)); if (apiDiagnostics.length > 4) apiDiagnostics.shift(); }
           if (resp && resp.fallback) textToolFallback = true;
           if (resp && resp.explicitStream === true) explicitStream = true;
+          if (resp && resp.streamOff === true) streamOff = true;
           // 刀H1(CC max_tokens 动态调整对照) · 输出截断自愈:被 maxTok 腰斩(没调成工具/入参 JSON 斩断)
           //   → 输出上限×2重试本轮。斩断的响应整体弃置(完好的调用也未执行·重试无双跑)。
           if (resp && resp.truncated && !control.aborted) {
@@ -4105,7 +4112,8 @@
     function runStage(key, request, extra) {
       var previous = state[key], review = key === 'history' || key === 'balance';
       if (previous && (review ? previous.finished && previous.review : _editFinished(previous))) return Promise.resolve(previous);
-      return runAuthoringLoop(draft, request + followUp, baseClean(Object.assign({}, extra || {}, { resumeState: previous && previous.resumeState })))
+      var quiet = review ? { stream: false, onDelta: undefined } : {};   // 史官、谏官并行审：两路字混在一起没法看，不实时显示
+      return runAuthoringLoop(draft, request + followUp, baseClean(Object.assign({}, extra || {}, quiet, { resumeState: previous && previous.resumeState })))
         .then(function(r) { state[key] = r; return r; }, function(e) { state[key] = e.partial || null; throw e; });
     }
     function fail(error) { error.partial = wrap(false, error.partial); throw error; }

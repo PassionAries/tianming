@@ -107,7 +107,7 @@
       case 'readAttachment': case 'searchAttachment': case 'readAttachmentJson': return (_TOOL_CN[n] || n) + '「' + (i.name || '') + '」';
       case 'askClarification': return '请教你 ' + ((i.questions || []).length || '') + ' 个问题';
       case 'remonstrate': return '进谏：' + _shortVal(i.concern, 40);
-      case 'finish': return '收尾：' + _shortVal(i.summary, 60);
+      case 'finish': return '收尾：' + _shortVal(String(i.summary || '').replace(/\*\*|__|`|^#+\s*|^\s*[-*]\s+/gm, '').replace(/\s+/g, ' ').trim(), 60);   // 一行里不露 Markdown 记号
       default: return (_TOOL_CN[n] || n) + (i && typeof i === 'object' && Object.keys(i).length ? ' ' + _shortVal(i[Object.keys(i)[0]], 40) : '');
     }
   }
@@ -568,5 +568,5 @@
   __aaU.renderRemonstrance = renderRemonstrance; __aaU.renderPlan = renderPlan;
   __aaU.validationDelta = validationDelta; __aaU.supersedeDiff = supersedeDiff; __aaU._findingHtml = _findingHtml;
   __aaU._friendlyStep = _friendlyStep; __aaU._friendlyPath = _friendlyPath; __aaU._fieldLabel = _fieldLabel; __aaU._shortVal = _shortVal;
-  __aaU._readableViolation = _readableViolation; __aaU._idNameMap = _idNameMap; __aaU._COLL_CN = _COLL_CN; __aaU._setLive = _setLive;
+  __aaU._readableViolation = _readableViolation; __aaU._idNameMap = _idNameMap; __aaU._COLL_CN = _COLL_CN; __aaU._setLive = _setLive; __aaU._ensureExecBlock = _ensureExecBlock;
 })(typeof window !== 'undefined' ? window : this);

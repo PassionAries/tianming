@@ -14,3 +14,8 @@
 
 结论：本分支相对 bddd3c51 无 smoke 回归。两个超时用例在本机属负载敏感，production-dependencies 属 junction 环境问题。
 最慢 Top 3：smoke-perf-save-preparation 169s · smoke-npc-composite-official 121s · smoke-circuit-governor-effects-tang 110s。
+
+—— 变基到 d41e534a 之后（第四刀补齐派生清单）——
+定向 run-smokes（endturn/release/hot-/manifest/retention/right-panel/startup/split/memory/faction-npc/content-manager/preview/tax/emergency/minxin/editor-admin/formal-map）：
+第一次 189/190，smoke-startup-phase-observability FAIL——分期清单是拿变基前的 global-providers 报告生成的，少 5 个主干新函数；
+重跑 lint-global-providers 后重生成并重打热更基线，该用例 PASS（scripts=479），四项 --check 与 release contract 176 全绿。

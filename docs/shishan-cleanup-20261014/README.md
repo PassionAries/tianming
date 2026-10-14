@@ -1,7 +1,7 @@
 # 屎山清理·第一轮（2026-10-14）
 
 同志令：「看看天命的史山代码情况，清理、优化一下」。本轮先摸底，再只动「能被门禁和 smoke 验证」的两刀；
-其余列成账，等拍板。工作区 `E:/tianming-shishan-20261014`，分支 `claude/shishan-cleanup-20261014`，基于 origin/main `bddd3c51`。
+其余列成账，等拍板。工作区 `E:/tianming-shishan-20261014`，分支 `claude/shishan-cleanup-20261014`，基于 origin/main `bddd3c51`；10-14 夜变基到主干最新 `d41e534a`（提交号以变基后为准）。
 
 ## 一、摸底（bddd3c51）
 
@@ -22,7 +22,7 @@
 
 ## 二、本轮做了什么
 
-### 第一刀 `68c6ed22`：删 31 个零引用函数（445 行，15 个文件）
+### 第一刀 `dd63e1b5`（变基前 68c6ed22）：删 31 个零引用函数（445 行，15 个文件）
 口径：任意缩进的 `function` 声明与函数表达式赋值，标识符在全部运行时文本 + web/scripts + scripts 里整词只出现一次。
 按原始字节切行删除，混排的 CRLF/LF 不动。清单在提交信息里。
 
@@ -31,14 +31,24 @@
 `_seedRecordFromP1ForApplyFailure`（lib-player-error-regression.js）、`_fireCommitCanon`（smoke-sc1q-sc19-upgrade.js）、`rightIssueRows`（smoke-right-panel-lag-guards.js）。
 要删它们得先改这些 smoke 的契约，属于另一刀。
 
-### 第二刀 `b93b69ac`：删 127 个一次性垃圾文件（19.9MB）
+### 第二刀 `cf1d38a4`（变基前 b93b69ac）：删 127 个一次性垃圾文件（19.9MB）
 - web/ 根 4 件废 JSON/脚本/报告；web/preview/ 45 件备份与 codemod；release-hot/ 78 件旧推送脚本（只留 `.env.local.example`）。
 - 随动：package.json / release-excludes.json / verify-release-contract.js 去掉已无对象的排除项；PROJECT-STRUCTURE.md 改 release-hot 口径；
   `.hot-update-manifest.json` 删 16 条条目并对齐哈希；`source-manifest.json` 删 37 条已删路径。
 
+### 第三刀 `0cb4fd94`：本目录两份记录
+README 与 final-smokes.txt。
+
+### 第四刀：变基后补齐派生清单
+主干 26ec4c81～d41e534a 那几笔改了 13 个文件的字节却没重生成派生清单，`sync-hot-baseline --check` 报 13 项 stale、
+`build-startup-phase-manifest --check` 也 stale，GitHub guards 工作流的「Cross-release contract」在 d41e534a 上因此红。
+这一刀按脚本顺序重生成：lint-global-providers 报告 → startup-script-phases.json → tm-start-runtime-manifest.json → 重打 .hot-update-manifest.json。
+（顺序错了会像我第一次那样：用旧的 providers 报告生成分期清单，少 5 个新函数，smoke-startup-phase-observability 立刻抓出来。）
+
 ### 门禁
 lint-arch-all 15/15 绿；verify-release-contract 176 项绿；sync-hot-baseline --check 绿；verify-hot-builder-gates 27 项绿；
 build-native-preparation-manifest --check 绿；定向 smoke 177 + 13 + 41 全过；全量 ci-smokes 结果见本目录 `final-smokes.txt`。
+变基到 d41e534a 后：lint-arch-all 15/15、hot-builder-gates 27、四项 --check、release contract 176 再次全绿；定向 smoke 190/190（含主干新加的税诏/过回合用例）。
 Electron 七组未在本机跑（改动不含界面）。
 
 ## 三、没动的，和为什么

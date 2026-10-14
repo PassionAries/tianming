@@ -2916,12 +2916,12 @@
     },
     {
       "path": "bundled-scenarios/manifest.js",
-      "sha256": "f71fec77b70df92485ff823e2fffd198c9c3daaefcaf59a29119cc29b6ef40cb",
+      "sha256": "d447497ded314e6033e29a736d9bf4f9043377d197b53efe190ccd501d93ef67",
       "size": 6008
     },
     {
       "path": "bundled-scenarios/manifest.json",
-      "sha256": "4d36a1ba006ddb9121f9903cec92cbc54e5ea71874742d1f1cce801ef1565d8d",
+      "sha256": "71376b21a38f8ee5a1e6f4d91ace67c0d1b77f684b2e2b7a6e374fa85d751943",
       "size": 6387
     },
     {
@@ -4181,8 +4181,8 @@
     },
     {
       "path": "preview/official-scenarios-bundle.js",
-      "sha256": "24aeddb5aea55f955f8e4dbb3d3246bc312dc4d991ba2e3999f13b94a6129847",
-      "size": 724
+      "sha256": "e681d92378101abe1340ffb342ede85c37e24af8b8d0438c1397a2da641df990",
+      "size": 644
     },
     {
       "path": "preview/opening-redesign-preview.html",
@@ -4261,8 +4261,8 @@
     },
     {
       "path": "preview/scenario-editor-reset-preview.html",
-      "sha256": "ae121e977e4704a7a81216e4a7afd1fb339c1251745b3b3852071290c62029e1",
-      "size": 33991
+      "sha256": "8b562364b68ea8a3bd93aea9a32ff6840d9233230b80980d4e1b64b50246f379",
+      "size": 34299
     },
     {
       "path": "preview/scenario-editor-reset-style.css",
@@ -4361,18 +4361,18 @@
     },
     {
       "path": "scenarios/shaosong-jianyan-1127.js",
-      "sha256": "0ee62d18736a578e1c3d89084511efa641110fe1741aa65b39f65ce15dffab27",
-      "size": 50885204
+      "sha256": "35df28df7e86ff88426d1b6af77ce0e74ef3f2dddbf80b7729765d5d3378b9b5",
+      "size": 50885358
     },
     {
       "path": "scenarios/tang840-840.js",
-      "sha256": "bf54a3250c4b3e263ca85c9a9d8547800b96b4cdd449a9d60c48196709c283da",
-      "size": 31914383
+      "sha256": "eab1a297502a0b001c0d6c629381b316ebb6c4d9aa32c33160c3d671739879fe",
+      "size": 31914537
     },
     {
       "path": "scenarios/tianqi7-1627.js",
-      "sha256": "3b8aebe99f7171fcd8036580ffd9b731134aae04473e7483efb60d4001b76a11",
-      "size": 10023328
+      "sha256": "ca13e4bc396b92035decd9fccad945730fa965137c9a4275250842e1fa81644f",
+      "size": 10023482
     },
     {
       "path": "schemas/sc1.schema.json",
@@ -4396,8 +4396,8 @@
     },
     {
       "path": "source-manifest.json",
-      "sha256": "42f4cf8badf110de131e04dce8be9f08a6f1508b192e98d1892f3930f4f7656b",
-      "size": 30224
+      "sha256": "ace36d505523c8121989cfa102f31b0794cd1f6ed735bcc58c6fbbf2c8387134",
+      "size": 30191
     },
     {
       "path": "startup-script-phases.json",
@@ -6240,19 +6240,14 @@
       "size": 3400
     },
     {
-      "path": "tm-official-scenario-bundle.js",
-      "sha256": "ae2ff0ccd18eb4234890cf955c17cb569328028aa2106564ead58162bda02ae3",
-      "size": 92821491
-    },
-    {
       "path": "tm-official-scenario-loader.js",
       "sha256": "51ea397a1eb3eabfa4425a6f600ff2ae3079fef25eb35b27586f7a8633bfb675",
       "size": 12483
     },
     {
       "path": "tm-official-scenario-seeder.js",
-      "sha256": "c534552c405c10e89cefa569696fd95452c0884318af47b2a9df36eddbb5c842",
-      "size": 3850
+      "sha256": "66905146e086731837a1623c2fa65e93319a18a8d71717bc7726d06f7cb452a5",
+      "size": 3697
     },
     {
       "path": "tm-onboard-tools.js",
@@ -6591,7 +6586,7 @@
     },
     {
       "path": "tm-start-runtime-manifest.json",
-      "sha256": "037ba35f3ff5adc3d40ab229ae9e2b3872c7faa5bb2d15acf84a4b07df27bbb2",
+      "sha256": "2d5625e2f794c5cb520ce4fa5cedb95b957debb304c86e8dcedfa2bdc4254702",
       "size": 138845
     },
     {

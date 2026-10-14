@@ -1,9 +1,11 @@
-/* GENERATED FILE. Source: ../tm-official-scenario-bundle.js（须先装载）. Run `node web/scripts/sync-official-scenarios.js`. */
+/* GENERATED FILE. Source: ../scenarios/*.js（须先装载）. Run `node web/scripts/sync-official-scenarios.js`. */
 (function(global){
-  var KEY_BY_FILENAME = {"天启七年·九月（官方）":"tianqi7","绍宋·建炎元年八月（官方）":"shaosong","晚唐·开成五年（官方）":"tang840"};
-  var list = global.TMOfficialScenarioBundle;
-  if (!Array.isArray(list)) throw new Error("official-scenarios-bundle.js: 须先装载 ../tm-official-scenario-bundle.js");
+  var KEY_BY_ID = {"sc-tianqi7-1627":"tianqi7","sc-jianyan1-1127-shaosong":"shaosong","sc-tang840-840":"tang840"};
+  var registry = global.TMOfficialScenarioBuiltins;
   var out = {};
-  list.forEach(function(entry){ var key = entry && KEY_BY_FILENAME[entry.filename]; if (key) out[key] = entry.data; });
+  Object.keys(KEY_BY_ID).forEach(function(id){
+    if (!registry || !registry[id]) throw new Error("official-scenarios-bundle.js: 须先装载 ../scenarios/*.js（缺 " + id + "）");
+    out[KEY_BY_ID[id]] = registry[id];
+  });
   global.TM_OFFICIAL_SCENARIOS = out;
 })(typeof window !== "undefined" ? window : globalThis);

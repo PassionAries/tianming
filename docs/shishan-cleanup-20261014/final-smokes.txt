@@ -19,3 +19,19 @@
 定向 run-smokes（endturn/release/hot-/manifest/retention/right-panel/startup/split/memory/faction-npc/content-manager/preview/tax/emergency/minxin/editor-admin/formal-map）：
 第一次 189/190，smoke-startup-phase-observability FAIL——分期清单是拿变基前的 global-providers 报告生成的，少 5 个主干新函数；
 重跑 lint-global-providers 后重生成并重打热更基线，该用例 PASS（scripts=479），四项 --check 与 release contract 176 全绿。
+
+—— 第二轮（10-15 凌晨，分支 @ b7509202 = 672b9097/e582e821/3476a04b/8f55bd30/25f766ac/b7509202）——
+命令同上（--jobs 2；机器当时 CPU 82%，别的会话在跑 Codex 与 newui）。
+跑到 [785/1164] 时被 Claude Code 以「系统内存吃紧」停掉（不是用例失败；未自行重启）。已执行 785 条：1 FAIL · 4 TIMEOUT，其余通过。
+1. smoke-building-appraisal-compat.js —— 真回归，8f55bd30 引入：harness 整装 tm-ai-infra-json.js、只按名抽 tm-utils 几个函数，
+   robustParseJSON 搬回 tm-utils 后上下文里没了；调用点裹 try/catch，ReferenceError 被当解析失败吞掉，兜底解析断言露馅（23/24）。
+   --ref d41e534a 与 --ref 3476a04b 对照 24/24，--ref 8f55bd30 起 23/24。修在 b7509202：lib-turn-reliability.js（12 个 smoke 共用）
+   与 3 个单独 smoke 按名抽正典进上下文；探针（钩 vm.runInContext 查 typeof robustParseJSON）核 23 条同类 harness，全部齐全、全过。
+   探针还抓到 smoke-secondary-task-retries 此前静默走到过一次缺失函数、仍 17/17——假绿，一并修掉。
+2. smoke-edict-data-writeback.js —— 并发 120.7s 超时；单跑 PASS（104s）。
+3. smoke-map-circuit-book-shaosong.js —— 并发 121.6s 超时；单跑 PASS（108s）。
+4. smoke-npc-composite-official.js —— 并发 121.0s 超时；第一轮已核单跑 PASS（90.7s）。
+5. smoke-office-seat-dept-prefix.js —— 并发 121.8s 超时；单跑 PASS（111s）。
+未跑到的 379 条（字母序 office-seat-dept-prefix 之后）本轮没有全量结论，待机器空闲补跑。
+已另核：触及族定向 run-smokes 75 条、四刀各自的随动 smoke、lint-arch-all 15/15（b7509202 后复跑）、release contract 176、
+hot-builder-gates 27、四项 --check 全绿。

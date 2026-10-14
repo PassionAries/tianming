@@ -4401,8 +4401,8 @@
     },
     {
       "path": "startup-script-phases.json",
-      "sha256": "d11714be83f976d2ee31ab2dc9357ba4cbdab5156f4f87c966dea9ac7e9fe8b0",
-      "size": 390576
+      "sha256": "70ba5a8150a39b5a9e468b4539bf491c5a16efdeb2670029796da0a9463b392f",
+      "size": 390611
     },
     {
       "path": "styles.css",
@@ -4431,8 +4431,8 @@
     },
     {
       "path": "tm-ai-change-army.js",
-      "sha256": "c4057529d5e57a65d41573812e18777a0821604a0de0b84e57fe0d6d1e1f02d4",
-      "size": 47762
+      "sha256": "f48d4f298843f74e67662e035f20628d3a08d41cdbd125711da22d437abe5656",
+      "size": 48447
     },
     {
       "path": "tm-ai-change-narrative.js",
@@ -5416,13 +5416,13 @@
     },
     {
       "path": "tm-file-export.js",
-      "sha256": "415c6dae92d62d0249dbe1c33acfece674ad286ae090f3458abc497256b2ec4a",
-      "size": 2261
+      "sha256": "21482a77d6a04c9ab70abb7d98b5f1d8016bd58e3b23d9d80adb8f91b1dab2ab",
+      "size": 5523
     },
     {
       "path": "tm-fiscal-engine.js",
-      "sha256": "cbc9911d6335efd89d762063de5b8c05b5b50dc3ccf0505477372d27dab678b3",
-      "size": 165549
+      "sha256": "061959c5e6020f78c6a9856da8a436ab44d20194bbca28efb5b5f1c3244a4a45",
+      "size": 166384
     },
     {
       "path": "tm-fiscal-statements.js",
@@ -5441,8 +5441,8 @@
     },
     {
       "path": "tm-game-loop-wentian-hardchange.js",
-      "sha256": "40c4772b534e5a71d2e57e4c9b692547b42349a63f3f643ca6b0280cdbcfc101",
-      "size": 68342
+      "sha256": "537e72fdc6a61246184b171fd7cf08741b7a402a5d5bbb10cd16653338618ad7",
+      "size": 68863
     },
     {
       "path": "tm-game-loop.js",
@@ -6481,8 +6481,8 @@
     },
     {
       "path": "tm-revolt-inference.js",
-      "sha256": "3f7b65fcd0f7c0dabd6019be339011420797674c04b2657bdf0a92c11799b674",
-      "size": 32351
+      "sha256": "fea35722f6420f688d0efd8e81e48ce4498bf185f2d02c2068bd1bc2865f275a",
+      "size": 32564
     },
     {
       "path": "tm-save-close-flush.js",
@@ -6496,8 +6496,8 @@
     },
     {
       "path": "tm-save-manager.js",
-      "sha256": "448f7c78813f96c1807c93ecd8faa2636e3293ce10456dd7cd3d2199ef63ca98",
-      "size": 51977
+      "sha256": "ba4afb9911dd704bd0477cdd33e555083e1c1aab2a2835b6b4c2a50fa60a6516",
+      "size": 53708
     },
     {
       "path": "tm-save-world-validation.js",
@@ -6591,7 +6591,7 @@
     },
     {
       "path": "tm-start-runtime-manifest.json",
-      "sha256": "cefee5fdb6f9903f6b314e81080a0c50a2d90810666252d06e17799dca66f41a",
+      "sha256": "037ba35f3ff5adc3d40ab229ae9e2b3872c7faa5bb2d15acf84a4b07df27bbb2",
       "size": 138845
     },
     {

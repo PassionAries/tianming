@@ -682,7 +682,8 @@
       "sideEffects": "legacy-unknown",
       "provides": [
         "_tmAITextResult",
-        "_tmAIToolJSON"
+        "_tmAIToolJSON",
+        "robustParseJSON"
       ],
       "consumes": [],
       "dependsOn": [],
@@ -8559,7 +8560,6 @@
         "_cc3_writeJishiRecord",
         "_cc3_writeNextItemEmperorIntent",
         "_cc3_writeNpcInteraction",
-        "_ccEscHtml",
         "addBubble",
         "aiEnabled",
         "avatarHtml",
@@ -8569,6 +8569,7 @@
         "delay",
         "dismissStrictQueue",
         "doAction",
+        "escHtml",
         "finalizeAction",
         "findMentionedChars",
         "generateNpcReply",
@@ -9142,6 +9143,7 @@
         "_tmClearDanglingStableRefs",
         "_tmRepairDuplicateDivisionIds",
         "_tmRepairDuplicateEntityIds",
+        "_tmRepairPlayerIdentityReceipt",
         "_tmValidateFiniteWorldNumbers",
         "_tmValidateLoadedWorld",
         "_tmValidateStableForeignKeys",

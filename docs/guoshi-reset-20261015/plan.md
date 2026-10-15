@@ -68,4 +68,4 @@
 
 1. 实时显示：维持默认开。
 2. 思考原文：默认显示，设置里可关。
-3. 合入主干并推送。
+3. 合入主干并推送：变基到 04174ff3、同步派生清单后开 PR #107，CI 十项全绿（guards 含全量 smoke、Electron 七组含 authoring、mobile-release-contracts、electron-bridge；run 38775909351），快进推到 main。

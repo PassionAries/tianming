@@ -1837,8 +1837,8 @@
   var _LIVE_ANSWER_KEY = { finish: 'summary', submitAnswer: 'answer', submitReview: 'summary', submitExplanation: 'summary', submitSummary: 'summary', remonstrate: 'concern' };
   function _streamOffMap() { try { return JSON.parse(localStorage.getItem(_STREAM_OFF_KEY) || '{}') || {}; } catch (e) { return {}; } }
   function _streamLineKey() { var c = _loadApiCfg() || {}; return String(c.url || '') + '|' + String(c.model || ''); }
-  // 显示思考原文：模型的推理原文默认不上屏（只原样回传给它续轮）；这里是玩家自己选择要看
-  function _showThinking() { return _prefOn('tm_aa_show_thinking', false); }
+  // 显示思考原文：默认上屏（同志 2026-10-16 定）；只是给人看——原文照旧原样回传给模型续轮，从不当指令执行。设置·偏好可关
+  function _showThinking() { return _prefOn('tm_aa_show_thinking', true); }
   function _streamOn() { return _prefOn('tm_aa_stream', true) && !_streamOffMap()[_streamLineKey()]; }
   // 开：连这条线路上回记下的「不支持」一起清掉，再试一次
   function _setStreamPref(on) {
@@ -1915,7 +1915,7 @@
     var s = _lv; if (!s || !ui.els || !ui.els.log) return;
     s.last = Date.now();
     var blk = null;
-    // 想法：默认只在活动行说一句「正在想…」；打开「显示思考原文」才把原文贴进「思考与查阅」，边想边长
+    // 想法：原文贴进「思考与查阅」，边想边长；关了「显示思考原文」就只在活动行说一句「正在想…」
     if (s.thinking && !_showThinking() && !final) __aaU._setLive('正在想…', true);
     if (s.think.trim() && _showThinking()) {
       blk = __aaU._ensureExecBlock();
@@ -2204,7 +2204,7 @@
       var streamLineOff = _prefOn('tm_aa_stream', true) && !_streamOn();
       html = '<div class="sh-sec"><div class="sh-sec-h">外观与显示</div><div class="tm-aa-seg" data-seg="theme"><button type="button" data-v="dark"' + (dark ? ' class="on"' : '') + '>漆案（深色）</button><button type="button" data-v="light"' + (!dark ? ' class="on"' : '') + '>宣纸（浅色）</button></div>'
         + _swHtml('stream', _streamOn(), '实时显示', streamLineOff ? '这条线路上回不支持流式，已自动改成整段返回。打开会再试一次。' : '国师边查边说，字一个个冒出来。个别中转不支持时会自动退回整段返回。')
-        + _swHtml('thinking', _showThinking(), '显示思考原文', '有的模型会先想一段再动手。默认不显示这段原文（它是模型的草稿，杂乱，也可能夹着像工具调用的字样），打开后在「思考与查阅」里能看到。')
+        + _swHtml('thinking', _showThinking(), '显示思考原文', '有的模型会先想一段再动手，这段原文显示在「思考与查阅」里。它是模型的草稿，可能杂乱，也可能夹着像工具调用的字样——只给你看，不会被执行。嫌乱可以关掉。')
         + '</div>'
         + '<div class="sh-sec"><div class="sh-sec-h">国师的做法</div>'
         + _swHtml('microplan', _microPlanOn(), '歧义先对齐', '要求有几种做法、影响面大时，先给一份小计划让你点头再动手。')

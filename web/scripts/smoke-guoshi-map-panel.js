@@ -22,7 +22,7 @@ ok(/localStorage\.getItem\('tm_aa_stream'\) === '0'/.test(ui) && /var STREAM_OFF
 ok(/function lineKey\(cfg\) \{ return String\(cfg\.url \|\| ''\) \+ '\|' \+ String\(cfg\.model \|\| ''\); \}/.test(ui)
   && /function _streamLineKey\(\) \{ var c = _loadApiCfg\(\) \|\| \{\}; return String\(c\.url \|\| ''\) \+ '\|' \+ String\(c\.model \|\| ''\); \}/.test(mainUi), '线路记号的键两边同一写法（地址|模型）');
 ok(/AA\.partialJsonString\(t\.args, 'summary'\)/.test(ui), '收尾说明的实时预览用核心里的半截参数读取');
-ok(/localStorage\.getItem\('tm_aa_show_thinking'\) === '1'/.test(ui) && /if \(s\.think\.trim\(\) && showThinking\(\)\) \{/.test(ui), '思考原文默认不上屏（与工坊同一开关）');
+ok(/localStorage\.getItem\('tm_aa_show_thinking'\) !== '0'/.test(ui) && /if \(s\.think\.trim\(\) && showThinking\(\)\) \{/.test(ui), '思考原文默认上屏、可关（与工坊同一开关）');
 ok(/ev\.kind === 'done'\) \{ if \(r\.lv\) lvPaint\(r\); lvClear\(r, true\); return; \}/.test(ui), '一问收完：想法留作一条，旁听的半截收起');
 ok(/data-act="undo">撤销这次<\/button>/.test(ui) && /var u = ME\.agent\.undo\(\);/.test(ui), '改了地图的回复下面直接给「撤销这次」');
 ok(/if \(e\.key === 'Escape'\) \{ e\.preventDefault\(\); if \(ME\.agent\.isRunning\(\)\) stop\.click\(\);/.test(ui), 'Esc：在跑就停，不在跑就收起');

@@ -173,7 +173,7 @@ console.log('smoke-guoshi-stream');
     assert.match(ui, /if \(options\.stream == null && _streamOn\(\)\) \{/);
     assert.match(ui, /options\.stream = true; options\.onDelta = function \(ev\) \{ if \(current\(\)\) _onDelta\(ev\); \};/, '只管显示：案卷换了就不画');
     assert.match(ui, /\['onStep', 'onText', 'onSubtask', 'onCritique'\]\.forEach/, '实时显示不进「过期就中断」那组回调（中断时机留给步骤回调）');
-    assert.match(ui, /function _showThinking\(\) \{ return _prefOn\('tm_aa_show_thinking', false\); \}/, '思考原文默认不上屏');
+    assert.match(ui, /function _showThinking\(\) \{ return _prefOn\('tm_aa_show_thinking', true\); \}/, '思考原文默认上屏（同志 10-16 定），偏好可关');
     assert.match(ui, /if \(s\.think\.trim\(\) && _showThinking\(\)\) \{/);
     assert.match(ui, /_swHtml\('thinking', _showThinking\(\), '显示思考原文'/);
     assert.match(ui, /function _streamOn\(\) \{ return _prefOn\('tm_aa_stream', true\) && !_streamOffMap\(\)\[_streamLineKey\(\)\]; \}/);

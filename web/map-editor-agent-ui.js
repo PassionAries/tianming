@@ -66,7 +66,7 @@
         return !off[lineKey(cfgNow())];
       } catch (e) { return true; }
     }
-    function showThinking() { try { return localStorage.getItem('tm_aa_show_thinking') === '1'; } catch (e) { return false; } }
+    function showThinking() { try { return localStorage.getItem('tm_aa_show_thinking') !== '0'; } catch (e) { return true; } }
     function rememberStreamOff() {
       try {
         var off = JSON.parse(localStorage.getItem(STREAM_OFF_KEY) || '{}') || {};
@@ -175,7 +175,7 @@
     function lvPaint(r) {
       var s = r && r.lv; if (!s) return;
       s.timer = 0;
-      if (s.think.trim() && !showThinking()) r.live.textContent = '正在想…';   // 思考原文默认不上屏（与工坊同一开关）
+      if (s.think.trim() && !showThinking()) r.live.textContent = '正在想…';   // 关了「显示思考原文」只说在想（与工坊同一开关）
       if (s.think.trim() && showThinking()) {
         if (!s.thinkEl) { s.thinkEl = document.createElement('div'); s.thinkEl.className = 'mg-line reason streaming'; r.steps.appendChild(s.thinkEl); }
         var th = s.think.replace(/^\s+/, '');

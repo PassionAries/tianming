@@ -65,3 +65,8 @@ hot-builder-gates 27、sync-official --check（artifacts=10）、hot-baseline --
 热更基线手摘旧条目后 hot-/manifest/release 三族复跑：7 PASS。
 根目录 scripts/smoke-scenario-no-bleed.js 改读注册表后 A3 仍红，与改前一致（不在 run-smokes 自动发现范围，主干既有）。
 全量 smoke 与 Electron 七组交 GitHub CI（PR → main），结果补在下面。
+GitHub CI（PR #106 → main，run 38656592494，分支 @ b7d25acb）十项全绿：
+guards = sync-official --check（artifacts=10）、parity 46、hot-baseline files=800（容忍 595）、release contract 176（files=809 bytes=387,020,170）、hot-builder-gates 27、lint-arch-all、
+全量 ci-smokes --jobs 2：[run-smokes] 完成：1166 PASS · 0 FAIL · 0 SKIP · 2 WAIVED / 1168 executed · 0 suspect · 总耗时 893s（新增 smoke-official-scenario-seeder，总数 1167→1168）；
+Electron 七组（core/battle/court/maps/official-authoring/authoring/relief）、electron-bridge、mobile-release-contracts 全绿。guards 作业 11 分钟（23:51→00:02 UTC）。
+本机负载下红过的 tang840-ledgers / full-turn-flow / perf-save-preparation / production-dependencies 在 CI 干净环境全过，再次坐实是环境不是回归。

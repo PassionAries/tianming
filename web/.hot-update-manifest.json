@@ -2,7 +2,7 @@
   "type": "tianming-hot-update",
   "version": "1.3.5.3",
   "entry": "index.html",
-  "generatedAt": "2026-10-16T17:01:07.500Z",
+  "generatedAt": "2026-10-16T18:35:09.375Z",
   "files": [
     {
       "path": "ARCHITECTURE.md",
@@ -4436,8 +4436,8 @@
     },
     {
       "path": "tm-ai-change-army.js",
-      "sha256": "f48d4f298843f74e67662e035f20628d3a08d41cdbd125711da22d437abe5656",
-      "size": 48447
+      "sha256": "4bfec6374b6f0a287a130356a6c674978857f6852ea60fb2be05096c67d93414",
+      "size": 48589
     },
     {
       "path": "tm-ai-change-narrative.js",
@@ -5116,8 +5116,8 @@
     },
     {
       "path": "tm-endturn-edict.js",
-      "sha256": "d10454672e678114898afd8d12d04dba25861298406e3c2e081b242a909a961e",
-      "size": 90231
+      "sha256": "26216309b827247ce3b4a587d2574ffc74c3064319d4f2ebbd05d79cf042da60",
+      "size": 92620
     },
     {
       "path": "tm-endturn-followup-helpers.js",
@@ -5421,18 +5421,18 @@
     },
     {
       "path": "tm-file-export.js",
-      "sha256": "21482a77d6a04c9ab70abb7d98b5f1d8016bd58e3b23d9d80adb8f91b1dab2ab",
-      "size": 5523
+      "sha256": "3cab8edb150df31c4db16afbd6fdd8a2c9ece6d0155a5e75f05d845acd8f3476",
+      "size": 6148
     },
     {
       "path": "tm-fiscal-engine.js",
-      "sha256": "053946f4d8797e3df7d169e819793e0be131ab3cea2117c82e8029141c64c2f6",
-      "size": 168174
+      "sha256": "ab1179f445a49fea96660840c6b11dc9d055d3a075d297a7efba4fb1f527d2ae",
+      "size": 168447
     },
     {
       "path": "tm-fiscal-statements.js",
-      "sha256": "77307f9c93b9026fcae9adf1f7dcd57aa65e508135ede834db45b52fa343d69c",
-      "size": 27629
+      "sha256": "f948a65cbbe41d80cf427b6fe89abf698c3185301c28dd31ed4ac0acb96a7aac",
+      "size": 27823
     },
     {
       "path": "tm-fiscal-ui.js",
@@ -5471,8 +5471,8 @@
     },
     {
       "path": "tm-guoku-engine.js",
-      "sha256": "78ef26e74ec58a0676c8b322eb4a0426c1cc0ba00dbbb2b360a0ffec1fdfe4cb",
-      "size": 152448
+      "sha256": "b7c0704a1775376f0fb338e1d953c37ae718f4a8fbbfd73420c2cc2cc319b249",
+      "size": 152846
     },
     {
       "path": "tm-guoku-panel.js",
@@ -6056,8 +6056,8 @@
     },
     {
       "path": "tm-minxin-hard-links.js",
-      "sha256": "bad86543f6810e26e20b61e3f0a04cb587a7ab50a8dc34ccfd0eea9c54c63f7d",
-      "size": 29257
+      "sha256": "8cab7bdd719e70bf7991287625923d5c20ed1e167978407f1649ee5bfb0d4d35",
+      "size": 29366
     },
     {
       "path": "tm-minxin-ledger.js",
@@ -6491,8 +6491,8 @@
     },
     {
       "path": "tm-save-lifecycle.js",
-      "sha256": "d3ba24c458e0334f86b41039c0ece1ee0782aefc91163a13074d11e185c4bafd",
-      "size": 172103
+      "sha256": "16d8037bbf9399bec6353e4eaee2cf0c125bacd29cd63b279c27d3352e09358a",
+      "size": 173875
     },
     {
       "path": "tm-save-manager.js",
@@ -6501,8 +6501,8 @@
     },
     {
       "path": "tm-save-world-validation.js",
-      "sha256": "4e7cdda08f6f78715df687185793370ad68a8d56c479350bebbc7c3561dc675f",
-      "size": 24751
+      "sha256": "26a788f0211c38dc13ae0f2f11faf3573d6a7fee918afa13ce8036833f5aa2d3",
+      "size": 26230
     },
     {
       "path": "tm-semantic-recall.js",
@@ -6591,7 +6591,7 @@
     },
     {
       "path": "tm-start-runtime-manifest.json",
-      "sha256": "628ef28f2c7cb6f9d2960048cb43111f85dbac3af1ef0b13663f826f080c8a50",
+      "sha256": "59b483de04d14930e79e1860996e80e44b4b5f07cb02074f4ea6a038541b3fcb",
       "size": 138845
     },
     {
@@ -6651,8 +6651,8 @@
     },
     {
       "path": "tm-tax-policy.js",
-      "sha256": "f74b65e2e1a03f5c783fb0284fd3be12a9f307322ff0bf8b192dbe81cad22081",
-      "size": 21738
+      "sha256": "901ddae8ce78785f01b2325ee0fb78fcdc93cd920b27f24b59207d0426c21f6b",
+      "size": 22187
     },
     {
       "path": "tm-test-harness.js",

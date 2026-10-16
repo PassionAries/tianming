@@ -2,7 +2,7 @@
   "type": "tianming-hot-update",
   "version": "1.3.5.3",
   "entry": "index.html",
-  "generatedAt": "2026-10-15T18:11:11.145Z",
+  "generatedAt": "2026-10-16T17:01:07.500Z",
   "files": [
     {
       "path": "ARCHITECTURE.md",
@@ -5426,13 +5426,13 @@
     },
     {
       "path": "tm-fiscal-engine.js",
-      "sha256": "992f3843a9c4fbdab1f364f15ccb7a3353f507326c27b4c7304b3f724af1c792",
-      "size": 167031
+      "sha256": "053946f4d8797e3df7d169e819793e0be131ab3cea2117c82e8029141c64c2f6",
+      "size": 168174
     },
     {
       "path": "tm-fiscal-statements.js",
-      "sha256": "6f1e2e1dd0b4ee2fde6d0e40341c609c90c3a98293e09ef7e6c9f196f29d94a1",
-      "size": 26148
+      "sha256": "77307f9c93b9026fcae9adf1f7dcd57aa65e508135ede834db45b52fa343d69c",
+      "size": 27629
     },
     {
       "path": "tm-fiscal-ui.js",
@@ -5471,8 +5471,8 @@
     },
     {
       "path": "tm-guoku-engine.js",
-      "sha256": "55214795a25d1fb7b75c27872076ce22ad97b312df64c430a3257f98f910c55f",
-      "size": 152445
+      "sha256": "78ef26e74ec58a0676c8b322eb4a0426c1cc0ba00dbbb2b360a0ffec1fdfe4cb",
+      "size": 152448
     },
     {
       "path": "tm-guoku-panel.js",
@@ -6591,7 +6591,7 @@
     },
     {
       "path": "tm-start-runtime-manifest.json",
-      "sha256": "0ac81630115915df7e89ee7ef4d5f052c835de8c83455cc6c580f762c149d400",
+      "sha256": "628ef28f2c7cb6f9d2960048cb43111f85dbac3af1ef0b13663f826f080c8a50",
       "size": 138845
     },
     {

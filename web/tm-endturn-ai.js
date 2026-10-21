@@ -1004,21 +1004,6 @@
         });
         return missing;
       }
-      // Phase 0 D-3 (doc 字面)·SC1 重试用 simpler schema·与增量 retry 互补
-      // 调用时机·SC1 第一次完全失败·走 _trySc1Rescue 之前
-      // 区别·_trySc1Rescue 走 sc1_rescue subcall 用极简硬编码 schema·此函数 retry SC1 主调用但用 core tier
-      async function _trySc1RetryWithSimplerSchema(reason) {
-        if (GM && GM._turnAiResults && GM._turnAiResults._sc1SimpleRetried) return null;
-        if (GM && GM._turnAiResults) GM._turnAiResults._sc1SimpleRetried = true;
-        try {
-          var tier = _buildSc1Schema('core');  // Phase 2 A1·core tier
-          _dbg('[SC1 D-3] retry with simpler core schema·' + tier.fields.length + ' fields');
-          if (typeof recordSubcallError === 'function') recordSubcallError('sc1', 'simpler_schema_retry', new Error('retry with core schema'));
-          // 重用 _trySc1Rescue·它内部用极简 schema (字段集是 core 的超集)·达到 D-3 效果
-          var rescue = await _trySc1Rescue(reason);
-          return rescue;
-        } catch(_d3Err) { _dbg('[SC1 D-3] simpler schema retry fail:', _d3Err); return null; }
-      }
       async function _runIncrementalSc1Retry(p1, missingFields, buildingBatch) {
         // Phase 7 Q4·应对 R-B 误判循环·只在 missing >3 才 retry·一次性
         if (!Array.isArray(missingFields) || (missingFields.length <= 3 && !buildingBatch)) {

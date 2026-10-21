@@ -1176,6 +1176,9 @@ function _tmStripSaveTransportMetadata(target) {
 
 function _tmRuntimeMapSourceForWorld(targetP, targetGM) {
   var source = (targetGM && targetGM.mapData && targetGM.mapData.regions && targetGM.mapData.regions.length > 0) ? targetGM.mapData :
+    // 旧版运行态把可变地图保存在 GM.map；GM.mapData 可能只是启动时补出的空脚手架。
+    // 这份世界态优先于 P.map/P.mapData 两个剧本模板镜像，否则旧自建档会被模板地图替换。
+    (targetGM && targetGM.map && targetGM.map.regions && targetGM.map.regions.length > 0) ? targetGM.map :
     (targetP && targetP.map && targetP.map.regions && targetP.map.regions.length > 0) ? targetP.map :
     (targetP && targetP.mapData && targetP.mapData.regions && targetP.mapData.regions.length > 0) ? targetP.mapData : null;
   if (!source && typeof findScenarioById === 'function' && targetGM && targetGM.sid) {
@@ -1386,22 +1389,34 @@ function _tmEntityIdSet(list) {
   return set;
 }
 
-function _tmBackfillStableForeignKeys(targetGM) {
+function _tmBackfillStableForeignKeys(targetGM, dupGroups) {
   var factionByName = _tmUniqueEntityIdByName(targetGM.facs);
   var charByName = _tmUniqueEntityIdByName(targetGM.chars);
   var factionIds = _tmEntityIdSet(targetGM.facs);
   var charIds = _tmEntityIdSet(targetGM.chars);
+  // 重复 id 组（2026-10-17·复审 F1）：撞上组的引用按旁边的名字在组内唯一确定归属；没名字或重名时保持原样并计数
+  var dupStats = { rebound: 0, ambiguous: 0 }, dupKey = function(s) { return String(s == null ? '' : s).replace(/[（(].*$/, '').trim(); }, fullKey = function(s) { return String(s == null ? '' : s).trim(); };
+  function pickDuplicate(owner, idField, nameValue, idSet) {
+    var table = dupGroups && dupGroups[idSet === charIds ? 'char' : 'faction'], ref = _tmStableIdMissing(owner[idField]) ? '' : String(owner[idField]).trim(), group = table && ref && Object.prototype.hasOwnProperty.call(table, ref) && Array.isArray(table[ref]) ? table[ref] : null; // 只认自有键：id 叫 constructor / __proto__ 的不能撞上原型（二次复审 R2-5）
+    if (!group) return false;
+    var hits = fullKey(nameValue) ? group.filter(function(m) { return fullKey(m.name) === fullKey(nameValue); }) : []; // 先按完整名字（含括注）唯一匹配，没有精确命中才去括注兜底（二次复审 R2-6）
+    if (!hits.length && dupKey(nameValue)) hits = group.filter(function(m) { return dupKey(m.name) === dupKey(nameValue); });
+    if (hits.length !== 1) { dupStats.ambiguous++; return true; }
+    if (hits[0].id !== String(owner[idField]).trim()) { owner[idField] = hits[0].id; dupStats.rebound++; } // arch-ok: 读档 schema 迁移·重复 id 组内按名字改绑
+    return true;
+  }
   function repairNamedRef(owner, idField, nameValue, idSet, nameMap) {
-    if (!owner || (!_tmStableIdMissing(owner[idField]) && idSet[String(owner[idField]).trim()])) return;
+    if (!owner || pickDuplicate(owner, idField, nameValue, idSet)) return;
+    if (!_tmStableIdMissing(owner[idField]) && idSet[String(owner[idField]).trim()]) return;
     var name = typeof nameValue === 'string' ? nameValue.trim() : '';
-    var id = name && nameMap[name];
+    var id = name ? nameMap[name] : null; // 2026-10-13：name 为空时原写法得到 ''，会把悬空/缺失 id 悄悄抹成空串（无收据、躲过校验）；找不到就留给 _tmClearDanglingStableRefs 记账清理
     if (id != null) owner[idField] = id; // arch-ok: 旧名称外键迁移到稳定实体 ID
   }
   function repairNamedRefArray(owner, field, idSet, nameMap) {
     if (!owner || !Array.isArray(owner[field])) return;
     owner[field] = owner[field].map(function(value) {
       var key = typeof value === 'string' ? value.trim() : '';
-      if (!key || idSet[key]) return value;
+      if (!key || idSet[key]) { var table = dupGroups && dupGroups[idSet === charIds ? 'char' : 'faction']; if (key && table && Object.prototype.hasOwnProperty.call(table, key)) dupStats.ambiguous++; return value; } // 数组里撞上重复组的 id 旁边没有名字可凭，保持原样只计数（二次复审补充）
       return nameMap[key] != null ? nameMap[key] : value; // arch-ok: 旧姓名数组外键仅在唯一可解析时迁移
     });
   }
@@ -1466,6 +1481,7 @@ function _tmBackfillStableForeignKeys(targetGM) {
       walkOffices(children);
     });
   })(targetGM.officeTree);
+  return dupStats;
 }
 
 function _tmMigrateCoreStableIds(targetGM) {
@@ -1477,19 +1493,37 @@ function _tmMigrateCoreStableIds(targetGM) {
     region: ((targetGM.mapData && targetGM.mapData.regions) || []).map(function(item, index) { return { item: item, path: 'mapData/regions/' + index }; }),
     division: _tmCollectAdminDivisionEntries(targetGM)
   };
-  var result = { total: 0, byType: {} };
+  var result = { total: 0, byType: {}, duplicateRepaired: 0, danglingRepaired: 0 }, dupGroups = {}; // 重复 id 组（复审 F1）：供补外键与玩家收据按名字改绑
   Object.keys(groups).forEach(function(kind) {
+    // 修复器与校验器同住 tm-save-world-validation.js（紧邻装载）；单独装载本文件的测试夹具没有它们时按旧行为跳过。
+    var duplicates = (typeof _tmRepairDuplicateEntityIds === 'function') ? _tmRepairDuplicateEntityIds(targetGM, kind, groups[kind], dupGroups) : 0;
+    if (duplicates > 0) result.duplicateRepaired += duplicates;
     var count = _tmAssignMissingStableIds(targetGM, kind, groups[kind]);
     result.byType[kind] = count;
     result.total += count;
   });
-  _tmBackfillStableForeignKeys(targetGM);
-  if (result.total > 0) {
+  var rebound = _tmBackfillStableForeignKeys(targetGM, dupGroups) || {};
+  if (rebound.rebound) result.duplicateRefsRebound = rebound.rebound;
+  if (rebound.ambiguous) result.duplicateRefsAmbiguous = rebound.ambiguous;
+  var dangling = (typeof _tmClearDanglingStableRefs === 'function') ? _tmClearDanglingStableRefs(targetGM) : [];
+  if (dangling.length) result.danglingRepaired = dangling.length;
+  // 与上面两个修复器同款：单独装载本文件的测试夹具没有它时按旧行为跳过（prod 同文件内恒有）
+  var receiptFix = typeof _tmRepairPlayerIdentityReceipt === 'function' ? _tmRepairPlayerIdentityReceipt(targetGM, dupGroups) : false, playerReceipt = receiptFix === true ? 1 : 0; if (receiptFix === 'ambiguous') result.duplicateRefsAmbiguous = (result.duplicateRefsAmbiguous || 0) + 1; // 收据撞上重复组又分不清：保持原样、计入分不清（二次复审补充）
+  if (playerReceipt) result.playerIdentityRepaired = playerReceipt;
+  if (result.total > 0 || result.duplicateRepaired > 0 || dangling.length > 0 || playerReceipt > 0) {
     if (!targetGM._stableIdMigration || typeof targetGM._stableIdMigration !== 'object') {
       targetGM._stableIdMigration = { version: 3, totalAssigned: 0, byType: {} }; // arch-ok: schema 迁移收据
     }
     targetGM._stableIdMigration.version = 3;
     targetGM._stableIdMigration.totalAssigned = Number(targetGM._stableIdMigration.totalAssigned || 0) + result.total;
+    targetGM._stableIdMigration.duplicateRepaired = Number(targetGM._stableIdMigration.duplicateRepaired || 0) + Number(result.duplicateRepaired || 0);
+    if (result.duplicateRefsRebound || result.duplicateRefsAmbiguous) { targetGM._stableIdMigration.duplicateRefsRebound = Number(targetGM._stableIdMigration.duplicateRefsRebound || 0) + Number(result.duplicateRefsRebound || 0); targetGM._stableIdMigration.duplicateRefsAmbiguous = Number(targetGM._stableIdMigration.duplicateRefsAmbiguous || 0) + Number(result.duplicateRefsAmbiguous || 0); } // arch-ok: 迁移收据·重复组改绑 / 分不清的计数
+    if (playerReceipt) targetGM._stableIdMigration.playerIdentityRepaired = Number(targetGM._stableIdMigration.playerIdentityRepaired || 0) + playerReceipt; // arch-ok: schema 迁移收据
+    if (dangling.length) {
+      targetGM._stableIdMigration.danglingRepaired = Number(targetGM._stableIdMigration.danglingRepaired || 0) + dangling.length;
+      targetGM._stableIdMigration.danglingDetails = dangling.slice(0, 40); // arch-ok: 迁移收据·只留最近一次的样本
+      try { console.warn('[stable-id] 悬空引用已修复 ' + dangling.length + ' 处（按名找回或清空）', dangling.slice(0, 10)); } catch (_) {}
+    }
     Object.keys(result.byType).forEach(function(kind) {
       targetGM._stableIdMigration.byType[kind] = Number(targetGM._stableIdMigration.byType[kind] || 0) + result.byType[kind];
     });

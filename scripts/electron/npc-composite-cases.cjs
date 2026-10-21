@@ -40,7 +40,7 @@ module.exports = async function ({ win, root, check, results }) {
   async function formalTurn() {
     await closeLetters();
     const before=await js(`({turn:GM.turn,day:TM.SimTime.now(GM)})`);
-    if(!win.__compositeProfiled){
+    if(process.env.TM_BRIDGE_CPU_PROFILE==='1'&&!win.__compositeProfiled){
       win.__compositeProfiled=true;win.webContents.debugger.attach('1.3');await win.webContents.debugger.sendCommand('Profiler.enable');await win.webContents.debugger.sendCommand('Profiler.start');
       setTimeout(async()=>{try{const p=await win.webContents.debugger.sendCommand('Profiler.stop');fs.writeFileSync(path.join(dir,'first-turn.cpuprofile'),JSON.stringify(p.profile));win.webContents.debugger.detach();}catch(e){fs.writeFileSync(path.join(dir,'profile-error.txt'),String(e));}},30000);
     }
@@ -172,4 +172,5 @@ module.exports = async function ({ win, root, check, results }) {
     assert(s.day>=30);assert(s.people>=500);await openLetters();assert((await js(`document.querySelector(${JSON.stringify(card)}).textContent`)).includes(p.meeting.discussion.result.targetContent));await screenshot('04-completed-return');
     const calls=await js(`__compositeCalls`);assert.equal(calls.fixtureErrors.length,0,'no unknown or invalid external protocol may be hidden by a production catch');assert(calls.systems.length>0);assert(calls.provinceEconomy.every(r=>r.days>0&&r.before&&r.after),'real province samples must be recorded around every settlement');assert(calls.provinceEconomy.some(r=>JSON.stringify(r.before)!==JSON.stringify(r.after)),'the real economy must change its source fields during the run');assert.equal(calls.provinceEconomy.length,calls.systems.length,'real provincial economy runs once per actual top-level interval');assert.equal(new Set(calls.provinceEconomy.map(r=>r.turn)).size,calls.provinceEconomy.length,'meeting substeps must not repeat provincial settlement');results.push({name:'official-composite-model-boundary',status:'PASS',value:calls});
   });
+  await record('completed-evidence');
 };

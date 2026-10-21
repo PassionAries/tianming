@@ -79,6 +79,8 @@
   function inferredOfficeConstraints(ch, m, role) {
     var read = officeRows(ch);
     if (!read || read.status !== 'resolved') return { status: 'unknown', constraints: [], reason: read && read.reason || 'office_constraint_unavailable' };
+    var unidentified = read.rows.find(function (r) { return r.configurationStatus !== 'legacy_unspecified' && (!r.positionId || !r.organizationId); });
+    if (unidentified) return { status: 'unknown', constraints: [], reason: 'meeting_office_assignment_identity_unknown', positionId: unidentified.positionId, organizationId: unidentified.organizationId };
     var incomplete = read.rows.find(function (r) { return r.configurationStatus === 'incomplete'; });
     if (incomplete) return { status: 'unknown', constraints: [], reason: 'meeting_office_configuration_incomplete', positionId: incomplete.positionId, organizationId: incomplete.organizationId };
     var location = String(m && m.locationId || '');

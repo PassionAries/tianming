@@ -223,8 +223,26 @@
     try {
       var assigned = HS.assignments(g, ch);
       if (!Array.isArray(assigned)) return { status: 'unknown', reason: 'office_constraint_invalid_query', rows: [] };
+      var positions = HS.positions(g);
+      if (!Array.isArray(positions)) return { status: 'unknown', reason: 'office_constraint_invalid_query', rows: [] };
+      var scoped = Object.create(null), organizations = Object.create(null), political = TM.PoliticalActions;
+      positions.forEach(function (row) {
+        var pid = key(row.pos && row.pos.id), org = key(row.organizationId), compound = org + '\u0000' + pid;
+        if (pid && org) (scoped[compound] || (scoped[compound] = [])).push(row.pos);
+      });
+      function identityKnown(row) {
+        var pid = key(row.pos && row.pos.id), org = key(row.organizationId), matches = scoped[org + '\u0000' + pid];
+        if (!pid || !org || !matches || matches.length !== 1 || matches[0] !== row.pos) return false;
+        if (!Object.prototype.hasOwnProperty.call(organizations, org)) organizations[org] = political && typeof political.resolve === 'function' ? political.resolve('organization', { id: org }, g) : null;
+        return !!organizations[org];
+      }
       var uncertain = assigned.find(function (a) { return !a.delegated && key(a.principalCharacterId) === key(ch.id) && a.pos.enabled !== false && a.pos.status !== 'abolished' && !appointmentDatesKnown(a); });
       if (uncertain) return { status: 'unknown', reason: 'meeting_office_assignment_time_unknown', positionId: key(uncertain.pos.id), organizationId: key(uncertain.organizationId), rows: [] };
+      var unidentified = assigned.find(function (a) {
+        return !a.delegated && key(a.principalCharacterId) === key(ch.id) && currentAppointment(g, a) &&
+          (a.pos.officeTenure || a.pos.tenure || a.pos.dutyRules || a.pos.dutyConfig) && !identityKnown(a);
+      });
+      if (unidentified) return { status: 'unknown', reason: 'meeting_office_assignment_identity_unknown', positionId: key(unidentified.pos.id), organizationId: key(unidentified.organizationId), rows: [] };
       var out = assigned.filter(function (a) { return !a.delegated && key(a.principalCharacterId) === key(ch.id) && currentAppointment(g, a); }).map(function (a) {
         var c = cfg(a.pos), raw = a.pos.officeTenure || a.pos.tenure || a.pos.dutyRules || a.pos.dutyConfig;
         return { positionId: key(a.pos.id), positionName: s(a.pos.name), organizationId: key(a.organizationId), appointmentId: key(a.appointmentId),
@@ -233,12 +251,15 @@
           jurisdictionIds: c.jurisdictionIds.slice(), configured: !!raw,
           configurationStatus: !raw ? 'legacy_unspecified' : c.dutyMode === 'resident' && !c.usualDutyLocationId || c.dutyMode === 'field' && !c.usualDutyLocationId && !c.jurisdictionIds.length || !/^(resident|field)$/.test(c.dutyMode) ? 'incomplete' : 'configured' };
       });
-      HS.positions(g).forEach(function (pos) {
+      positions.forEach(function (pos) {
         var st = state(pos, false), c = cfg(pos), now = day(g);
         A(st && st.delegations).forEach(function (d) {
           if (!d || key(d.delegateId) !== key(ch.id) || !d.active || d.status !== 'active' ||
               !c.onsiteActions.some(function (action) { return A(d.scope).indexOf(action) >= 0; })) return;
-          var principal = findChar(g, d.grantorId), grant = principal && assignment(g, principal, pos);
+          // Read this actual post before relying on its ID: a malformed or
+          // duplicated ID must not silently remove an accepted mandate.
+          var principal = findChar(g, d.grantorId), grants = principal ? HS.assignments(g, principal, { organizationId: pos.organizationId }).filter(function (a) { return a.pos === pos.pos && !a.delegated && key(a.appointmentId) === key(d.appointmentId); }) : [];
+          var grant = grants.length === 1 ? grants[0] : null;
           if (!currentAppointment(g, grant) || key(grant.appointmentId) !== key(d.appointmentId)) return;
           var start = typeof d.startDay === 'number' || typeof d.startDay === 'string' ? n(d.startDay, NaN) : NaN;
           var end = typeof d.endDay === 'number' || typeof d.endDay === 'string' ? n(d.endDay, NaN) : NaN;
@@ -247,10 +268,11 @@
           // on an otherwise active accepted mandate cannot do the same thing.
           if (!reversed && (isFinite(start) && now < start || isFinite(end) && now >= end)) return;
           var datesKnown = isFinite(start) && isFinite(end) && !reversed;
+          var identityOk = identityKnown(pos);
           out.push({ positionId: key(pos.pos.id), positionName: s(pos.pos.name), organizationId: key(pos.organizationId), appointmentId: key(d.appointmentId), delegationId: d.id,
             dutyMode: 'resident', usualDutyLocationId: c.usualDutyLocationId, returnLocationId: c.usualDutyLocationId,
-            jurisdictionIds: c.jurisdictionIds.slice(), configured: true, configurationStatus: datesKnown && c.usualDutyLocationId ? 'configured' : 'incomplete',
-            configurationReason: datesKnown ? '' : 'meeting_office_delegation_time_unknown' });
+            jurisdictionIds: c.jurisdictionIds.slice(), configured: true, configurationStatus: identityOk && datesKnown && c.usualDutyLocationId ? 'configured' : 'incomplete',
+            configurationReason: !identityOk ? 'meeting_office_assignment_identity_unknown' : datesKnown ? '' : 'meeting_office_delegation_time_unknown' });
         });
       });
       return { status: 'resolved', rows: out };

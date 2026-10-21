@@ -24,6 +24,7 @@
   reasons.meeting_office_leave_required = '当前职任要求先取得有效离任安排，才能按此路线赴约。';
   reasons.meeting_office_presence_required = '当前职任的在场条件与现场安排冲突。';
   reasons.meeting_office_field_arrangement_required = '当前巡历/奉差安排未说明可以离开正在履行的职责。';
+  reasons.meeting_office_assignment_identity_unknown = '有关职位或所属组织的身份资料缺失或不唯一，暂不能确认本次外出条件。';
   Object.assign(reasons, {
     office_constraint_unavailable: '职任查询尚未就绪，请稍后重新核对。', office_constraint_invalid_query: '职任资料格式不完整，暂不能确认本次外出条件。', office_constraint_query_failed: '本次职任查询失败，未将它当作没有职责。',
     meeting_office_configuration_incomplete: '这项职任的驻地或外出规则未配置完整，请先确认安排。', meeting_office_assignment_time_unknown: '这项任职的有效时段不明，不能据此确认外出。', meeting_office_assignment_changed: '任职已经变化，请按当前职任重新确认。', meeting_office_constraint_identity_mismatch: '指定的安排与本人的实际职任不符。',

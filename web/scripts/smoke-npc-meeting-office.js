@@ -13,6 +13,7 @@ function world(options = {}) {
   ] };
   c.add = (id, name) => c.actor(id, name, { location: '东城', regionId: 'east', publicIdentity: true, faction: '' });
   c.a = c.add('a', '甲'); c.b = c.add('b', '乙'); c.boss = c.add('boss', '核准者'); c.delegate = c.add('delegate', '代办者');
+  c.GM.facs = [{ id: 'court', name: '本署所属组织' }];
   c.GM.affinityMap = { '甲|乙': 90 };
   c.GM.officeTree = [{ id: 'dept', authorityFactionId: 'court', positions: [
     { id: 'approver', holderId: 'boss', actualHolders: [{ characterId: 'boss', appointmentId: 'appointment:boss' }] },
@@ -70,6 +71,49 @@ test('no office is distinct from an incomplete rule or failed query', () => {
   const broken = world(), query = broken.TM.OfficeHolderState.assignments;
   broken.TM.OfficeHolderState.assignments = (g, ch, ref) => { if (ch.id === 'a') throw Error('test query failure'); return query(g, ch, ref); };
   assert.equal(broken.invite().localActivity.meeting.actorJourneyStatus, 'office_constraint_query_failed');
+});
+
+test('configured duties need a unique post and organization identity before departure', () => {
+  for (const fault of ['missing-post', 'missing-organization', 'duplicate-scoped-id', 'nonexistent-organization', 'duplicate-organization']) {
+    const c = world({ count: fault === 'duplicate-scoped-id' ? 2 : 1 });
+    if (fault === 'missing-post') delete c.GM.officeTree[0].positions[1].id;
+    if (fault === 'missing-organization') delete c.GM.officeTree[0].authorityFactionId;
+    if (fault === 'duplicate-scoped-id') c.GM.officeTree[0].positions[2].id = 'seat-0';
+    if (fault === 'nonexistent-organization') c.GM.officeTree[0].authorityFactionId = 'missing-explicit-org';
+    if (fault === 'duplicate-organization') c.GM.facs.push({ id: 'court', name: '另一组织误用同一ID' });
+    if (/^(nonexistent|duplicate)-organization$/.test(fault)) {
+      c.GM.officeTree[0].positions[1].officeTenure.leave.requiresApproval = false;
+      const r = c.office('requestLeave', c.a, { organizationId: c.GM.officeTree[0].authorityFactionId, positionId: 'seat-0', destinationId: 'west', startDay: 0, latestReturnDay: 20, kind: 'private' });
+      assert.equal(r.outcome, 'started', 'an old standing-rule record does not supply a missing organization identity');
+    }
+    const read = c.TM.OfficeTenure.privateTravelDuties(c.GM, c.a);
+    assert.equal(read.status, 'unknown', fault);
+    assert.equal(read.reason, 'meeting_office_assignment_identity_unknown', fault);
+    const p = c.invite();
+    assert.equal(p.localActivity.meeting.actorJourney, undefined, fault + ' cannot erase an explicit duty');
+    assert.equal(p.localActivity.meeting.actorJourneyStatus, read.reason, fault);
+    assert.equal(c.TM.NPC.DailyActivities.exactLocation(c.a), 'east');
+  }
+  const legacy = world(); delete legacy.GM.officeTree[0].positions[1].officeTenure; delete legacy.GM.officeTree[0].positions[1].id;
+  assert.equal(legacy.TM.OfficeTenure.privateTravelDuties(legacy.GM, legacy.a).rows[0].configurationStatus, 'legacy_unspecified');
+  assert.equal(legacy.invite().localActivity.meeting.actorJourney.status, 'in_transit', 'this patch does not invent leave rules on entirely unconfigured legacy posts');
+  const failedQuery = world(); failedQuery.TM.OfficeHolderState.positions = () => { throw Error('test positions query failure'); };
+  assert.equal(failedQuery.TM.OfficeTenure.privateTravelDuties(failedQuery.GM, failedQuery.a).reason, 'office_constraint_query_failed');
+});
+
+test('same post IDs in distinct organizations retain separate lawful arrangements', () => {
+  const c = world(), other = JSON.parse(JSON.stringify(c.GM.officeTree[0]));
+  c.GM.facs.push({ id: 'other-court', name: '另一署所属组织' });
+  other.id = 'other-dept'; other.authorityFactionId = 'other-court';
+  other.positions[1].actualHolders[0].appointmentId = 'appointment:other'; c.GM.officeTree.push(other);
+  assert.equal(c.TM.OfficeTenure.privateTravelDuties(c.GM, c.a).status, 'resolved');
+  c.permit();
+  const now = c.TM.SimTime.now(c.GM), r = c.office('requestLeave', c.a, { organizationId: 'other-court', positionId: 'seat-0', destinationId: 'west', startDay: now, latestReturnDay: now + 30, kind: 'private' });
+  assert.equal(r.outcome, 'submitted', r.reason); c.advance();
+  const approved = c.office('decideLeave', c.boss, { organizationId: 'other-court', positionId: 'seat-0', leaveId: r.leaveId, decision: 'approve' });
+  assert.equal(approved.outcome, 'submitted', approved.reason); c.advance();
+  const p = c.invite({ actorOfficeConstraint: { positionId: 'seat-0', organizationId: 'court', requiresLeave: false } });
+  assert.equal(p.localActivity.meeting.actorJourney.status, 'in_transit');
 });
 
 test('resident private leave permits travel outside public jurisdiction and actual return', () => {
@@ -287,6 +331,16 @@ test('unknown active delegation dates do not erase the duty; expired and revoked
     d[field] = '资料未详'; // explicit incomplete old-save boundary after a real handoff
     const read = c.TM.OfficeTenure.privateTravelDuties(c.GM, c.delegate);
     assert.ok(read.status === 'unknown' || read.rows.some(r => r.configurationStatus === 'incomplete'), field + ' must not erase a currently accepted mandate');
+  }
+  for (const fault of ['missing-post', 'missing-organization', 'duplicate-scoped-id', 'nonexistent-organization', 'duplicate-organization']) {
+    const c = acceptedDelegate(), pos = c.GM.officeTree[0].positions[1];
+    if (fault === 'missing-post') delete pos.id;
+    if (fault === 'missing-organization') delete c.GM.officeTree[0].authorityFactionId;
+    if (fault === 'duplicate-scoped-id') c.GM.officeTree[0].positions.push({ ...pos, actualHolders: [{ characterId: 'boss', appointmentId: 'other-appointment' }], _officeTenureState: undefined });
+    if (fault === 'nonexistent-organization') c.GM.officeTree[0].authorityFactionId = 'missing-explicit-org';
+    if (fault === 'duplicate-organization') c.GM.facs.push({ id: 'court', name: '另一组织误用同一ID' });
+    const read = c.TM.OfficeTenure.privateTravelDuties(c.GM, c.delegate);
+    assert.ok(read.status === 'unknown' || read.rows.some(r => r.configurationStatus === 'incomplete'), fault + ' must not erase an active accepted onsite mandate');
   }
   const expired = acceptedDelegate(), old = expired.GM.officeTree[0].positions[1]._officeTenureState.delegations[0];
   expired.advance(old.endDay - expired.TM.SimTime.now(expired.GM));

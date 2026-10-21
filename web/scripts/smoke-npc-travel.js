@@ -270,6 +270,7 @@ function grantMeetingLeave(c, actor, boss, positionId) {
 
 test('the same meeting reads actual office constraints for allowed and leave-required holders', () => {
   const c = world(), D = c.TM.NPC.DailyActivities, actor = c.add('a', '甲'), leaveHolder = c.add('d', '丁'), target = c.add('b', '乙'), target2 = c.add('e', '戊');
+  c.GM.facs = [{ id: 'org', name: '本署所属组织' }];
   const boss = c.add('boss', '核准者');
   target2.location = '西城'; target2.regionId = 'west'; target2.mapRegionId = 'west';
   c.GM.affinityMap = { '甲|乙': 80, '丁|戊': 80 };
@@ -303,6 +304,7 @@ test('the same meeting reads actual office constraints for allowed and leave-req
 
 test('multiple appointments cannot be hidden by a loose hint and valid leave covers the full return window', () => {
   const c = world(), D = c.TM.NPC.DailyActivities, actor = c.add('a', '甲'), target = c.add('b', '乙');
+  c.GM.facs = [{ id: 'org', name: '本署所属组织' }];
   const boss = c.add('boss', '核准者');
   c.GM.affinityMap = { '甲|乙': 80 };
   c.GM.officeTree = [{ id: 'dept', authorityFactionId: 'org', name: '署', positions: [

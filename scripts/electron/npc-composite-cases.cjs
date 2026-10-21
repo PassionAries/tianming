@@ -120,7 +120,7 @@ module.exports = async function ({ win, root, check, results }) {
       let parsed;try{parsed=window.__compositeResponseFor(String(body.__compositeFixtureKind||''),prompt);}catch(error){__compositeCalls.fixtureErrors.push({kind:body.__compositeFixtureKind||'',label,day:TM.SimTime.now(GM),error:String(error.message||error).slice(0,200)});console.error('COMPOSITE_FIXTURE_UNSUPPORTED '+JSON.stringify({kind:body.__compositeFixtureKind||'',label,tail:prompt.slice(-1500)}));throw error;}
       const content=typeof parsed==='string'?parsed:JSON.stringify(parsed);
       __compositeCalls.transport[__compositeCalls.transport.length-1].responseKind=String(body.__compositeFixtureKind||'direct-producer');
-      __compositeCalls.transport[__compositeCalls.transport.length-1].responseKeys=typeof parsed==='string'?[]:Object.keys(parsed); 
+      __compositeCalls.transport[__compositeCalls.transport.length-1].responseKeys=typeof parsed==='string'?[]:Object.keys(parsed);
       const message={choices:[{index:0,message:{role:'assistant',content},finish_reason:'stop'}],usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}};
       if(body.stream)return new Response('data: '+JSON.stringify({choices:[{index:0,delta:{content},finish_reason:null}]})+'\n\ndata: [DONE]\n\n',{headers:{'Content-Type':'text/event-stream'}});
       return new Response(JSON.stringify(message),{headers:{'Content-Type':'application/json'}});

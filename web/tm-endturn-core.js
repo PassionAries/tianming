@@ -798,6 +798,11 @@ async function _endTurnCore(options){
   var btn=_$("btn-end")||_$("btn-end-turn");
   if (typeof TM_SaveDB !== "undefined" && typeof TM_SaveDB.assertWritable === "function") TM_SaveDB.assertWritable();
   if(GM.busy)return;
+  if (globalThis.TM && TM.NPC && TM.NPC.Meetings && TM.NPC.Meetings.pendingPlayerChoice()) {
+    if (typeof toast === 'function') toast('现场交流正在等你作答，请先打开日常往来处理，或结束这次约见。');
+    if (TM.NPC.DailyUI) TM.NPC.DailyUI.render();
+    return;
+  }
   if (globalThis.TM && TM.RecoveryReview) TM.RecoveryReview.pauseForNextTurn();
   if (_reliability) { _turnScope = _reliability.begin(); _reliability.assertReady(P); _reliability.mark(_turnScope, "prepare"); }
   _turnTxn = _tmCaptureEndTurnTransaction();

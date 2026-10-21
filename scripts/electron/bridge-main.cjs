@@ -42,7 +42,7 @@ const observedElectron = new Proxy(nativeElectron, { get(target, key) {
   if (key !== 'BrowserWindow') return target[key];
   return new Proxy(target.BrowserWindow, { construct(Window, args) {
     if (visibleWindow) args[0] = { ...args[0], width: 1280, height: 800, fullscreen: false, show: true, alwaysOnTop: true, webPreferences: { ...args[0].webPreferences, backgroundThrottling: false } }; // UI gates must not wait for a ready-to-show event bypassed by test navigation.
-    if (mode === 'npc-daily' || mode === 'npc-travel' || mode === 'shanhe-load' || mode === 'shanhe-pointer' || mode === 'map-core-controls' || mode === 'startup-project-fallback') args[0] = { ...args[0], width:1280, height:800, fullscreen:false, show:false, webPreferences:{...args[0].webPreferences,backgroundThrottling:false} };
+    if (mode === 'npc-composite' || mode === 'npc-daily' || mode === 'npc-travel' || mode === 'shanhe-load' || mode === 'shanhe-pointer' || mode === 'map-core-controls' || mode === 'startup-project-fallback') args[0] = { ...args[0], width:1280, height:800, fullscreen:false, show:false, webPreferences:{...args[0].webPreferences,backgroundThrottling:false} };
     windowOptions.push(args[0]); return Reflect.construct(Window, args);
   } });
 } });
@@ -74,13 +74,14 @@ async function check(name, fn) { const started=Date.now(); console.log('BRIDGE_C
 // These correctness suites contain many bounded UI scenarios; keep each scenario wait and all explicit performance assertions unchanged.
 const multiScenarioAuthoring = ['authoring-boundaries','authoring-continuation','authoring-autoapply','authoring-efficiency'].includes(mode);
 // authoring-regions 实测 57～80 秒（CI 与本机，09-24），默认 75 秒会随机超时，与其他重型用例一样单列 180 秒
-setTimeout(() => finish(new Error('electron-bridge-timeout')), (multiScenarioAuthoring && mode === 'authoring-efficiency') || mode === 'relief-pilot' ? 600000 : multiScenarioAuthoring ? 180000 : mode === 'strategic-map' ? 600000 : mode === 'shanhe-load' ? 240000 : mode === 'circuit-book' || mode === 'circuit-tour' ? 300000 : mode === 'map-core-controls' || mode === 'startup-project-fallback' || mode === 'authoring-regions' ? 180000 : mode === 'shanhe-map' || mode === 'shanhe-pointer' ? 135000 : mode === 'native-start-live-authoring' ? 570000 : mode === 'performance-inspect' || mode === 'relief-inspect' ? 1800000 : mode === 'relief-pilot' || mode === 'native-start-neutral-atlas' ? 180000 : mode === 'office-duty' ? 150000 : visiblePerformance ? 240000 : 75000);
+setTimeout(() => finish(new Error('electron-bridge-timeout')), mode === 'npc-composite' ? 1800000 : (multiScenarioAuthoring && mode === 'authoring-efficiency') || mode === 'relief-pilot' ? 600000 : multiScenarioAuthoring ? 180000 : mode === 'strategic-map' ? 600000 : mode === 'shanhe-load' ? 240000 : mode === 'circuit-book' || mode === 'circuit-tour' ? 300000 : mode === 'map-core-controls' || mode === 'startup-project-fallback' || mode === 'authoring-regions' ? 180000 : mode === 'shanhe-map' || mode === 'shanhe-pointer' ? 135000 : mode === 'native-start-live-authoring' ? 570000 : mode === 'performance-inspect' || mode === 'relief-inspect' ? 1800000 : mode === 'relief-pilot' || mode === 'native-start-neutral-atlas' ? 180000 : mode === 'office-duty' ? 150000 : visiblePerformance ? 240000 : 75000);
 process.on('uncaughtException', finish); process.on('unhandledRejection', finish);
 process.on('exit', code => { if (finished) process.stdout.write('BRIDGE_NODE_EXIT '+JSON.stringify({mode,at:new Date().toISOString(),code})+'\n'); });
 app.on('browser-window-created', (_event, win) => {
   if (!visibleWindow) win.show = () => {};
   win.setFullScreen = () => {};
   win.webContents.on('console-message',(_e,level,message)=>{if(/^RELIEF_DIGEST_/.test(message))fs.appendFileSync(path.join(path.dirname(process.env.TM_BRIDGE_TEST_REPORT),'digest-progress.log'),new Date().toISOString()+' '+message+'\n');if(/^RELIEF_|^STRATEGIC_/.test(message)||level>=3)console.log('BRIDGE_RENDER_DIAG '+String(message).slice(0,2200));});
+  if (mode === 'npc-composite') win.webContents.on('console-message',(_e,level,message)=>{ if(level>=1)fs.appendFileSync(path.join(path.dirname(process.env.TM_BRIDGE_TEST_REPORT),'renderer.log'),new Date().toISOString()+' '+level+' '+String(message).slice(0,2500)+'\n'); });
   win.webContents.on('preload-error', (_event, file, error) => finish(new Error('production-preload-failed: ' + file + ': ' + error.message)));
   win.webContents.on('render-process-gone', (_event, details) => finish(new Error('render-process-gone: ' + JSON.stringify(details))));
   win.webContents.on('did-fail-load', (_event, code, description, url, mainFrame) => { if (mainFrame) finish(new Error('did-fail-load: ' + code + ' ' + description + ' ' + url)); });
@@ -116,6 +117,7 @@ app.on('browser-window-created', (_event, win) => {
         assert.equal(!!exports.__test, mode === 'test-exports');
       });
       if (mode === 'performance') performanceReport = await require('../perf/round1-electron-cases.cjs')({ win, root, temp, controls, check, recordPerformance: report => { performanceReport = report; } });
+      else if (mode === 'npc-composite') await require('./npc-composite-cases.cjs')({ win, root, temp, check, results });
       else if (mode === 'npc-daily') await require('./npc-daily-cases.cjs')({ win, root, temp, check, results });
       else if (mode === 'npc-travel') await require('./npc-travel-cases.cjs')({ win, root, temp, check, results });
       else if (mode === 'performance-inspect') performanceReport = await require('../perf/inspect-electron-cases.cjs')({ win, root, temp, check });

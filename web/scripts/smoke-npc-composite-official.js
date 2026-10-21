@@ -122,31 +122,14 @@ const meetingPlan = D.get(meeting.planId);
 assert(meetingPlan && meetingPlan.localActivity.meeting.discussion.sourceOpportunity,
   'the combination must retain the sourced opportunity');
 advance(c, 1);
+// The real local event consumer chooses acceptance, discussion and response.
 let current = D.get(meetingPlan.id);
-receipt = submit(c, selected.target, current, 'respond', { response: 'accept' });
-assert.equal(receipt.outcome, 'submitted', receipt.reason);
-advance(c, 1);
-current = D.get(meetingPlan.id);
-for (let i = 0; i < 3 && current.localActivity.meeting.status !== 'in_meeting'; i++) {
-  advance(c, 1);
-  current = D.get(meetingPlan.id);
+for (let i = 0; i < 10 && current.status !== 'done'; i++) {
+  advance(c, 1); current = D.get(meetingPlan.id);
 }
-assert.equal(current.localActivity.meeting.status, 'in_meeting');
-receipt = D.submitNPC(selected.actor, {
-  actionId: 'official-composite:discuss', planId: current.id, phase: 'discuss',
-  exchangeChoice: 'question', expectedRevision: current.localActivity.revision,
-  termsVersion: current.localActivity.termsVersion
-});
-assert.equal(receipt.outcome, 'submitted', receipt.reason);
-current = D.get(meetingPlan.id);
-receipt = D.submitNPC(selected.target, {
-  actionId: 'official-composite:answer', planId: current.id, phase: 'discuss_response',
-  response: 'answer', expectedRevision: current.localActivity.revision,
-  termsVersion: current.localActivity.termsVersion
-});
-assert.equal(receipt.outcome, 'submitted', receipt.reason);
-advance(c, 1);
-current = D.get(meetingPlan.id);
+assert.equal(current.steps.filter(s => s.phase === 'discuss').length, 1);
+assert.equal(current.steps.filter(s => s.phase === 'discuss_response').length, 1);
+assert(current.messages.some(m => m.kind === 'meeting_response' && m.status === 'delivered'));
 assert.equal(current.status, 'done');
 assert.equal(current.localActivity.meeting.discussion.status, 'completed');
 assert(current.localActivity.meeting.participation.discussion.result);

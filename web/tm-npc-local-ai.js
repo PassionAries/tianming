@@ -43,10 +43,11 @@
       var other = actor(ch.id === p.actorId ? p.targetId : p.actorId), disposition = inclination(ch, other, view.kind);
       if(view.kind==='introduction'&&ch.id===p.targetId){var third=actor(p.localActivity.thirdPartyId);if(third)disposition.score+=D.relation(ch,third)*0.7;}
       var d = { planId: p.id, phase: view.nextPhase, expectedRevision: view.revision, termsVersion: view.termsVersion }, reason = '继续已送达的事项';
+      if (view.kind === 'meeting' && d.phase === 'depart' && NPC.Meetings.departureReady && !NPC.Meetings.departureReady(p, ch).ok) return;
       if (d.phase === 'respond') {
         if (disposition.score < 4) { d.response = 'reject'; reason = '本人对这项请求意愿不足'; }
-        else if (disposition.stress >= 75 && p.localActivity.deferrals < D.config.maxDeferrals) { d.response = 'defer'; reason = '当前负担较重，明确请求延期'; }
-        else if (view.kind === 'meeting') { d.response = disposition.score < 22 ? 'defer' : 'accept'; reason = '按关系、负担和已知行程决定是否赴约'; }
+        else if (disposition.stress >= 75 && Number(p.localActivity.deferrals || 0) < D.config.maxDeferrals) { d.response = 'defer'; reason = '当前负担较重，明确请求延期'; }
+        else if (view.kind === 'meeting') { d.response = disposition.score < 22 ? (Number(p.localActivity.deferrals || 0) < D.config.maxDeferrals ? 'defer' : 'reject') : 'accept'; reason = '按关系、负担和已知行程决定是否赴约'; }
         else if (view.kind === 'consultation') {
           d.response = disposition.score < 18 ? 'reject' : disposition.stress >= 65 && p.localActivity.deferrals < D.config.maxDeferrals ? 'defer' : disposition.score < 42 ? 'brief' : 'accept';
           reason = disposition.score < 18 ? '对方与当前话题关系不足，婉拒请益' : d.response === 'defer' ? '当前负担较重，暂缓请益' : d.response === 'brief' ? '延期次数已到上限，只接受一次简短切磋' : '按已知往来和当前负担接受一次具体请益';
@@ -155,13 +156,16 @@
   }
   function prepareEvent(source, detail) {
     var D = domain(), st = D.readState();
-    var key = source === 'response' ? 'response:' + String(detail && detail.actionId || '') : 'turn:' + root.GM.turn;
-    if (st.event && st.event.turn === root.GM.turn && st.event.remaining > 0 && st.event.active && (source !== 'response' || st.lastEventKey === key)) return st.event;
-    if (st.lastEventKey === key || source !== 'response' && st.initializedTurn === root.GM.turn) return null;
+    var period = Math.floor(D.day());
+    var key = source === 'response' ? 'response:' + String(detail && detail.actionId || '') : 'day:' + period;
+    var samePeriod = st.event && (st.event.periodStartDay === period || st.event.periodStartDay == null && st.event.turn === root.GM.turn);
+    if (samePeriod && st.event.remaining > 0 && st.event.active && (source === 'resume' || source === st.event.source && (source !== 'response' || st.lastEventKey === key))) return st.event;
+    if (st.lastEventKey === key || source !== 'response' && (st.initializedDay === period || st.initializedDay == null && st.initializedTurn === root.GM.turn)) return null;
     if (source === 'response' && (!detail || !detail.actionId)) return null;
-    st.initializedTurn = root.GM.turn; st.lastEventKey = key;
+    if (source !== 'response') { st.initializedTurn = root.GM.turn; st.initializedDay = period; }
+    st.lastEventKey = key;
     // Initial entry is a small playable greeting/request cycle, not a full-population startup settlement.
-    st.event = { id: key, remaining: source === 'enter' ? config.initialDecisions : config.decisionsPerEvent, batches: source === 'enter' ? 1 : 4, newContacts: 0, active: true, source: source, turn: root.GM.turn };
+    st.event = { id: key, remaining: source === 'enter' ? config.initialDecisions : config.decisionsPerEvent, batches: source === 'enter' ? 1 : 4, newContacts: 0, active: true, source: source, turn: root.GM.turn, periodStartDay: period, planId: source === 'response' && detail && detail.planId || '' };
     return st.event;
   }
   // Office leave/delegation is a regular local choice, not a model fallback.
@@ -665,6 +669,30 @@
     });
     return done;
   }
+  function meetingEvent(p) {
+    var D = domain(), ch = p && actor(p.nextActorId);
+    if (!ch || player(ch) || !NPC.Meetings || !NPC.Meetings.acceptsEventChoice(ch, { planId: p.id })) return null;
+    var st = D.readState(), period = Math.floor(D.day());
+    // A response wake keeps its existing narrow scope; event replay cannot
+    // turn it into an unrelated population-wide batch.
+    if (running && st.event && st.event.source === 'response' && st.event.planId !== p.id) return null;
+    var choice = dueCandidates(ch, [p])[0]; if (!choice) return null;
+    if (D.budget(ch).steps >= D.config.dailySteps) return { outcome: 'waiting', reason: 'daily_activity_budget', retryDay: period + 1 };
+    var event = running && st.event ? st.event : prepareEvent('turn');
+    // A calculation batch is not an in-world day. Already accepted onsite
+    // question/answer events cannot lose their appointment merely because
+    // other actors used the opportunity-search batch. There are at most two
+    // such choices per meeting; the event consumer and the actor's shared
+    // daily work budget still bound execution. This never starts a new plan.
+    var onsite = /^(discuss|discuss_response)$/.test(choice.action.phase);
+    if ((!event || event.remaining <= 0) && !onsite) return { outcome: 'waiting', reason: 'local_computation_budget', retryDay: period + 1 };
+    var action = Object.assign({}, choice.action, { actionId: 'meeting-event:' + p.id + ':' + p.localActivity.revision + ':' + choice.action.phase + ':day:' + period });
+    var receipt = D.submitNPC(ch, action, { meetingEvent: true });
+    st = D.readState(); if (st && st.event) { st.event.remaining = Math.max(0, st.event.remaining - 1); if (onsite) st.event.committedSteps = (st.event.committedSteps || 0) + 1; }
+    if (st) st.diagnostics.push({ source: 'meeting-event', actorId: ch.id, planId: p.id, phase: action.phase, day: D.day(), outcome: receipt.outcome, reason: receipt.reason });
+    if (receipt.reason === 'daily_activity_budget') receipt = Object.assign({}, receipt, { retryDay: period + 1 });
+    return receipt;
+  }
   function wake(source, detail) {
     if (running || !root.GM || !root.GM.running || root.GM.busy || root.GM._endTurnBusy || root.GM._loadHydrationPending) return { waiting: true, reason: 'world_busy' };
     if (queued && !ledger().current(queued.lease)) queued = null;
@@ -678,17 +706,19 @@
     try {
       D.withIndex(function () {
         var dutyDoneBefore = arr(root.GM._npcPlans).filter(function (p) { return p && p.task && p.task.kind === 'public_transfer' && p.status === 'done'; }).length;
-        var dutyBatch = runDutyChoices(config.dutyPlansPerBatch);
+        var dutyBatch = event.source === 'response' ? {processed:0, executed:0, completed:0, candidates:0} : runDutyChoices(config.dutyPlansPerBatch);
         summary.dutySubmitted = dutyBatch.processed;
         summary.dutyExecuted = dutyBatch.executed;
         summary.dutyCompleted = dutyBatch.completed;
         summary.dutyWaiting = Math.max(0, dutyBatch.candidates - dutyBatch.processed);
-        runOfficeChoices(4);
+        if (event.source !== 'response') runOfficeChoices(4);
         var visited = new Set(), attempted = new Set();
         for (var count = 0; count < config.decisionsPerBatch && event.remaining > 0; count++) {
           var advance = ledger().advance(root.GM,{localOnly:true}); if (!advance.ok) throw Error(advance.reason || 'local_delivery_failed');
           st = D.readState(); event = st.event;
-          var all = arr(root.GM.chars).filter(function (ch) { return ch && ch.id && ch.alive !== false && ch.dead !== true && !player(ch) && D.budget(ch).steps < D.config.dailySteps; }).sort(function (a, b) { return order(a.id, b.id); });
+          var responsePlan = event.source === 'response' && event.planId && D.get(event.planId);
+          var responseActors = responsePlan ? [responsePlan.actorId, responsePlan.targetId, responsePlan.localActivity && responsePlan.localActivity.thirdPartyId] : null;
+          var all = arr(root.GM.chars).filter(function (ch) { return ch && ch.id && (!responseActors || responseActors.indexOf(ch.id) >= 0) && ch.alive !== false && ch.dead !== true && !player(ch) && D.budget(ch).steps < D.config.dailySteps; }).sort(function (a, b) { return order(a.id, b.id); });
           var matterIndex = new Map();
           D.plans().filter(function (p) { return p && p.localActivity; }).forEach(function (p) { [p.actorId, p.targetId, p.localActivity.thirdPartyId].filter(Boolean).forEach(function (key) {
             if (!matterIndex.has(key)) matterIndex.set(key, []); matterIndex.get(key).push(p);
@@ -700,7 +730,7 @@
           var choice = null, chosen = null;
           for (var i = 0; i < ordered.length; i++) {
             var ch = ordered[i]; if (!visited.has(ch.id) && visited.size >= config.actorsPerBatch) continue;
-            visited.add(ch.id); var options = candidates(ch, matterIndex.get(ch.id) || [], { skipUnsolicited: event.source === 'enter' && event.newContacts >= config.initialNewContacts }); summary.candidates += options.length;
+            visited.add(ch.id); var options = candidates(ch, matterIndex.get(ch.id) || [], { skipUnsolicited: event.source === 'response' || event.source === 'enter' && event.newContacts >= config.initialNewContacts }); summary.candidates += options.length;
             choice = options.find(function (o) { return !attempted.has(ch.id + ':' + o.source); });
             if (choice) { chosen = ch; break; }
             st.cursor = ch.id;
@@ -776,7 +806,7 @@
     var planning = root.GM && root.GM._npcActionState && root.GM._npcActionState.planning || {}, pending = Array.isArray(planning.pending) ? planning.pending.filter(function (q) { return q && q.actorId === String(ch && ch.id) && q.status === 'pending'; }) : [];
     return { ordinaryMode: 'local', localDue: localOnlyDue(ch), planningPending: pending.length, modelRequired: pending.length > 0, compatibilityPath: true };
   }
-  NPC.LocalAI = { config: config, wake: wake, candidates: candidates, inclination: inclination, scheduleEntry: scheduleEntry, localOnlyDue: localOnlyDue, routingStatus: routingStatus,
+  NPC.LocalAI = { config: config, wake: wake, meetingEvent: meetingEvent, candidates: candidates, inclination: inclination, scheduleEntry: scheduleEntry, localOnlyDue: localOnlyDue, routingStatus: routingStatus,
     requestPublicTransfer: requestPublicTransfer, createDutyMatter: createDutyMatter, authorizeDutyMatter: authorizeDutyMatter, renderDutyPanel: renderDutyPanel, runDutyChoices: runDutyChoices,
     dutyEvidence: dutyEvidence, dutyMatter: dutyMatter, dutyMatterOptions: dutyMatterOptions, dutyAssignments: dutyAssignments };
   if (root.GameHooks) root.GameHooks.on('enterGame:after', scheduleEntry, 60);

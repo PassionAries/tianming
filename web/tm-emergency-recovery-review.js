@@ -26,12 +26,13 @@
     return v;
   }
   function snapshot(g){var out={};Object.keys(g).forEach(function(k){if(!forbidden.test(k)&&typeof g[k]!=='function')out[k]=g[k];});out=copy(out);if(g===root.GM&&root.P)playerSnapshots.set(out,snapshot(root.P));return out;}
+  function releaseBasis(s){if(s.basis)playerSnapshots.delete(s.basis);s.basis=null;}
   function progress(s,phase,detail){
     s.status.phase=phase;s.status.detail=detail;s.status.calls=s.calls;s.status.steps=s.steps;s.status.repairs=s.repairs;
     if(root.console&&root.console.info)root.console.info('[TurnReview] '+phase+' calls='+s.calls+' tokens='+(s.status.estimatedTokens||0)+' limit='+(s.config.reviewMaxTokens||'unlimited')+' sources='+s.paper.seen.size+'/'+s.paper.required.size+' '+detail);
     if(root.dispatchEvent&&root.CustomEvent)root.dispatchEvent(new root.CustomEvent('tm-emergency-recovery',{detail:copy(s.status)}));
   }
-  function cleanup(s){clearTimeout(s.timer);clearTimeout(s.startTimer);s.run.dispose();if(s.ctx.signal)s.ctx.signal.removeEventListener('abort',s.external);if(sessions.get(s.ctx)===s)sessions.delete(s.ctx);live.delete(s.id);}
+  function cleanup(s){clearTimeout(s.timer);clearTimeout(s.startTimer);s.run.dispose();if(s.ctx.signal)s.ctx.signal.removeEventListener('abort',s.external);releaseBasis(s);s.reads=null;s.record=null;if(sessions.get(s.ctx)===s)sessions.delete(s.ctx);live.delete(s.id);}
   function cancel(ctx){if(ctx && typeof ctx==='object')queued.delete(ctx);var s=typeof ctx==='string'?live.get(ctx):sessions.get(ctx);if(s){s.controller.abort(fault('AI_ABORTED','回合复核已取消'));cleanup(s);}}
   function assert(s){
     if(s.controller.signal.aborted)throw s.controller.signal.reason||fault('AI_ABORTED');
@@ -163,7 +164,10 @@
 
   function makeBasis(s){
     if(s.background&&s.recordTarget)recordKeys.forEach(function(k){var value=s.recordTarget[savedRecordKeys[k]||k];if(typeof value==='string')s.ctx.record[k]=value;});
-    assert(s);s.basis=snapshot(s.g);s.reads=new Map();s.record=copy(s.ctx.record||{});
+    // A new plan supersedes the old proposal or follows its completed conflict
+    // check/write. Retire its read copies before allocating another full world.
+    assert(s);releaseBasis(s);s.reads=null;s.record=null;
+    s.basis=snapshot(s.g);s.reads=new Map();s.record=copy(s.ctx.record||{});
     if(!s.materialsInitialized){collectGenerated(s,'main');s.materialsInitialized=true;}
     s.sources=Object.assign(Object.create(null),s.paper.texts,{edicts:JSON.stringify(s.ctx.input&&s.ctx.input.edicts||{}),'turn-start':JSON.stringify(s.ctx.input&&s.ctx.input.oldVars||{}),
       'typed-actions':sourceJson(s,s.batch),receipts:JSON.stringify({edict:s.g._edictExecutionReport,transfers:(s.g.transferOrders||[]).slice(-40),applied:s.result.applied,report:(s.g._turnReport||[]).slice(-80)}),
@@ -220,6 +224,7 @@
   instructions+='【充分修改权限】edit_world 可创建、修改或删除当前世界业务数据，包括新党派、人物、势力、阶层、军队和检验器未覆盖的自定义状态。不可因旧 set_field 白名单或开局名册缺项便放弃，应查询 edit_world 的完整参数并实际执行。修复失败主批次时，可先用世界编辑补齐必要依赖，再用 retry_main 重放；所有操作仍须对照生成原文、实际读回和后置条件验证。';
   async function plan(s,phase){
     phase=phase||'scan';
+    try{
     makeBasis(s);
     var defs=writer().defs().map(function(d){return {name:d.name,description:d.description,parameters:d.parameters};});
     var brief=defs.map(function(d){return {name:d.name,args:Object.keys(d.parameters&&d.parameters.properties||{}),description:d.description.slice(0,105)};});
@@ -262,6 +267,11 @@
       }
     }
     throw fault('REVIEW_BUDGET','回合复核达到调用或工具预算，尚未完成');
+    }finally{
+      // certify copied every conflict dependency into reads; commit also uses
+      // the detached record. Neither needs the planning world's GM/P copies.
+      releaseBasis(s);
+    }
   }
   function start(result,batch,ctx,mainBatch){
     if(sessions.has(ctx))return;

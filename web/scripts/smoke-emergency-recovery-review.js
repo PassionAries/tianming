@@ -22,9 +22,17 @@ async function finishBackground(c,x,record){
  for(let i=0;i<100&&c.TM.RecoveryReview.status().length;i++)await new Promise(resolve=>setTimeout(resolve,5));
  assert.equal(c.TM.RecoveryReview.status().length,0,'background review settles independently');return {row:c.GM.shijiHistory[0],saves};
 }
-function setup(settings={}){
+function setup(settings={},observeBasis){
  const f=fixture(settings),c=f.c;c.GM=baseGM({_campaignId:'a',_timelineId:'b',_endTurnCommitPending:true,chars:[{id:'a',name:'张甲',mood:'平静',loyalty:50,alive:true}]});
- for(const file of ['tm-ai-change-pathutils.js','tm-ai-change-army.js','tm-ai-change-narrative.js','generated/tm-ai-change-applier.bundle.js','tm-social-formation.js','tm-agent-world-editor.js','tm-endturn-agent-write-tools.js','tm-emergency-recovery-review.js'])load(c,file);
+ for(const file of ['tm-ai-change-pathutils.js','tm-ai-change-army.js','tm-ai-change-narrative.js','generated/tm-ai-change-applier.bundle.js','tm-social-formation.js','tm-agent-world-editor.js','tm-endturn-agent-write-tools.js','tm-emergency-recovery-review.js']){
+  if(file!=='tm-emergency-recovery-review.js'||!observeBasis){load(c,file);continue;}
+  // Observe private ownership at the real allocation boundary only in this VM.
+  // Production exposes no inspector and still performs its original full clone.
+  c.__reviewBasisProbe=observeBasis;
+  const source=fs.readFileSync(path.join(__dirname,'..',file),'utf8'),marker='  function snapshot(g){';
+  assert.equal(source.split(marker).length,2,'one production snapshot allocation boundary');
+  vm.runInContext(source.replace(marker,marker+'root.__reviewBasisProbe({world:g,session:Array.from(live.values())[0],playerSnapshots:playerSnapshots});'),c,{filename:file});
+ }
  return f;
 }
 async function review(f,plan,result=okay){const c=f.c,x=ctx();c.callAI=async prompt=>reply(prompt,plan);c.TM.RecoveryReview.start(result,x.results.sc1,x);return {receipt:await c.TM.RecoveryReview.join(x),ctx:x};}
@@ -209,4 +217,74 @@ test('post-write evidence exposes unintended changes rather than trusting the to
 test('a later distinct inference source is reviewed even when its text duplicates an earlier source',async()=>{const f=setup(),c=f.c,x=ctx(),started=deferred();let n=0;try{x.results.sc16={text:'同样的生成结论'};c.callAI=async prompt=>{n++;if(n===1)started.resolve();else{const rows=request(prompt).case.sources;assert(rows.some(r=>r.text.includes('同样的生成结论')&&(r.aliases||[]).includes('final:result:sc17')));}return reply(prompt,empty());};c.TM.RecoveryReview.start(okay,x.results.sc1,x);await started.promise;x.results.sc17={text:'同样的生成结论'};await c.TM.RecoveryReview.join(x);assert.equal(n,2);}finally{f.dispose();}});
 
 test('state evidence read during planning remains available unchanged during after-write verification',async()=>{const f=setup(),c=f.c,x=ctx();let stateId;try{c.callAI=async prompt=>{const q=request(prompt);if(q.case.phase==='verify'){const row=q.case.sources.find(r=>r.id===stateId||(r.aliases||[]).includes(stateId));assert(row);assert(row.text.includes('"mood":"平静"'));assert.equal(c.GM.chars[0].mood,'忧虑');return verified(prompt);}if(!q.history.length)return JSON.stringify({tools:[{name:'read_state',input:{path:'chars.张甲'}}]});stateId=q.history.find(r=>r.tool==='read_state').result.id;const p=empty();p.operations=[mood('忧虑')];p.operations[0].evidence.push({source:stateId,quote:'"mood":"平静"'});return submit(p);};c.TM.RecoveryReview.start(okay,x.results.sc1,x);const r=await c.TM.RecoveryReview.join(x);assert(r.verified);assert.equal(r.calls,3);}finally{f.dispose();}});
+test('prepared review retires full worlds before handoff and preserves copied conflict evidence through replanning',async()=>{
+ let owner,players,snapshots=0,oldBasis,oldReads;
+ const f=setup({},({world,session,playerSnapshots})=>{
+  owner=session;players=playerSnapshots;
+  if(oldBasis){
+   assert.equal(owner.basis,null,'no previous full basis survives into native snapshot allocation');
+   assert.equal(owner.reads,null,'superseded read copies retire before snapshot allocation');
+   assert.equal(owner.record,null,'superseded record copy retires before snapshot allocation');
+   assert.equal(players.has(oldBasis),false,'previous basis no longer owns a hidden P snapshot');
+  }
+  if(world===f.c.GM)snapshots++;
+ }),c=f.c,x=ctx();let calls=0;try{
+  c.P.reviewOnly={marker:'original P value'};
+  c.callAI=async prompt=>{
+   const q=request(prompt);calls++;
+   assert(owner.basis&&players.has(owner.basis),'each active plan still owns detached GM and P');
+   if(calls===1){
+    oldBasis=owner.basis;oldReads=owner.reads;assert.notEqual(oldBasis,c.GM);assert.notEqual(players.get(oldBasis),c.P);
+    c.GM.chars[0].loyalty=61;c.P.reviewOnly.marker='live P value';
+    assert.equal(oldBasis.chars[0].loyalty,50);assert.equal(players.get(oldBasis).reviewOnly.marker,'original P value');
+   }
+   if(q.case.phase==='verify')return verified(prompt);
+   const p=empty();p.operations=[mood(calls===1?'忧虑':'忧虑且戒备')];
+   if(calls>1)assert(prompt.includes('并行推演已更新'));
+   return submit(p);
+  };
+  c.TM.RecoveryReview.start(okay,x.results.sc1,x);
+  while(!owner)await new Promise(resolve=>setTimeout(resolve,0));
+  const prepared=await owner.pending;assert(prepared.value);
+  assert.equal(owner.basis,null,'prepared proposal cannot retain a full world through handoff or save');
+  assert.equal(players.has(oldBasis),false);assert.equal(owner.reads,oldReads);
+  assert.equal(owner.reads.get('chars.张甲.mood'),'平静');assert.equal(owner.record.zhengwen,x.record.zhengwen);
+  c.GM.chars[0].mood='戒备';
+  const receipt=await c.TM.RecoveryReview.join(x);
+  assert.equal(receipt.calls,3);assert.equal(snapshots,3);assert(receipt.verified);
+  assert.equal(c.GM.chars[0].mood,'忧虑且戒备');assert.equal(c.GM.chars[0].loyalty,61);
+  assert.equal(owner.basis,null);assert.equal(owner.reads,null);assert.equal(owner.record,null);
+  assert.equal(owner.ctx,x);assert.equal(owner.g,c.GM);assert.equal(owner.p,c.P);
+ }finally{c.TM.RecoveryReview.cancel(x);f.dispose();}
+});
+test('failed replacement snapshot leaves no old basis or read owner and cannot commit its superseded proposal',async()=>{
+ let owner,players,oldBasis,snapshots=0;
+ const f=setup({},({world,session,playerSnapshots})=>{
+  owner=session;players=playerSnapshots;
+  if(world===f.c.GM&&++snapshots===2){
+   assert.equal(owner.basis,null);assert.equal(owner.reads,null);assert.equal(owner.record,null);assert.equal(players.has(oldBasis),false);
+   throw Error('fixture replacement snapshot failed');
+  }
+ }),c=f.c,x=ctx();try{
+  c.callAI=async()=>{oldBasis=owner.basis;return submit(empty());};
+  c.TM.RecoveryReview.start(okay,x.results.sc1,x);
+  while(!owner)await new Promise(resolve=>setTimeout(resolve,0));
+  await owner.pending;x.record.shiluText='后续生成的新实录，必须另行核对。';
+  await assert.rejects(c.TM.RecoveryReview.join(x),/fixture replacement snapshot failed/);
+  assert.equal(owner.basis,null);assert.equal(owner.reads,null);assert.equal(owner.record,null);assert.equal(players.has(oldBasis),false);
+  assert.equal(c.GM.chars[0].mood,'平静');assert(!x.meta.emergencyReview?.approved);assert.equal(c.TM.RecoveryReview.status().length,0);
+ }finally{c.TM.RecoveryReview.cancel(x);f.dispose();}
+});
+test('cancellation releases private snapshot owners while late responses retain identity checks and cannot write',async()=>{
+ let owner,players,basis;const started=deferred(),release=deferred();
+ const f=setup({},p=>{owner=p.session;players=p.playerSnapshots;}),c=f.c,x=ctx();try{
+  x.meta.transaction={committed:false,rolledBack:false};
+  c.callAI=async()=>{basis=owner.basis;started.resolve();await release.promise;const p=empty();p.operations=[mood('不应写入')];return submit(p);};
+  c.TM.RecoveryReview.start(okay,x.results.sc1,x);const joined=c.TM.RecoveryReview.join(x);joined.catch(()=>{});await started.promise;
+  assert(basis&&players.has(basis));c.TM.RecoveryReview.cancel(x);
+  assert.equal(owner.basis,null);assert.equal(owner.reads,null);assert.equal(owner.record,null);assert.equal(players.has(basis),false);
+  assert.equal(owner.ctx,x);assert.equal(owner.ctx.meta.transaction,x.meta.transaction);assert.equal(owner.g,c.GM);assert.equal(owner.p,c.P);
+  release.resolve();await assert.rejects(joined,e=>e.code==='AI_ABORTED');assert.equal(c.GM.chars[0].mood,'平静');
+ }finally{release.resolve();c.TM.RecoveryReview.cancel(x);f.dispose();}
+});
 run(tests);

@@ -107,6 +107,13 @@ module.exports = async function ({ win, root, check, results }) {
     observe(window,'_tmCapturePreEndTurnCommittedState','pre-save-capture');
     observe(window,'_tmPrepareEndTurnBoundary','pre-save-commit');
     observe(TM.Endturn.ResponseRecovery,'begin','response-recovery');
+    const finalize=window._tmFinalizeEndTurnTransaction;
+    window._tmFinalizeEndTurnTransaction=function(ctx,txn){
+      trace('finalize','start');const result=finalize.apply(this,arguments);
+      result.then(()=>{const flags={committed:!!(txn&&txn.committed),committedCaptureReleased:!!(ctx&&ctx.meta&&ctx.meta.committedCaptureReleased),captureSessionReleased:!!(txn&&txn.captureSession&&txn.captureSession.released)};ctx=null;txn=null;console.info('COMPOSITE_COMMIT_RELEASE '+JSON.stringify({turn:GM.turn,day:TM.SimTime.now(GM),at:Date.now(),...flags}));trace('finalize','end');},()=>{ctx=null;txn=null;trace('finalize','reject');});
+      return result;
+    };
+
     return true;
   })()`);
   // Declared initial test visibility: one existing nearby public venue.

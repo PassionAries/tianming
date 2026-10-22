@@ -741,6 +741,7 @@ async function _tmFinalizeEndTurnTransaction(ctx, txn) {
       ctx.meta.canonicalWorldSnapshot,
       ctx.meta.canonicalWorldSnapshotMeta || { turn: GM.turn, transactionId: ctx.meta.transactionId, takeOwnership: true }
     ); } catch (adoptionError) { _tmReportEndTurnBoundaryError(adoptionError, 'desktop autosave baseline'); }
+    if (adopted === true) ctx.meta.committedSnapshotAdopted = true;
     if (adopted !== true) {
       _tmReportEndTurnBoundaryError(new Error('canonical committed snapshot adoption failed'), 'desktop autosave baseline');
     }
@@ -754,6 +755,30 @@ async function _tmFinalizeEndTurnTransaction(ctx, txn) {
     ctx.results.turnDataPublishError = publishError;
     try { if (window.TM && TM.errors && TM.errors.capture) TM.errors.capture(publishError, 'endTurn] turn-data publish'); } catch (_) {}
     try { if (typeof toast === 'function') toast('回合已安全保存；分卷将在下次读档时自动补发。'); } catch (_) {}
+  }
+  // A settled canonical commit has a new immutable autosave owner. Retire only
+  // the obsolete transaction captures; live background reviews still use this
+  // ctx's input/results/record and transaction identity, never a rollback copy.
+  // Unconfirmed writes, failed adoption and unfinished publication retain all
+  // recovery material. SaveReconcile reaches this same boundary after readback.
+  var committedReceipt = txn && txn.canonicalSaveReceipt;
+  if (txn && txn.committed === true && !txn.rolledBack && !txn.saveWriteUnconfirmed
+      && !ctx.meta.saveWriteUnconfirmed && ctx.meta.committedSnapshotAdopted === true
+      && !ctx.meta.stagedTurnData && committedReceipt && committedReceipt.state === 'committed'
+      && committedReceipt.transactionId === txn.transactionId
+      && Array.isArray(committedReceipt.slots) && committedReceipt.slots.length === 2
+      && ['autosave', 'slot_0'].every(function(id) { return committedReceipt.slots.some(function(slot) {
+        return slot.id === id && slot.campaignId === txn.campaignId && slot.timelineId === txn.timelineId;
+      }); })) {
+    txn.gm = null;
+    txn.p = null;
+    if (txn.captureSession) {
+      ['rollbackCapture', 'preEndturnState', 'preEndturnPayload', 'finalCanonicalState', 'finalPayload'].forEach(function(key) { txn.captureSession[key] = null; });
+      txn.captureSession.released = true;
+    }
+    ctx.meta.canonicalWorldPayload = null;
+    ctx.meta.acceptReconciledCommit = null;
+    ctx.meta.committedCaptureReleased = true;
   }
   try { if (typeof _endTurn_clearCommittedInputs === 'function') _endTurn_clearCommittedInputs(); }
   catch (draftError) { try { if (window.TM && TM.errors && TM.errors.capture) TM.errors.capture(draftError, 'endTurn] clear committed drafts'); } catch (_) {} }

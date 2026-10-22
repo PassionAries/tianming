@@ -350,5 +350,54 @@ test('unknown active delegation dates do not erase the duty; expired and revoked
   assert.equal(revoked.TM.OfficeTenure.privateTravelDuties(revoked.GM, revoked.delegate).rows.length, 0);
 });
 
+test('two real resident permits cover sourced onsite discussion and the actual return', () => {
+  const c = world({ count: 2 }), D = c.TM.NPC.DailyActivities;
+  assert.equal((c.a.localGoals || []).length, 0, 'the source is a performed activity, not a prefilled plan');
+  const source = D.submitNPC(c.a, { actionId: 'office-composite:source', activityKind: 'assistance', targetId: c.b.id,
+    task: { kind: 'material_summary', title: 'Read the supplied identity material', materialRefs: [{ kind: 'character_public', characterId: c.a.id }] } });
+  assert.equal(source.outcome, 'submitted', source.reason);
+  c.advance(); let sourcePlan = D.get(source.planId);
+  assert.equal(c.step(c.b, sourcePlan, 'respond', 'accept').outcome, 'submitted');
+  c.advance(); sourcePlan = D.get(source.planId);
+  assert.equal(c.step(c.b, sourcePlan, 'perform').outcome, 'submitted');
+  c.advance(); sourcePlan = D.get(source.planId);
+  assert.equal(c.step(c.a, sourcePlan, 'feedback', 'satisfied').outcome, 'completed');
+  c.advance(); sourcePlan = D.get(source.planId);
+  assert.equal(sourcePlan.status, 'done');
+  assert.equal(sourcePlan.localActivity.documents[0].receivedBy, c.a.id);
+  const opportunity = D.consultationOpportunities(D.person(c.a.id)).find(row => row.action.targetId === c.b.id);
+  assert(opportunity, 'the actual received assistance supplies a discussion purpose');
+  const permits = [c.permit('seat-0'), c.permit('seat-1')];
+  c.load('tm-npc-local-ai.js');
+  const request = D.submitNPC(D.person(c.a.id), { actionId: 'office-composite:meeting', activityKind: 'meeting', targetId: c.b.id,
+    meeting: { locationId: 'west', requestedStartDay: D.day() + 4, durationDays: 2, windowDays: 3,
+      discussion: opportunity.action.consultation } });
+  assert.equal(request.outcome, 'submitted', request.reason);
+  c.advance(12);
+  const current = D.get(request.planId), m = current.localActivity.meeting;
+  assert.equal(current.status, 'done');
+  assert.equal(m.targetDecision.response, 'accept', 'the local participant independently accepts');
+  assert(current.messages.some(message => message.kind === 'meeting_response' && message.status === 'delivered'));
+  assert.equal(m.discussion.status, 'completed');
+  assert.equal(current.steps.filter(step => step.phase === 'discuss').length, 1);
+  assert.equal(current.steps.filter(step => step.phase === 'discuss_response').length, 1);
+  assert(m.discussion.result.actorContent && m.discussion.result.targetContent, 'both participants actually contribute content');
+  assert.equal(m.participation.discussion.result.sourcePlanId, current.id);
+  assert.equal(m.actorReturnJourney.status, 'returned');
+  assert.equal(m.actorReturnJourney.toRegionId, 'east');
+  assert.equal(m.targetReturnJourney.status, 'returned');
+  assert.equal(D.exactLocation(D.person(c.a.id)), 'east');
+  assert.equal(D.exactLocation(D.person(c.b.id)), 'east');
+  const evidence = JSON.stringify({ participation: m.participation, discussion: m.discussion, steps: current.steps });
+  c.deliver();
+  const replay = D.get(request.planId).localActivity.meeting;
+  assert.equal(JSON.stringify({ participation: replay.participation, discussion: replay.discussion, steps: D.get(request.planId).steps }), evidence, 'a replay cannot repeat the discussion or its effects');
+  assert.equal(c.apiAttempts.length, 0);
+  console.log(JSON.stringify({ fixture: 'resident-composite-with-two-permits', sourcePlanId: source.planId,
+    permitPlanIds: permits.map(permit => permit.planId), meetingPlanId: current.id,
+    startedDay: m.startedDay, resultDay: m.discussion.result.day, endDay: m.endDay,
+    actorReturnDay: m.actorReturnJourney.arrivedDay, resultId: m.discussion.result.id, modelAttempts: c.apiAttempts.length }));
+});
+
 console.log(JSON.stringify({ suite: 'npc-meeting-office', passed, failed }));
 if (failed) process.exitCode = 1;

@@ -9,7 +9,7 @@ module.exports = async function ({ win, root, check, results }) {
   win.webContents.session.webRequest.onBeforeRequest({urls:['http://*/*','https://*/*','ws://*/*','wss://*/*']}, (details, callback) => {
     const url = new URL(details.url); traffic.push({host:url.host,path:url.pathname}); callback({cancel:true});
   });
-  const js = async code => { fs.appendFileSync(path.join(dir,'progress.log'),new Date().toISOString()+' '+code.slice(0,160)+'\n'); const r = await win.webContents.executeJavaScript(`(async()=>{try{return{ok:true,value:await(${code})};}catch(e){return{ok:false,error:String(e.stack||e)}}})()`, true); if (!r.ok) throw Error(r.error); return r.value; };
+  const js = async code => { fs.appendFileSync(path.join(dir,'progress.log'),new Date().toISOString()+' '+code.slice(0,160)+'\n'); const r = await win.webContents.executeJavaScript(`(async()=>{try{return{ok:true,value:await(${code}),heap:${process.env.TM_BRIDGE_MEMORY_DIAGNOSTICS==='1' ? '(performance.memory ? {limit:performance.memory.jsHeapSizeLimit,used:performance.memory.usedJSHeapSize,total:performance.memory.totalJSHeapSize}:null)' : 'null'}};}catch(e){return{ok:false,error:String(e.stack||e)}}})()`, true); if (r.heap) fs.appendFileSync(path.join(dir,'renderer-heap.jsonl'),JSON.stringify({at:new Date().toISOString(),operation:code.slice(0,100),heap:r.heap})+'\n'); if (!r.ok) throw Error(r.error); return r.value; };
   const settle = () => js(`new Promise(r=>setTimeout(r,80))`);
   const panel = '#tm-action-letter-overlay [data-npc-daily-panel="formal"]';
   async function screenshot(name) { fs.writeFileSync(path.join(dir, name + '.png'), (await win.webContents.capturePage()).toPNG()); }

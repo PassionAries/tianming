@@ -12,6 +12,16 @@ process.env.NODE_PATH = path.resolve(__dirname, '../../node_modules'); require('
 if (mode === 'test-exports') process.env.TIANMING_TEST_EXPORTS = '1'; else delete process.env.TIANMING_TEST_EXPORTS;
 const temp = process.env.TM_BRIDGE_TEST_USERDATA || fs.mkdtempSync(path.join(os.tmpdir(), 'tm-bridge-gate-'));
 app.setPath('userData', temp); app.setPath('sessionData', path.join(temp, 'session')); app.getAppPath = () => root;
+// Optional read-only diagnostics for a real renderer crash; never raise heap limits.
+if (mode === 'npc-composite' && process.env.TM_BRIDGE_MEMORY_DIAGNOSTICS === '1') {
+  const dumpDir = path.join(path.dirname(process.env.TM_BRIDGE_TEST_REPORT), 'crash-dumps');
+  fs.mkdirSync(dumpDir, { recursive:true }); app.setPath('crashDumps', dumpDir);
+  require('electron').crashReporter.start({ uploadToServer:false });
+  app.whenReady().then(() => setInterval(() => {
+    const metrics = app.getAppMetrics().map(m => ({ pid:m.pid, type:m.type, cpu:m.cpu, memory:m.memory }));
+    fs.appendFileSync(path.join(path.dirname(process.env.TM_BRIDGE_TEST_REPORT), 'process-memory.jsonl'), JSON.stringify({ at:new Date().toISOString(), metrics })+'\n');
+  }, 5000).unref());
+}
 const deny = () => { throw new Error('test-external-network-denied'); };
 for (const name of ['http', 'https']) { require(name).request = deny; require(name).get = deny; }
 net.request = deny; net.fetch = deny; global.fetch = deny;

@@ -27,6 +27,13 @@ function loadHeadlessHelpers() {
 const helpers = loadHeadlessHelpers();
 
 function installNodeExtras(win) {
+  // Match Electron native encoding/checksum APIs; legacy fallbacks have their own canonical-UTF8 smoke.
+  win.TextEncoder = TextEncoder;
+  win.TextDecoder = TextDecoder;
+  win.crypto = require('crypto').webcrypto;
+  assert(typeof win.TextEncoder === 'function' && typeof win.TextDecoder === 'function'
+    && win.crypto && win.crypto.subtle && typeof win.crypto.subtle.digest === 'function',
+    'integration fixture requires native UTF-8 and Web Crypto APIs');
   win.location.href = 'http://localhost/index.html';
   win.location.search = '';
   win.document.body.insertAdjacentHTML = function () {};

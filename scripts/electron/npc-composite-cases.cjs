@@ -1,11 +1,14 @@
 'use strict';
 // Real official startup and formal controls. No player saves or external models are used.
 const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
-module.exports = async function ({ win, root, check, results }) {
+const { installCompositeWaits } = require('./npc-composite-waits.cjs');
+module.exports = async function ({ win, root, check, results, deadlineAt }) {
+  assert(Number.isFinite(deadlineAt), 'the original Electron suite deadline must be supplied');
   const dir = path.dirname(process.env.TM_BRIDGE_TEST_REPORT), timeline = [], traffic = [];
   const identity={head:require('child_process').execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),platform:process.platform,versions:process.versions,runtime:{}};
   for(const f of ['tm-npc-travel.js','tm-npc-local-ai.js','tm-npc-daily-activities.js','tm-npc-daily-ui.js','tm-npc-action-ledger.js','tm-office-tenure.js','tm-sim-time.js','tm-endturn-core.js'])identity.runtime[f]=require('crypto').createHash('sha256').update(fs.readFileSync(path.join(root,'web',f))).digest('hex');
   identity.harness={};for(const f of ['scripts/electron/npc-composite-cases.cjs','scripts/electron/npc-composite-model-fixture.cjs','web/tm-start-runtime-manifest.json'])identity.harness[f]=require('crypto').createHash('sha256').update(fs.readFileSync(path.join(root,f))).digest('hex');
+  const waitHelperPath='scripts/electron/npc-composite-waits.cjs';identity.harness[waitHelperPath]=require('crypto').createHash('sha256').update(fs.readFileSync(path.join(root,waitHelperPath))).digest('hex');
   win.webContents.session.webRequest.onBeforeRequest({urls:['http://*/*','https://*/*','ws://*/*','wss://*/*']}, (details, callback) => {
     const url = new URL(details.url); traffic.push({host:url.host,path:url.pathname}); callback({cancel:true});
   });
@@ -25,6 +28,8 @@ module.exports = async function ({ win, root, check, results }) {
   }
   async function record(stage) {
     const state=await js(`(()=>({day:TM.SimTime.now(GM),turn:GM.turn,player:GM.playerCharacterId,load:window._tmLoadGen,people:GM.chars.length,plans:(GM._npcPlans||[]).filter(p=>p.localActivity).map(p=>({id:p.id,kind:p.localActivity.kind,status:p.status,next:p.nextActorId,messages:p.messages,steps:p.steps,meeting:p.localActivity.meeting||null})),money:GM.guoku&&GM.guoku.money}))()`);
+    state.producerWaits=await js(`window.__compositeWaits?window.__compositeWaits.snapshot():[]`);
+    if(stage==='completed-evidence')assert(state.producerWaits.every(row=>row.status==='completed'&&row.invocations===1),'all actual UI producers must finish once without late duplicate calls');
     const planning=await js(`(()=>{const s=GM._npcActionState&&GM._npcActionState.planning;if(!s)return null;return {requests:(s.pending||[]).map(q=>({id:q.id,actorId:q.actorId,kind:q.kind,sourceKey:q.sourceKey,planId:q.planId||'',messageId:q.messageId||'',revision:q.revision,termsVersion:q.termsVersion,sourceVersion:q.sourceVersion,goalFingerprint:q.goalFingerprint,knownDay:q.knownDay,createdDay:q.createdDay,status:q.status,attempts:q.attempts,lastError:q.lastError,directionId:q.directionId||'',expiresDay:q.expiresDay,knownSource:s.actors&&s.actors[q.actorId]&&s.actors[q.actorId].knownMessages&&s.actors[q.actorId].knownMessages[q.sourceKey]||null})),directions:Object.values(s.directions||{}).map(d=>({id:d.id,actorId:d.actorId,sourceKey:d.sourceKey,sourceKind:d.sourceKind,status:d.status,createdDay:d.createdDay,reviewDay:d.reviewDay,steps:(d.steps||[]).map(s=>({id:s.id,goalId:s.goalId,goalSource:s.goalSource,kind:s.kind,status:s.status,dependsOn:s.dependsOn,targetId:s.targetId,activityId:s.activityId||'',lastOutcome:s.lastOutcome,lastReason:s.lastReason}))}))};})()`);
     const calls=await js(`(()=>{if(!window.__compositeCalls)return null;return Object.assign({},__compositeCalls,{planningStats:GM._npcActionState&&GM._npcActionState.planning?{logicalRequests:GM._npcActionState.planning.logicalRequests,compatibilityRequests:GM._npcActionState.planning.compatibilityRequests,modelAttempts:GM._npcActionState.planning.modelAttempts}:null});})()`);timeline.push({stage,...state,planning}); fs.writeFileSync(path.join(dir,'composite-timeline.json'),JSON.stringify({identity,timeline,traffic,calls},null,2)); return state;
   }
@@ -46,22 +51,20 @@ module.exports = async function ({ win, root, check, results }) {
   async function formalTurn() {
     await closeLetters(); await dismissNotice();
     const before=await js(`({turn:GM.turn,day:TM.SimTime.now(GM)})`);
+    const ticket=await js(`__compositeWaits.arm('turn')`);
     if(process.env.TM_BRIDGE_CPU_PROFILE==='1'&&!win.__compositeProfiled){
       win.__compositeProfiled=true;win.webContents.debugger.attach('1.3');await win.webContents.debugger.sendCommand('Profiler.enable');await win.webContents.debugger.sendCommand('Profiler.start');
       setTimeout(async()=>{try{const p=await win.webContents.debugger.sendCommand('Profiler.stop');fs.writeFileSync(path.join(dir,'first-turn.cpuprofile'),JSON.stringify(p.profile));win.webContents.debugger.detach();}catch(e){fs.writeFileSync(path.join(dir,'profile-error.txt'),String(e));}},30000);
     }
     await click('#endturn .et-big');
     await wait(`document.querySelector('#cet-ok')`,'formal endTurn confirmation missing'); await click('#cet-ok');
-    let sawBusy=false;
-    for(let i=0;i<500;i++) {
-      if(await js(`!!document.querySelector('#post-turn-court-prompt button[onclick="_postTurnCourtChoose(false)"]')`))await click('#post-turn-court-prompt button[onclick="_postTurnCourtChoose(false)"]');
-      const state=await js(`({busy:GM.busy||GM._endTurnBusy,turn:GM.turn,day:TM.SimTime.now(GM)})`);
-      if(!state.busy&&state.turn>before.turn)break;
-      if(state.busy)sawBusy=true;
-      if(!state.busy&&(sawBusy||i>50)){await record('failed-top-level-turn');throw Error('top-level turn returned without committing '+JSON.stringify(state));}
-      if(i===499)throw Error('formal turn did not finish '+JSON.stringify(state));
-      await new Promise(r=>setTimeout(r,100));
-    }
+    await wait(`!!document.querySelector('#post-turn-court-prompt button[onclick="_postTurnCourtChoose(false)"]')`,'formal court choice missing');
+    await click('#post-turn-court-prompt button[onclick="_postTurnCourtChoose(false)"]');
+    const completed=await js(`__compositeWaits.wait(${ticket})`);
+    const state=await js(`({busy:!!(GM.busy||GM._endTurnBusy),pending:!!GM._endTurnCommitPending,turn:GM.turn,day:TM.SimTime.now(GM)})`);
+    assert.equal(completed.status,'completed');assert.equal(completed.invocations,1);assert(completed.commit,'actual top-level commit witness missing');
+    assert.equal(state.busy,false);assert.equal(state.pending,false);assert(state.turn>before.turn,'top-level producer returned without advancing the committed turn');
+    timeline.push({stage:'top-level-producer-complete',completed});
     // The formal page is usable after the top-level transaction commits.
     // Required activity states are asserted below; the real save entry itself
     // waits for required background jobs, exactly as it does for the player.
@@ -76,12 +79,18 @@ module.exports = async function ({ win, root, check, results }) {
     await record('before-save-'+name);await js(`void(window.__compositeOldButton=document.querySelector(${JSON.stringify(card+' [data-daily-cancel]')}))`); assert.equal(await js(`!!window.__compositeOldButton`),true,'the unfinished meeting must expose a real old cancel control for the stale-world test'); await closeLetters();
     await click('#tm-pause-fab'); await click('#pause-bg button[onclick="closePause();openSaveManager()"]');
     await wait(`!!document.querySelector('#save-manager-overlay button[onclick="saveToSlot(${slot})"]')`,'save slot control missing');
+    const saveTicket=await js(`__compositeWaits.arm('save',${slot})`);
     await click('#save-manager-overlay button[onclick="saveToSlot('+slot+')"]');
     await js(`(()=>{const e=document.querySelector('body > div:last-child input');if(!e)throw Error('save naming prompt missing');e.value=${JSON.stringify(name)};e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
     await click('body > div:last-child button.bt.bp');
-    await wait(`!!document.querySelector('#save-manager-overlay button[onclick="loadSaveSlot(${slot})"]')`,'actual saved slot did not appear (official save is about 164 MB before compression)',90000);
+    const saved=await js(`__compositeWaits.wait(${saveTicket})`);assert.equal(saved.result,true,'formal save must return a true commit receipt');assert.equal(saved.slot,slot);assert.equal(saved.invocations,1);
+    timeline.push({stage:'slot-producer-complete',operation:'save',completed:saved});
+    await wait(`!!document.querySelector('#save-manager-overlay button[onclick="loadSaveSlot(${slot})"]')`,'committed saved slot did not render');
     const before=await js(`(()=>{window.__compositeOldWorld=GM;return{load:window._tmLoadGen||0,day:TM.SimTime.now(GM),player:GM.playerCharacterId,plans:JSON.stringify((GM._npcPlans||[]).filter(p=>p.localActivity&&p.localActivity.kind==='meeting')),locations:GM.chars.filter(c=>['char_jianyan1_01','char_jianyan1_16'].includes(c.id)).map(c=>({id:c.id,controlled:TM.NPC.DailyActivities.controlled(c),region:TM.NPC.DailyActivities.exactLocation(c,GM),travel:c._localTravelRef||null,life:JSON.stringify(c._lifeExp||[]),learning:JSON.stringify(c._growth||null),memory:JSON.stringify(c._memory||[]),archive:JSON.stringify(c._memArchive||[])})),activityBytes:JSON.stringify(GM._npcPlans||[]).length};})()`);
+    const loadTicket=await js(`__compositeWaits.arm('load',${slot})`);
     await click('#save-manager-overlay button[onclick="loadSaveSlot('+slot+')"]');await click('.rice-paper-confirm #_rpc_ok');
+    const loaded=await js(`__compositeWaits.wait(${loadTicket})`);assert.equal(loaded.result,true,'formal load must return a true success receipt');assert.equal(loaded.slot,slot);assert.equal(loaded.invocations,1);
+    timeline.push({stage:'slot-producer-complete',operation:'load',completed:loaded});
     await wait(`GM!==window.__compositeOldWorld&&GM.running&&!document.querySelector('#save-manager-overlay')`,'formal slot reload did not replace world',45000);
     await js(`_tmAwaitLoadBarrier()`);
     const after=await js(`({load:window._tmLoadGen||0,day:TM.SimTime.now(GM),player:GM.playerCharacterId,plans:JSON.stringify((GM._npcPlans||[]).filter(p=>p.localActivity&&p.localActivity.kind==='meeting')),locations:GM.chars.filter(c=>['char_jianyan1_01','char_jianyan1_16'].includes(c.id)).map(c=>({id:c.id,controlled:TM.NPC.DailyActivities.controlled(c),region:TM.NPC.DailyActivities.exactLocation(c,GM),travel:c._localTravelRef||null,life:JSON.stringify(c._lifeExp||[]),learning:JSON.stringify(c._growth||null),memory:JSON.stringify(c._memory||[]),archive:JSON.stringify(c._memArchive||[])}))})`);
@@ -97,6 +106,7 @@ module.exports = async function ({ win, root, check, results }) {
   await click('#tm-op-enter');
   await wait(`GM.running&&GM.sid==='sc-jianyan1-1127-shaosong'`, 'official startup did not finish',35000);
   await js(`_tmAwaitLoadBarrier()`); await settle();
+  await js(`void(window.__compositeWaits=(${installCompositeWaits.toString()})(window,${deadlineAt}))`);
   if(await js(`!!document.querySelector('#tm-firstturn-guide button')`))await click('#tm-firstturn-guide button:last-child');
   if(await js(`!!document.querySelector('#tm-nokey-banner button')`))await click('#tm-nokey-banner button:last-child');
   await check('official Shaosong population, current player, map and real formal entry are preserved',async()=>{

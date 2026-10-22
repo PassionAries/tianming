@@ -81,10 +81,13 @@ function finish(error) {
   app.exit(report.ok ? 0 : 1);
 }
 async function check(name, fn) { const started=Date.now(); console.log('BRIDGE_CASE_START '+JSON.stringify({name,at:new Date(started).toISOString()})); await profileHeavyCase(name); await fn(); results.push({ name, status: 'PASS' }); console.log('BRIDGE_CASE_PASS '+JSON.stringify({name,elapsedMs:Date.now()-started})); }
-// These correctness suites contain many bounded UI scenarios; keep each scenario wait and all explicit performance assertions unchanged.
+// Keep suite limits, ordinary DOM waits and performance assertions unchanged.
+// Composite operation waits observe real producer receipts within this same suite deadline.
 const multiScenarioAuthoring = ['authoring-boundaries','authoring-continuation','authoring-autoapply','authoring-efficiency'].includes(mode);
 // authoring-regions 实测 57～80 秒（CI 与本机，09-24），默认 75 秒会随机超时，与其他重型用例一样单列 180 秒
-setTimeout(() => finish(new Error('electron-bridge-timeout')), mode === 'npc-composite' ? 1800000 : (multiScenarioAuthoring && mode === 'authoring-efficiency') || mode === 'relief-pilot' ? 600000 : multiScenarioAuthoring ? 180000 : mode === 'strategic-map' ? 600000 : mode === 'shanhe-load' ? 240000 : mode === 'circuit-book' || mode === 'circuit-tour' ? 300000 : mode === 'map-core-controls' || mode === 'startup-project-fallback' || mode === 'authoring-regions' ? 180000 : mode === 'shanhe-map' || mode === 'shanhe-pointer' ? 135000 : mode === 'native-start-live-authoring' ? 570000 : mode === 'performance-inspect' || mode === 'relief-inspect' ? 1800000 : mode === 'relief-pilot' || mode === 'native-start-neutral-atlas' ? 180000 : mode === 'office-duty' ? 150000 : visiblePerformance ? 240000 : 75000);
+const bridgeTimeoutMs = mode === 'npc-composite' ? 1800000 : (multiScenarioAuthoring && mode === 'authoring-efficiency') || mode === 'relief-pilot' ? 600000 : multiScenarioAuthoring ? 180000 : mode === 'strategic-map' ? 600000 : mode === 'shanhe-load' ? 240000 : mode === 'circuit-book' || mode === 'circuit-tour' ? 300000 : mode === 'map-core-controls' || mode === 'startup-project-fallback' || mode === 'authoring-regions' ? 180000 : mode === 'shanhe-map' || mode === 'shanhe-pointer' ? 135000 : mode === 'native-start-live-authoring' ? 570000 : mode === 'performance-inspect' || mode === 'relief-inspect' ? 1800000 : mode === 'relief-pilot' || mode === 'native-start-neutral-atlas' ? 180000 : mode === 'office-duty' ? 150000 : visiblePerformance ? 240000 : 75000;
+const bridgeDeadlineAt = Date.now() + bridgeTimeoutMs;
+setTimeout(() => finish(new Error('electron-bridge-timeout')), bridgeTimeoutMs);
 process.on('uncaughtException', finish); process.on('unhandledRejection', finish);
 process.on('exit', code => { if (finished) process.stdout.write('BRIDGE_NODE_EXIT '+JSON.stringify({mode,at:new Date().toISOString(),code})+'\n'); });
 app.on('browser-window-created', (_event, win) => {
@@ -127,7 +130,7 @@ app.on('browser-window-created', (_event, win) => {
         assert.equal(!!exports.__test, mode === 'test-exports');
       });
       if (mode === 'performance') performanceReport = await require('../perf/round1-electron-cases.cjs')({ win, root, temp, controls, check, recordPerformance: report => { performanceReport = report; } });
-      else if (mode === 'npc-composite') await require('./npc-composite-cases.cjs')({ win, root, temp, check, results });
+      else if (mode === 'npc-composite') await require('./npc-composite-cases.cjs')({ win, root, temp, check, results, deadlineAt: bridgeDeadlineAt });
       else if (mode === 'npc-daily') await require('./npc-daily-cases.cjs')({ win, root, temp, check, results });
       else if (mode === 'npc-travel') await require('./npc-travel-cases.cjs')({ win, root, temp, check, results });
       else if (mode === 'performance-inspect') performanceReport = await require('../perf/inspect-electron-cases.cjs')({ win, root, temp, check });

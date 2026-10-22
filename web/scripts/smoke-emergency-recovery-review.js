@@ -27,7 +27,7 @@ function setup(settings={},observeBasis){
  for(const file of ['tm-ai-change-pathutils.js','tm-ai-change-army.js','tm-ai-change-narrative.js','generated/tm-ai-change-applier.bundle.js','tm-social-formation.js','tm-agent-world-editor.js','tm-endturn-agent-write-tools.js','tm-emergency-recovery-review.js']){
   if(file!=='tm-emergency-recovery-review.js'||!observeBasis){load(c,file);continue;}
   // Observe private ownership at the real allocation boundary only in this VM.
-  // Production exposes no inspector and still performs its original full clone.
+  // Production exposes no inspector; this hook observes the real freeze boundary.
   c.__reviewBasisProbe=observeBasis;
   const source=fs.readFileSync(path.join(__dirname,'..',file),'utf8'),marker='  function snapshot(g){';
   assert.equal(source.split(marker).length,2,'one production snapshot allocation boundary');
@@ -286,5 +286,76 @@ test('cancellation releases private snapshot owners while late responses retain 
   assert.equal(owner.ctx,x);assert.equal(owner.ctx.meta.transaction,x.meta.transaction);assert.equal(owner.g,c.GM);assert.equal(owner.p,c.P);
   release.resolve();await assert.rejects(joined,e=>e.code==='AI_ABORTED');assert.equal(c.GM.chars[0].mood,'平静');
  }finally{release.resolve();c.TM.RecoveryReview.cancel(x);f.dispose();}
+});
+function snapshotFixture(){
+ const source=fs.readFileSync(path.join(__dirname,'..','tm-emergency-recovery-review.js'),'utf8'),marker='  function releaseBasis(s){';
+ assert.equal(source.split(marker).length,2);
+ const c=vm.createContext({});
+ vm.runInContext(source.replace(marker,'  root.__snapshot=snapshot;root.__read=read;root.__players=playerSnapshots;\n'+marker),c);
+ vm.runInContext('globalThis.__parses=[];const nativeParse=JSON.parse;JSON.parse=function(text){__parses.push(text.length);return nativeParse(text);};',c);
+ return c;
+}
+test('unread GM maps and P scenarios freeze immediately without parsing and each root materializes only once',()=>{
+ const c=snapshotFixture();
+ vm.runInContext('GM={mapData:{regions:Array.from({length:2000},(_,i)=>({id:"r"+i,points:[i,i+1]}))},small:{value:1}};P={scenarios:[{map:{regions:Array.from({length:2000},(_,i)=>({id:"p"+i}))}}]};basis=__snapshot(GM);',c);
+ assert.equal(c.__parses.length,0);assert.deepEqual(Array.from(Object.keys(c.basis)),['mapData','small']);assert.equal(c.__parses.length,0,'enumeration must not parse');
+ const player=c.__players.get(c.basis);assert(player);assert.equal(c.__parses.length,0);
+ assert.equal(c.basis.small.value,1);assert.equal(c.__parses.length,1);assert.equal(c.basis.small.value,1);assert.equal(c.__parses.length,1);
+ vm.runInContext('GM.mapData.regions[0].id="live changed";P.scenarios[0].map.regions[0].id="live P changed";GM.small.value=2;',c);
+ assert.equal(c.basis.mapData.regions[0].id,'r0');assert.equal(c.__parses.length,2);assert.equal(c.basis.mapData,c.basis.mapData);assert.equal(c.__parses.length,2);
+ assert.equal(player.scenarios[0].map.regions[0].id,'p0');assert.equal(c.__parses.length,3);assert.equal(c.basis.small.value,1);
+ const descriptor=Object.getOwnPropertyDescriptor(c.basis,'mapData');assert.equal(typeof descriptor.get,'function');assert.equal(descriptor.set,undefined);assert.equal(descriptor.configurable,false);
+ assert.throws(()=>{c.basis.mapData={};},TypeError);assert.equal(c.GM.small.value,2);
+});
+test('root JSON facts preserve dates, undefined, nonfinite numbers, sparse arrays, aliases and actual toJSON keys',()=>{
+ const c=snapshotFixture();
+ vm.runInContext('keys=[];shared={value:4};world={date:new Date("2026-10-22T00:00:00Z"),missing:undefined,nan:NaN,infinity:Infinity,sparse:[,undefined,NaN],first:shared,second:shared,custom:{toJSON:function(key){keys.push(key);return {actualKey:key,nested:{toJSON:function(k){keys.push(k);return k;}}};}},omitted:{toJSON:function(key){keys.push(key);return undefined;}}};expected=JSON.stringify(world);expectedKeys=keys.slice();keys.length=0;basis=__snapshot(world);',c);
+ assert.equal(c.__parses.length,0);assert.equal('missing' in c.basis,false);assert.equal('omitted' in c.basis,false);
+ assert.deepEqual(Array.from(c.keys),Array.from(c.expectedKeys));assert.equal(JSON.stringify(c.basis),c.expected);
+ assert.equal(c.basis.date,'2026-10-22T00:00:00.000Z');assert.equal(c.basis.nan,null);assert.deepEqual(Array.from(c.basis.sparse),[null,null,null]);
+ assert.notEqual(c.basis.first,c.basis.second);assert.notEqual(c.basis.first,c.shared);assert.equal(c.basis.custom.actualKey,'custom');
+});
+test('all current roots are captured before any toJSON runs, preserving accessor and key-order semantics',()=>{
+ const c=snapshotFixture();
+ vm.runInContext('reads=0;world={first:{toJSON:function(key){world.later="new live root";return key;}},later:"captured root"};Object.defineProperty(world,"accessor",{enumerable:true,get:function(){reads++;return {read:reads};}});basis=__snapshot(world);',c);
+ assert.equal(c.reads,2);assert.equal(c.basis.later,'captured root');assert.equal(c.world.later,'new live root');assert.equal(c.basis.first,'first');assert.equal(c.basis.accessor.read,2);
+});
+test('an inherited root toJSON retains the former whole-object copy semantics',()=>{
+ const c=snapshotFixture();
+ vm.runInContext('hookCalls=0;Object.prototype.toJSON=function(key){hookCalls++;return key===""?{summary:this.value+1}:this;};world={value:4};basis=__snapshot(world);delete Object.prototype.toJSON;',c);
+ assert.equal(c.hookCalls,1);assert.equal(c.basis.summary,5);assert.equal(c.__parses.length,1);
+});
+test('a captured own root toJSON from the original double-read getter sees the complete root object',()=>{
+ const c=snapshotFixture();
+ vm.runInContext('reads=0;world={value:4};Object.defineProperty(world,"toJSON",{enumerable:true,get:function(){reads++;return reads===1?null:function(){return {summary:this.value};};}});basis=__snapshot(world);',c);
+ assert.equal(c.reads,2);assert.equal(c.basis.summary,4);assert.equal(c.basis.value,undefined);assert.equal(c.__parses.length,1);
+});
+test('unread cycle, BigInt and throwing toJSON fail during freezing without deferred reads',()=>{
+ for(const expression of ['(()=>{const v={};v.self=v;return v;})()','1n','({toJSON:function(){throw Error("actual toJSON failure");}})']){
+  const c=snapshotFixture();vm.runInContext('world={safe:{value:1},unread:'+expression+'};',c);
+  assert.throws(()=>c.__snapshot(c.world),/circular|BigInt|actual toJSON failure/i);assert.equal(c.__parses.length,0);
+ }
+});
+test('real read_state uses frozen unread GM and P roots, then conflict replanning and verified writeback use current facts',async()=>{
+ const f=setup(),c=f.c,x=ctx();let calls=0,first=true;try{
+  c.GM.mapData={regions:[{id:'r1',value:7}]};c.P.reviewOnly={value:11};
+  c.callAI=async prompt=>{const q=request(prompt);calls++;
+   if(q.case.phase==='verify')return verified(prompt);
+   if(!q.history.length){if(first){c.GM.mapData.regions[0].value=8;c.P.reviewOnly.value=12;}else assert(prompt.includes('并行推演已更新'));
+    return JSON.stringify({tools:[{name:'read_state',input:{path:'mapData.regions.r1.value'}},{name:'read_state',input:{path:'P.reviewOnly.value'}}]});}
+   const reads=q.history.filter(row=>row.tool==='read_state');assert.equal(reads[0].result.text,first?'7':'8');assert.equal(reads[1].result.text,first?'11':'12');first=false;
+   const p=empty();p.operations=[mood('忧虑')];return submit(p);
+  };
+  c.TM.RecoveryReview.start(okay,x.results.sc1,x);const receipt=await c.TM.RecoveryReview.join(x);
+  assert(receipt.verified);assert.equal(calls,5);assert.equal(c.GM.chars[0].mood,'忧虑');assert.equal(c.GM.mapData.regions[0].value,8);assert.equal(c.P.reviewOnly.value,12);
+ }finally{f.dispose();}
+});
+test('switching worlds with unread frozen roots still releases GM/P basis and rejects the late write',async()=>{
+ let owner,players,basis;const f=setup({},probe=>{owner=probe.session;players=probe.playerSnapshots;}),c=f.c,x=ctx();try{
+  c.GM.mapData={regions:[{id:'old-world'}]};c.P.scenarios=[{id:'old-template'}];
+  c.callAI=async()=>{basis=owner.basis;c._tmLoadGen=(c._tmLoadGen||0)+1;const p=empty();p.operations=[mood('不应写入')];return submit(p);};
+  c.TM.RecoveryReview.start(okay,x.results.sc1,x);await assert.rejects(c.TM.RecoveryReview.join(x),e=>e.code==='AI_STALE_WORLD');
+  assert.equal(owner.basis,null);assert.equal(players.has(basis),false);assert.equal(c.GM.chars[0].mood,'平静');assert.equal(c.TM.RecoveryReview.status().length,0);
+ }finally{f.dispose();}
 });
 run(tests);

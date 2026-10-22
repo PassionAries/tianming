@@ -80,8 +80,12 @@ test('player interval stops at the real choice; question can be saved before ans
   const before=JSON.stringify(c.GM); c.GM=JSON.parse(before); // low-level persistence only
   advance(c,30);
   assert.equal(D.get(id).localActivity.meeting.discussion.status,'completed');
-  assert(D.day()<start+2);
-  advance(c,30);
+  const completed=D.get(id).localActivity.meeting;
+  assert.equal(completed.discussion.result.day,start+0.5,'the NPC still answers at the exact event day');
+  assert.equal(completed.participation.endDay,start+2,'the agreed meeting duration is unchanged');
+  assert.equal(completed.actorReturnJourney.status,'returned');assert.equal(completed.targetReturnJourney.status,'returned');
+  assert.equal(D.get(id).steps.filter(s=>s.phase==='discuss').length,1,'the player question is never resubmitted by replay');
+  assert.equal(D.get(id).steps.filter(s=>s.phase==='discuss_response').length,1);
   assert.equal(D.get(id).status,'done');
   const effects=JSON.stringify(D.get(id).localActivity.meeting.discussion.result);
   c.TM.NPC.ActionLedger.advance(c.GM);

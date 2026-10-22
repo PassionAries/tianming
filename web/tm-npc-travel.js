@@ -756,7 +756,47 @@
     rows(G() && G()._npcPlans).filter(isMeeting).filter(function (p) {
       return !terminal(p) && [person(p.actorId), person(p.targetId)].some(function (ch) { return ch && D().controlled(ch); });
     }).forEach(function (p) {
-      eventDays(p).forEach(function (v) {
+      var m = p.localActivity.meeting, actor = person(p.actorId), target = person(p.targetId), days = eventDays(p);
+      // Only omit outer stops for an already informed player's committed
+      // travel/answer sequence. The complete eventDays replay stays unchanged.
+      var committed = alive(actor) && alive(target) && D().controlled(actor) && !D().controlled(target)
+        && actorResponseKnown(p) && m.targetDecision && m.targetDecision.response === 'accept'
+        && !rows(p.messages).some(function (msg) { return msg.status === 'in_transit'; })
+        && !m.pendingTerms && m.startBlockedDay == null && !m.interruptionReason && !Number.isFinite(m.nextEventRetryDay);
+      if (committed) {
+        var version = TM.MapRouteDays && TM.MapRouteDays.routeVersion && TM.MapRouteDays.routeVersion(map());
+        function stableJourney(role, returning) {
+          var j = journeyFor(m, role, returning), ch = charForRole(p, role);
+          if (!j || ch._travelPaused || ch._officeJourney && ch._officeJourney.status === 'in_transit') return false;
+          if (j.status === 'in_transit') return !!(version && j.route && j.route.status === 'reachable'
+            && String(j.route.routeVersion) === String(version) && ch._localTravelRef && ch._localTravelRef.journeyId === j.id);
+          return /^(arrived|returned|staying)$/.test(j.status) && currentRegion(ch) === j.toRegionId
+            && (!j.route || String(j.route.routeVersion) === String(version));
+        }
+        if (!m.participation && /^(traveling|scheduled|arrived_waiting)$/.test(m.status)
+            && !m.actorReturnJourney && !m.targetReturnJourney && stableJourney('actor', false) && stableJourney('target', false)) {
+          var arrivals = [m.actorJourney, m.targetJourney].map(function (j) { return j.status === 'arrived' ? j.arrivedDay : Number(j.lastAdvancedDay) + Number(j.remainingDays); });
+          var start = Math.max(Number(m.requestedStartDay), arrivals[0], arrivals[1]);
+          // A rounded route estimate cannot establish physical presence. Keep
+          // the original stops when unfinished segments extend past this ETA.
+          var presentByStart = [m.actorJourney, m.targetJourney].every(function (j) {
+            if (j.status === 'arrived') return true;
+            var remaining = rows(j.route.segments).slice(j.segmentIndex || 0).reduce(function (sum, segment) { return sum + Number(segment.days); }, 0) - Number(j.segmentElapsedDays || 0);
+            return Number.isFinite(remaining) && Number(j.lastAdvancedDay) + Math.max(0, remaining) <= start + config.epsilon;
+          });
+          if (arrivals.every(Number.isFinite) && presentByStart && start > from + config.epsilon && start <= Number(m.requestedStartDay) + Number(m.windowDays)) days = [start];
+        } else if (m.discussion && m.discussion.actorContent && /^(awaiting_target|completed)$/.test(m.discussion.status)
+            && (!p.nextActorId || p.nextActorId === p.targetId)) {
+          if (m.status === 'in_meeting' && bothParticipantsPresent(p) && onsitePermission(p).ok
+              && stableJourney('actor', false) && stableJourney('target', false)
+              && (m.discussion.status === 'completed' || D().budget(target).steps < D().config.dailySteps)
+              && ['actor', 'target'].every(function (role) { return m[role + 'ReturnMode'] === 'stay'
+                || route(m.locationId, m[role + 'HomeRegionId'], m.mode).status === 'reachable'; })) days = [];
+          else if (m.status === 'returning' && m.participation && m.discussion.status === 'completed'
+              && stableJourney('actor', true) && stableJourney('target', true)) days = [];
+        }
+      }
+      days.forEach(function (v) {
         if (v > from + config.epsilon && v < to && (!boundary || v < boundary.day)) boundary = { day: v, planId: p.id, reason: 'meeting_event' };
       });
     });

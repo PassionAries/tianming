@@ -25,7 +25,28 @@
     });
     return v;
   }
-  function snapshot(g){var out={};Object.keys(g).forEach(function(k){if(!forbidden.test(k)&&typeof g[k]!=='function')out[k]=g[k];});out=copy(out);if(g===root.GM&&root.P)playerSnapshots.set(out,snapshot(root.P));return out;}
+  function frozenRoot(json,key){
+    var value,parsed=false;
+    return function(){if(!parsed){value=JSON.parse(json)[key];parsed=true;json=null;}return value;};
+  }
+  function snapshot(g){
+    var values={},out={};
+    Object.keys(g).forEach(function(k){if(!forbidden.test(k)&&typeof g[k]!=='function')values[k]=g[k];});
+    // Capture every root before serialization, as the former whole-world JSON
+    // copy did. Freeze all JSON facts synchronously; never defer reading live.
+    if('toJSON' in Object.prototype||typeof values.toJSON==='function')out=copy(values);
+    else Object.keys(values).forEach(function(k){
+      // A single-key wrapper preserves nested toJSON's actual property key.
+      // Its null prototype avoids a new inherited root hook between fields.
+      var wrapper=Object.create(null);wrapper[k]=values[k];
+      var json=JSON.stringify(wrapper);
+      if(json!=='{}')Object.defineProperty(out,k,{enumerable:true,get:frozenRoot(json,k)});
+    });
+    // Unread maps/scenarios stay frozen strings. Reading a root materializes it
+    // once and releases its string; no getter retains GM, P or captured values.
+    if(g===root.GM&&root.P)playerSnapshots.set(out,snapshot(root.P));
+    return out;
+  }
   function releaseBasis(s){if(s.basis)playerSnapshots.delete(s.basis);s.basis=null;}
   function progress(s,phase,detail){
     s.status.phase=phase;s.status.detail=detail;s.status.calls=s.calls;s.status.steps=s.steps;s.status.repairs=s.repairs;

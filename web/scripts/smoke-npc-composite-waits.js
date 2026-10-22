@@ -1,6 +1,6 @@
 'use strict';
 const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
-const { installCompositeWaits } = require('../../scripts/electron/npc-composite-waits.cjs');
+const { installCompositeWaits, installCompositeEconomyObservers, reconcileCompositeEconomy } = require('../../scripts/electron/npc-composite-waits.cjs');
 const tests = [], test = (name, run) => tests.push({ name, run });
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const tick = async () => { await Promise.resolve(); await Promise.resolve(); };
@@ -9,6 +9,7 @@ function fixture(deadlineAt = 1800000, inspect = false) {
   const clock = { now: () => now, setTimeout: (fn, delay) => { const id = ++serial; timers.set(id, { fn, at: now + delay }); return id; }, clearTimeout: id => timers.delete(id) };
   const pending = { turn: deferred(), save: deferred(), load: deferred() };
   const root = { GM: { turn: 3, running: true, _campaignId: 'campaign', _timelineId: 'timeline', busy: false, _endTurnBusy: false, _endTurnCommitPending: false }, P: {}, _tmLoadGen: 7 };
+  root.TM = { SimTime: { now: g => Number(g.day || 0) } };
   root._endTurnInternal = function() { calls.push({ kind: 'turn', receiver: this, args: [...arguments] }); root.GM.busy = root.GM._endTurnBusy = root.GM._endTurnCommitPending = true; return pending.turn.promise; };
   root.saveToSlot = function() { calls.push({ kind: 'save', receiver: this, args: [...arguments] }); return pending.save.promise; };
   root.SaveManager = { loadFromSlot: function() { calls.push({ kind: 'load', receiver: this, args: [...arguments] }); return pending.load.promise; } };
@@ -109,6 +110,90 @@ test('finished, failed and timed-out observers release world references and expo
     const json = JSON.stringify(f.waits.snapshot()); assert(!json.includes('gmRef')); assert(!json.includes('canonicalSaveReceipt'));
     if (outcome === 'deadline') f.pending.save.resolve(true);
   }
+});
+function economyEvidence() {
+  const tickets = [], calls = { systems: [], provinceEconomy: [] };
+  for (const [index, range] of [[30, 31.7], [31.7, 37], [37, 60]].entries()) {
+    const before = { turn: index + 3, day: range[0], load: index + 7, campaignId: 'campaign', timelineId: 'load-' + index };
+    const after = { ...before, turn: before.turn + 1, day: range[1] }, days = after.day - before.day;
+    tickets.push({ id: index + 1, kind: 'turn', status: 'completed', result: true, invocations: 1, before, after, commit: { ...after } });
+    calls.systems.push({ ...before, beforeDay: before.day, afterDay: after.day, afterWorld: { ...after }, days, status: 'completed', error: null });
+    calls.provinceEconomy.push({ ...after, beforeDay: after.day, afterDay: after.day, afterWorld: { ...after }, days, status: 'completed', error: null,
+      province: 'p1', before: { wealth: 1 }, after: { wealth: 2 } });
+  }
+  return { tickets, calls };
+}
+test('economy reconciles every genuine turn across load generations and fractional day boundaries', () => {
+  const e = economyEvidence(), before = JSON.stringify(e), result = reconcileCompositeEconomy(e.tickets, e.calls);
+  assert.equal(result.turns, 3); assert.equal(result.systems, 3); assert.equal(result.provinceEconomy, 3);
+  assert.deepEqual(result.intervals.map(row => row.load), [7, 8, 9]);
+  assert.deepEqual(result.intervals.map(row => row.days), e.tickets.map(row => row.after.day - row.before.day));
+  assert.equal(JSON.stringify(e), before, 'reconciliation must not edit evidence or world state');
+});
+for (const [name, mutate, expected] of [
+  ['both observations omit the same turn', e => { e.calls.systems.splice(1, 1); e.calls.provinceEconomy.splice(1, 1); }, /exactly one/],
+  ['both observations duplicate one turn and omit another', e => { e.calls.systems[1] = e.calls.systems[0]; e.calls.provinceEconomy[1] = e.calls.provinceEconomy[0]; }, /missing or duplicate/],
+  ['an extra systems call', e => e.calls.systems.push(e.calls.systems[0]), /exactly one/],
+  ['an extra economy call', e => e.calls.provinceEconomy.push(e.calls.provinceEconomy[0]), /exactly one/],
+  ['systems throws even if its caller later commits', e => { e.calls.systems[0].status = 'failed'; e.calls.systems[0].error = 'real systems throw'; }, /pending or failed/],
+  ['economy throws even if its caller later commits', e => { e.calls.provinceEconomy[0].status = 'failed'; e.calls.provinceEconomy[0].error = 'real economy throw'; }, /pending or failed/],
+  ['unsettled systems work', e => { e.calls.systems[0].status = 'pending'; }, /pending or failed/],
+  ['entry belongs to another load', e => { e.calls.provinceEconomy[0].load++; }, /missing or duplicate/],
+  ['entry belongs to another campaign', e => { e.calls.systems[0].campaignId = 'foreign'; }, /missing or duplicate/],
+  ['entry belongs to another timeline', e => { e.calls.systems[0].timelineId = 'foreign'; }, /missing or duplicate/],
+  ['settlement finishes after a load', e => { e.calls.systems[0].afterWorld.load++; }, /crossed its world/],
+  ['settlement finishes in another campaign', e => { e.calls.provinceEconomy[0].afterWorld.campaignId = 'foreign'; }, /crossed its world/],
+  ['days were configured instead of the actual fractional interval', e => { e.calls.provinceEconomy[0].days = 30; }, /days do not match/],
+  ['zero days', e => { e.calls.systems[0].days = 0; }, /days do not match/],
+  ['non-finite days', e => { e.calls.systems[0].days = NaN; }, /days do not match/],
+  ['wrong start day', e => { e.calls.systems[0].beforeDay++; }, /start day/],
+  ['wrong end day', e => { e.calls.provinceEconomy[0].afterDay++; }, /end day/],
+  ['economy ran before time commit', e => { e.calls.provinceEconomy[0].day = 30; }, /after the actual time commit/],
+  ['a nonpositive completed interval', e => { e.tickets[0].after.day = e.tickets[0].before.day; }, /positive elapsed days/],
+  ['a failed top-level turn', e => { e.tickets[0].status = 'failed'; }, /genuine single completion/],
+  ['a missing genuine commit', e => { e.tickets[0].commit = null; }, /genuine single completion/],
+  ['commit belongs to another load', e => { e.tickets[0].commit.load++; }, /commit identity/],
+  ['duplicate completed turn identity', e => { e.tickets[1] = e.tickets[0]; }, /duplicate completed/],
+  ['missing source sample', e => { e.calls.provinceEconomy[0].after = null; }, /source samples/]
+]) test('economy rejects ' + name, () => { const e = economyEvidence(); mutate(e); assert.throws(() => reconcileCompositeEconomy(e.tickets, e.calls), expected); });
+function economyObserverFixture(systems, economy) {
+  const calls = { systems: [], provinceEconomy: [] };
+  const root = { GM: { turn: 3, day: 30, _campaignId: 'campaign', _timelineId: 'timeline', provinceStats: { p1: { wealth: 1 } } },
+    _tmLoadGen: 7, TM: { SimTime: { now: g => g.day } }, _getDaysPerTurn: () => 1.7,
+    _endTurn_updateSystems: systems, updateProvinceEconomy: economy };
+  // Exercise the same standalone function text injected into the real renderer.
+  vm.runInNewContext('(' + installCompositeEconomyObservers.toString() + ')')(root, calls);
+  return { root, calls };
+}
+test('settlement entry is visible while pending and original Promise, receiver and arguments are preserved', async () => {
+  const pending = deferred(), args = [{ actual: true }, 'text'], receiver = {}, seen = [];
+  const f = economyObserverFixture(function() { seen.push({ receiver: this, args: [...arguments], status: f.calls.systems[0].status }); return pending.promise; }, () => 17);
+  const result = f.root._endTurn_updateSystems.apply(receiver, args);
+  assert.equal(result, pending.promise); assert.deepEqual(seen, [{ receiver, args, status: 'pending' }]);
+  assert.equal(f.calls.systems[0].status, 'pending'); f.root.GM.turn++; f.root.GM.day = 31.7;
+  pending.resolve('original result'); assert.equal(await result, 'original result'); await tick();
+  assert.equal(f.calls.systems[0].status, 'completed'); assert.equal(f.calls.systems[0].afterWorld.turn, 4);
+  assert.equal(f.calls.systems[0].afterWorld.load, 7); assert.equal(f.root.updateProvinceEconomy(), 17);
+  assert.equal(f.calls.provinceEconomy[0].status, 'completed');
+});
+test('settlement throws and rejections remain original and leave failed observations, including falsy errors', async () => {
+  for (const failure of [Error('real settlement failure'), null, undefined]) {
+    const pending = deferred();
+    const f = economyObserverFixture(() => pending.promise, function() { assert.equal(f.calls.provinceEconomy[0].status, 'pending'); throw failure; });
+    let caught = false; try { f.root.updateProvinceEconomy(); } catch (error) { caught = true; assert.equal(error, failure); }
+    assert(caught); assert.equal(f.calls.provinceEconomy[0].status, 'failed');
+    const original = f.root._endTurn_updateSystems(); assert.equal(original, pending.promise); pending.reject(failure);
+    caught = false; try { await original; } catch (error) { caught = true; assert.equal(error, failure); }
+    assert(caught); await tick(); assert.equal(f.calls.systems[0].status, 'failed');
+  }
+});
+test('settlement observations retain only primitive identity and numeric province samples across world replacement', async () => {
+  const pending = deferred(), f = economyObserverFixture(() => pending.promise, () => true);
+  f.root.GM.provinceStats.p1.wealth = { mustNotRetainWorld: f.root.GM };
+  f.root.updateProvinceEconomy(); assert.equal(f.calls.provinceEconomy[0].before.wealth, null);
+  const original = f.root._endTurn_updateSystems(); f.root.GM = { ...f.root.GM, _timelineId: 'replacement', provinceStats: {} }; f.root._tmLoadGen++;
+  pending.resolve(); await original; await tick(); assert.equal(f.calls.systems[0].load, 7); assert.equal(f.calls.systems[0].afterWorld.load, 8);
+  const json = JSON.stringify(f.calls); assert(!json.includes('mustNotRetainWorld')); assert(!json.includes('provinceStats'));
 });
 test('the actual Electron suite, outer process and CI limits retain 1800 seconds, 1830 seconds and 45 minutes', () => {
   const root = path.resolve(__dirname, '../..'), bridge = fs.readFileSync(path.join(root, 'scripts/electron/bridge-main.cjs'), 'utf8');

@@ -14,6 +14,7 @@ const temp = process.env.TM_BRIDGE_TEST_USERDATA || fs.mkdtempSync(path.join(os.
 app.setPath('userData', temp); app.setPath('sessionData', path.join(temp, 'session')); app.getAppPath = () => root;
 // Optional read-only diagnostics for a real renderer crash; never raise heap limits.
 if (mode === 'npc-composite' && process.env.TM_BRIDGE_MEMORY_DIAGNOSTICS === '1') {
+  app.commandLine.appendSwitch('enable-precise-memory-info');
   const dumpDir = path.join(path.dirname(process.env.TM_BRIDGE_TEST_REPORT), 'crash-dumps');
   fs.mkdirSync(dumpDir, { recursive:true }); app.setPath('crashDumps', dumpDir);
   require('electron').crashReporter.start({ uploadToServer:false });

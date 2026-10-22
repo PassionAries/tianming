@@ -7,7 +7,7 @@ function installCompositeWaits(root, deadlineAt, clock) {
   const records = new Map(), active = new Map(); let sequence = 0;
   function state() {
     const g = root.GM || {};
-    return { turn: Number(g.turn), load: Number(root._tmLoadGen || 0), campaignId: String(g._campaignId || ''),
+    return { turn: Number(g.turn), day: Number(root.TM.SimTime.now(g)), load: Number(root._tmLoadGen || 0), campaignId: String(g._campaignId || ''),
       timelineId: String(g._timelineId || ''), busy: !!(g.busy || g._endTurnBusy), pending: !!g._endTurnCommitPending, running: g.running === true };
   }
   function summary(r) {
@@ -118,4 +118,83 @@ function installCompositeWaits(root, deadlineAt, clock) {
     snapshot() { return Array.from(records.values(), summary); }
   };
 }
-module.exports = { installCompositeWaits };
+// Test-only observations keep primitive samples, never an old world or context.
+function installCompositeEconomyObservers(root, calls) {
+  function state() {
+    const g = root.GM;
+    return { turn: Number(g.turn), day: Number(root.TM.SimTime.now(g)), load: Number(root._tmLoadGen || 0),
+      campaignId: String(g._campaignId || ''), timelineId: String(g._timelineId || '') };
+  }
+  function sample(key) {
+    const p = root.GM.provinceStats && root.GM.provinceStats[key];
+    if (!p) return null;
+    const result = {};
+    for (const field of ['population', 'wealth', 'stability', 'development', 'corruption', 'unrest']) result[field] = Number.isFinite(p[field]) ? p[field] : null;
+    return result;
+  }
+  for (const [key, bucket] of [['_endTurn_updateSystems', 'systems'], ['updateProvinceEconomy', 'provinceEconomy']]) {
+    const original = root[key];
+    if (typeof original !== 'function' || !Array.isArray(calls[bucket])) throw Error('composite economy producer missing: ' + key);
+    root[key] = function() {
+      const entry = state(), row = { ...entry, beforeDay: entry.day, days: Number(root._getDaysPerTurn()), status: 'pending' };
+      if (bucket === 'provinceEconomy') { row.province = Object.keys(root.GM.provinceStats || {}).sort()[0]; row.before = sample(row.province); }
+      calls[bucket].push(row); // Record entry even when production throws or swallows its own error later.
+      function finish(failed, error) {
+        try {
+          row.afterWorld = state(); row.afterDay = row.afterWorld.day;
+          if (bucket === 'provinceEconomy') row.after = sample(row.province);
+          row.status = failed ? 'failed' : 'completed'; row.error = failed ? String(error && error.message || error) : null;
+        } catch (observationError) { row.status = 'failed'; row.error = String(observationError.message || observationError); }
+      }
+      let result;
+      try { result = original.apply(this, arguments); }
+      catch (error) { finish(true, error); throw error; }
+      if (result && typeof result.then === 'function') result.then(() => finish(false), error => finish(true, error));
+      else finish(false);
+      return result;
+    };
+  }
+}
+
+// The completed UI turns are the independent expected set. Equal observer counts
+// alone cannot detect a systems/economy pair that was both omitted.
+function reconcileCompositeEconomy(tickets, calls) {
+  function requireThat(value, message) { if (!value) throw Error('composite economy: ' + message); }
+  function validState(s) {
+    return s && Number.isInteger(s.turn) && Number.isInteger(s.load) && s.load >= 0 && Number.isFinite(s.day)
+      && typeof s.campaignId === 'string' && s.campaignId.length > 0 && typeof s.timelineId === 'string' && s.timelineId.length > 0;
+  }
+  function worldKey(s) { return JSON.stringify([s.load, s.campaignId, s.timelineId]); }
+  function key(s) { return JSON.stringify([s.load, s.campaignId, s.timelineId, s.turn]); }
+  requireThat(Array.isArray(tickets) && calls && Array.isArray(calls.systems) && Array.isArray(calls.provinceEconomy), 'missing observations');
+  const turns = tickets.filter(row => row.kind === 'turn'), seenBefore = new Set(), seenAfter = new Set(), seenIds = new Set();
+  requireThat(turns.length > 0, 'no completed top-level turns');
+  requireThat(calls.systems.length === turns.length && calls.provinceEconomy.length === turns.length, 'each top-level turn needs exactly one systems and economy entry');
+  const intervals = turns.map(ticket => {
+    const before = ticket.before, after = ticket.after;
+    requireThat(Number.isInteger(ticket.id) && ticket.id > 0 && ticket.status === 'completed' && ticket.invocations === 1 && ticket.result === true && ticket.commit, 'turn ticket is not a genuine single completion');
+    requireThat(validState(before) && validState(after) && worldKey(before) === worldKey(after) && after.turn === before.turn + 1, 'turn crossed its world or skipped a turn');
+    requireThat(key(ticket.commit) === key(after), 'commit identity does not match the completed turn');
+    requireThat(!seenIds.has(ticket.id) && !seenBefore.has(key(before)) && !seenAfter.has(key(after)), 'duplicate completed turn ticket');
+    seenIds.add(ticket.id); seenBefore.add(key(before)); seenAfter.add(key(after));
+    const days = after.day - before.day;
+    requireThat(Number.isFinite(days) && days > 0, 'turn interval must have positive elapsed days');
+    const systems = calls.systems.filter(row => key(row) === key(before));
+    const economy = calls.provinceEconomy.filter(row => key(row) === key(after));
+    requireThat(systems.length === 1 && economy.length === 1, 'missing or duplicate turn/world settlement');
+    const system = systems[0], province = economy[0];
+    for (const row of [system, province]) {
+      requireThat(row.status === 'completed' && row.error === null, 'settlement is pending or failed');
+      requireThat(validState(row) && validState(row.afterWorld) && key(row.afterWorld) === key(after), 'settlement crossed its world or turn');
+      requireThat(row.days > 0 && row.days === days, 'settlement days do not match the actual turn interval');
+      requireThat(row.afterDay === after.day && row.afterWorld.day === after.day, 'settlement end day does not match the completed turn');
+    }
+    requireThat(system.day === before.day && system.beforeDay === before.day, 'systems start day does not match the completed turn');
+    requireThat(province.day === after.day && province.beforeDay === after.day, 'economy did not run after the actual time commit');
+    requireThat(province.before && province.after, 'province source samples are missing');
+    return { ticketId: ticket.id, beforeTurn: before.turn, afterTurn: after.turn, load: before.load,
+      campaignId: before.campaignId, timelineId: before.timelineId, beforeDay: before.day, afterDay: after.day, days };
+  });
+  return { turns: turns.length, systems: calls.systems.length, provinceEconomy: calls.provinceEconomy.length, intervals };
+}
+module.exports = { installCompositeWaits, installCompositeEconomyObservers, reconcileCompositeEconomy };

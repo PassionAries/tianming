@@ -2,7 +2,7 @@
   "type": "tianming-hot-update",
   "version": "1.3.5.3",
   "entry": "index.html",
-  "generatedAt": "2026-10-22T12:58:44.443Z",
+  "generatedAt": "2026-10-22T13:06:35.497Z",
   "files": [
     {
       "path": "ARCHITECTURE.md",
@@ -6498,11 +6498,6 @@
       "path": "tm-save-manager.js",
       "sha256": "ba4afb9911dd704bd0477cdd33e555083e1c1aab2a2835b6b4c2a50fa60a6516",
       "size": 53708
-    },
-    {
-      "path": "tm-save-stable-id-migration.js",
-      "sha256": "17d5a7bd0942aca61cc1a84d8300f619b67013d71f069e2acb7e876238bacf35",
-      "size": 16499
     },
     {
       "path": "tm-save-world-validation.js",

@@ -13,7 +13,7 @@ function verified(prompt){const task=request(prompt);return JSON.stringify({tool
 function reply(prompt,plan){return request(prompt).case.phase==='verify'?verified(prompt):submit(plan);}
 const operation=(tool,input)=>({tool,input,reason:'补齐本期事实与实际状态',evidence:[{source:'original',quote:narrative}],postconditions:tool==='set_field'?[{path:input.path,equals:input.value}]:tool==='adjust_treasury'?[{path:(input.account||'guoku')+'.'+(input.currency||'money'),delta:input.delta}]:tool==='retry_main'?[{path:'chars.张甲.loyalty',equals:55}]:[]});
 const mood=value=>operation('set_field',{path:'chars.张甲.mood',value});
-function ctx(){return {input:{edicts:{text:narrative}},meta:{requireTurnReview:true},record:{shizhengji:narrative,zhengwen:'本期实录正文'},results:{sc1:{shizhengji:narrative}}};}
+function ctx(){return {input:{edicts:{text:narrative}},meta:{requireTurnReview:true,postTurnMemorySavePromise:Promise.resolve({ok:true,scheduled:true})},record:{shizhengji:narrative,zhengwen:'本期实录正文'},results:{sc1:{shizhengji:narrative}}};}
 function deferred(){let resolve,reject;const promise=new Promise((r,j)=>{resolve=r;reject=j;});return {promise,resolve,reject};}
 async function finishBackground(c,x,record){
  const txn=x.meta.transaction;txn.committed=true;c.GM._endTurnCommitPending=false;c.GM.busy=false;c.GM.turn++;
@@ -24,7 +24,7 @@ async function finishBackground(c,x,record){
 }
 function setup(settings={},observeBasis){
  const f=fixture(settings),c=f.c;c.GM=baseGM({_campaignId:'a',_timelineId:'b',_endTurnCommitPending:true,chars:[{id:'a',name:'张甲',mood:'平静',loyalty:50,alive:true}]});
- // Isolated review cases assume a successful existing persistence boundary.
+ // Isolated review cases assume an already completed memory producer and persistence boundary.
  // The integration case below loads the actual production background queue.
  c._tmAwaitBackgroundAutosaves=async()=>({ok:true});
  for(const file of ['tm-ai-change-pathutils.js','tm-ai-change-army.js','tm-ai-change-narrative.js','generated/tm-ai-change-applier.bundle.js','tm-social-formation.js','tm-agent-world-editor.js','tm-endturn-agent-write-tools.js','tm-emergency-recovery-review.js']){
@@ -118,7 +118,7 @@ test('production infer returns before review finishes, then corrects and saves i
   c.callAI=async prompt=>{started.resolve();await release.promise;const p=empty();p.operations=[mood('忧虑')];p.operations[0].evidence[0].quote=story;return reply(prompt,p)};
   Object.assign(c.TM.Endturn.AI,{prompt:{build:async()=>{}},subcalls:{setupInfra:()=>{},runMain:async(x,callback)=>{x.results.sc1={shizhengji:story};x.record.shizhengji=story;x.record.zhengwen='正常正文';await callback();}},followup:{run:async x=>{await started.promise;followed=true;c.GM.chars[0].loyalty=64;x.followup.startBackground=()=>{assert(!x.meta.emergencyReview.verified);c.__reviewBackgroundStarted=true;};}},record:{finalize:x=>{assert(followed);assert(x.meta.emergencyReview.nonBlocking);return x.record;}}});
   c.TM.Endturn.AI.apply.writeBack=x=>c.TM.Endturn.AI.apply.stages._applyCore_reconcile(x);
-  const outer={input:{},meta:{transaction:{committed:false,rolledBack:false}}};const r=await c._endTurn_aiInfer({text:narrative},null,null,{},outer);assert(r.shizhengji);assert.equal(c.GM.chars[0].mood,'平静');assert.equal(c.GM.chars[0].loyalty,64);assert(outer.meta.aiInferMeta.emergencyReview.nonBlocking);assert.equal(c.__reviewBackgroundStarted,true);
+  const outer={input:{},meta:{transaction:{committed:false,rolledBack:false},postTurnMemorySavePromise:Promise.resolve({ok:true,scheduled:true})}};const r=await c._endTurn_aiInfer({text:narrative},null,null,{},outer);assert(r.shizhengji);assert.equal(c.GM.chars[0].mood,'平静');assert.equal(c.GM.chars[0].loyalty,64);assert(outer.meta.aiInferMeta.emergencyReview.nonBlocking);assert.equal(c.__reviewBackgroundStarted,true);
   release.resolve();const result=await finishBackground(c,outer,r);assert.equal(c.GM.chars[0].mood,'忧虑');assert(result.row.agentReview.verified);assert(result.saves>0);
  }finally{f.dispose();}
 });
@@ -374,7 +374,7 @@ async function backgroundBarrierCase(){
  c.GM.shijiHistory=[Object.assign({turn:c.GM.turn-1,html:'原纪事'},x.record)];
  c.requestBackgroundAutosave=async()=>{events.push('pending-save-request');return {ok:true,scheduled:true};};
  c._tmAwaitBackgroundAutosaves=()=>{entered=true;events.push('save-barrier');return gate.promise;};
- return {f,c,x,events,gate,abort:()=>owner.controller.abort(Error('background review signal cancelled')),start:()=>c.TM.RecoveryReview.afterCommit(x),entered:()=>entered,calls:()=>calls,bases:()=>bases,
+ return {f,c,x,events,gate,abort:()=>owner.controller.abort(Error('background review signal cancelled')),start:()=>c.TM.RecoveryReview.afterCommit(x),entered:()=>entered,calls:()=>calls,bases:()=>bases,background:()=>owner.backgroundPromise,
   dispose(){gate.resolve({ok:true});c.TM.RecoveryReview.cancel(x);f.dispose();}};
 }
 test('background pending sources are saved before a second frozen basis or model request is allocated',async()=>{
@@ -446,5 +446,112 @@ test('actual production background queue commits its detached pending evidence b
   disk.resolve();await until(()=>c.TM.RecoveryReview.status().length===0,'queue receipt must release review');assert.equal((await c._tmAwaitBackgroundAutosaves()).ok,true);
   assert.equal(t.calls(),2);assert.equal(t.bases(),2);assert(events.indexOf('disk-committed')<events.indexOf('model'));assert(c.GM.shijiHistory[0].agentReview.verified);
  }finally{disk.resolve();t.dispose();}
+});
+function installActualMemorySave(t, memory){
+ const c=t.c,{loadFunctions}=require('./lib-save-commit-boundary');let waits=0,writes=0;
+ loadFunctions(c,'tm-endturn-render.js',['_endTurn_startPostTurnMemorySave','_endTurn_saveSnapshot']);
+ delete t.x.meta.postTurnMemorySavePromise;
+ c._awaitPostTurnJobsForSave=()=>{waits++;t.events.push('memory-wait');return memory.promise;};
+ c._buildSaveState=()=>JSON.parse(JSON.stringify({GM:c.GM,P:c.P}));
+ c._endTurn_stripCommittedDraftsFromSnapshot=()=>{};c._endTurn_stageTurnData=async()=>{};
+ c._endTurn_discardStagedTurnData=async()=>{};c._clearPreEndturnMarkerAfterSave=()=>{};c._updateSaveIndex=()=>{};
+ c.localStorage={setItem(){}};c.StateSnapshot={save:async()=>({ok:true})};
+ c.TM_SaveDB={createCanonicalPayload:async state=>({state,json:JSON.stringify(state)}),saveManyAtomic:async entries=>{
+  assert.deepEqual(Array.from(entries,row=>row.id),['autosave','slot_0']);writes++;t.events.push('main-commit');return true;
+ }};
+ c.requestBackgroundAutosave=async options=>{t.events.push(options.reason);return {ok:true,scheduled:true};};
+ return {waits:()=>waits,writes:()=>writes,save:()=>c._endTurn_saveSnapshot(t.x)};
+}
+test('actual main save stays nonblocking while final review waits for the single memory producer and its queued save',async()=>{
+ const t=await backgroundBarrierCase(),memory=deferred();try{
+  const p=installActualMemorySave(t,memory);assert.equal(await p.save(),true);assert.equal(p.writes(),1);assert.equal(p.waits(),1);
+  const owner=t.x.meta.postTurnMemorySavePromise;
+  assert.equal(t.c._endTurn_startPostTurnMemorySave(t.x,()=>true,t.c.GM.turn),owner,'a second consumer must not create a new retry attempt');
+  t.start();await until(()=>t.background(),'background consumer must start');await new Promise(r=>setTimeout(r,10));
+  assert.equal(t.calls(),1,'an unresolved SC25c must not overlap the next review basis');assert.equal(t.bases(),1);assert.equal(t.entered(),false);
+  assert.equal(t.c.GM._endTurnCommitPending,false);assert.equal(t.c.GM.busy,false);
+  memory.resolve();await until(t.entered,'completed memory must be queued before review pending save is drained');
+  assert.equal(p.waits(),1);assert.equal(t.calls(),1);assert.equal(t.bases(),1);
+  assert(t.events.indexOf('post-turn-memory-complete')<t.events.indexOf('turn-review-pending'));
+  assert.deepEqual(JSON.parse(JSON.stringify(await owner)),{ok:true,scheduled:true,turn:t.c.GM.turn},'only a compact receipt is retained');
+  t.gate.resolve({ok:true});await t.background();assert.equal(t.calls(),2);assert.equal(t.bases(),2);
+  assert(t.c.GM.shijiHistory[0].agentReview.verified);
+ }finally{memory.resolve();t.dispose();}
+});
+test('failed original memory producer is deferred once and never retried or called a verified review',async()=>{
+ const t=await backgroundBarrierCase(),memory=deferred();try{
+  const p=installActualMemorySave(t,memory);let deferrals=0;
+  t.c.TM.Endturn.Validity={defer(_ctx,label,error){deferrals++;assert.equal(label,'后台记忆');assert.equal(error.message,'SC25c actual failure');}};
+  assert.equal(await p.save(),true);t.start();await until(()=>t.background(),'review consumer must start');memory.reject(Error('SC25c actual failure'));
+  await t.background();assert.equal(p.waits(),1);assert.equal(deferrals,1);assert.equal(t.calls(),1);assert.equal(t.bases(),1);assert.equal(t.entered(),false);
+  assert(!t.events.includes('post-turn-memory-complete'));assert.equal(t.events.filter(e=>e==='turn-review-pending').length,1,'persist the new failure once, without retrying the failed memory producer');
+  const row=t.c.GM.shijiHistory[0].agentReview;assert.equal(row.verified,false);assert.equal(row.status,'pending');assert(row.reason.includes('SC25c actual failure'));assert(row.pendingSources.length);
+  assert.equal((await t.x.meta.postTurnMemorySavePromise).ok,false);assert.equal(t.c.TM.RecoveryReview.status().length,0);
+ }finally{memory.resolve();t.dispose();}
+});
+test('an already saved pending receipt cannot bypass the unresolved original memory producer',async()=>{
+ const t=await backgroundBarrierCase(),memory=deferred();try{
+  const p=installActualMemorySave(t,memory);assert.equal(await p.save(),true);t.gate.resolve({ok:true});t.start();
+  await until(()=>t.background(),'background consumer must start');await new Promise(r=>setTimeout(r,10));
+  assert.equal(t.calls(),1,'the old implementation starts a second model attempt before SC25c settles');assert.equal(t.bases(),1);
+  memory.resolve();await t.background();assert.equal(p.waits(),1);assert.equal(t.calls(),2);assert(t.c.GM.shijiHistory[0].agentReview.verified);
+ }finally{memory.resolve();t.dispose();}
+});
+for(const kind of ['missing','rejected','rejected-queue','queue-failure'])test('memory barrier '+kind+' preserves pending evidence without a second model attempt',async()=>{
+ const t=await backgroundBarrierCase(),memory=deferred();try{
+  if(kind==='missing')delete t.x.meta.postTurnMemorySavePromise;
+  else if(kind==='rejected'){const rejected=deferred();t.x.meta.postTurnMemorySavePromise=rejected.promise;t.start();await until(()=>t.background(),'consumer must start');rejected.reject(Error('producer promise rejected'));}
+  else{
+   const p=installActualMemorySave(t,memory);memory.resolve();
+   if(kind==='rejected-queue')t.c.requestBackgroundAutosave=async()=>({ok:false,reason:'different-world-save-pending'});
+   else t.gate.resolve({ok:false,error:Error('canonical save failed')});
+   assert.equal(await p.save(),true);
+  }
+  if(kind!=='rejected')t.start();await until(()=>t.background(),'consumer must be installed');await t.background();
+  assert.equal(t.calls(),1);assert.equal(t.bases(),1);assert.equal(t.c.TM.RecoveryReview.status().length,0);
+  const row=t.c.GM.shijiHistory[0].agentReview;assert.equal(row.verified,false);assert(row.pendingSources.length);
+  assert(row.reason.includes(kind==='missing'?'缺少本回合':kind==='rejected'?'producer promise rejected':kind==='rejected-queue'?'different-world-save-pending':'canonical save failed'));
+ }finally{memory.resolve();t.dispose();}
+});
+for(const change of ['load-generation','world','player-state','turn','api','busy','cancel','signal'])test('waiting on the existing memory producer settles on '+change+' without waiting for its unresolved response',async()=>{
+ const t=await backgroundBarrierCase(),memory=deferred();try{
+  t.x.meta.postTurnMemorySavePromise=memory.promise;t.start();await until(()=>t.background(),'memory consumer must start');const old=t.c.GM;
+  if(change==='load-generation')t.c._tmLoadGen=(t.c._tmLoadGen||0)+1;
+  else if(change==='world')t.c.GM=Object.assign({},old,{shijiHistory:[]});
+  else if(change==='player-state')t.c.P=Object.assign({},t.c.P);
+  else if(change==='turn')t.c.GM.turn++;
+  else if(change==='api')t.c.P.ai=Object.assign({},t.c.P.ai,{model:'changed-model'});
+  else if(change==='busy')t.c.GM.busy=true;
+  else if(change==='signal')t.abort();
+  else t.c.TM.RecoveryReview.cancel(t.x);
+  // Reuse the production review's existing 500ms validity monitor; no new timer owner.
+  let timer;try{await Promise.race([t.background(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('invalidated memory wait did not settle')),1500);})]);}finally{clearTimeout(timer);}
+  assert.equal(t.calls(),1);assert.equal(t.bases(),1);assert.equal(t.entered(),false);assert.equal(t.c.TM.RecoveryReview.status().length,0);
+  assert.equal(t.events.filter(e=>e==='pending-save-request').length,0);
+  memory.resolve({ok:true,scheduled:true});await new Promise(r=>setTimeout(r,5));assert.equal(t.calls(),1,'late completion must not restart the retired review');
+ }finally{memory.resolve();t.dispose();}
+});
+test('actual producer with no required jobs still completes through the existing save boundary',async()=>{
+ const t=await backgroundBarrierCase(),memory=deferred();try{
+  const p=installActualMemorySave(t,memory);load(t.c,'tm-post-turn-jobs.js');const actualWait=t.c._awaitPostTurnJobsForSave;let waits=0;
+  t.c._awaitPostTurnJobsForSave=ids=>{waits++;return actualWait(ids);};assert.equal(await p.save(),true);
+  assert.equal((await t.x.meta.postTurnMemorySavePromise).ok,true);t.gate.resolve({ok:true});t.start();await until(()=>t.background(),'consumer must start');await t.background();
+  assert.equal(waits,1);assert.equal(t.calls(),2);assert.equal(t.bases(),2);assert(t.c.GM.shijiHistory[0].agentReview.verified);
+ }finally{memory.resolve();t.dispose();}
+});
+test('a memory-producer failure is persisted by the real background queue and can be read back with its original sources',async()=>{
+ const t=await backgroundBarrierCase(),c=t.c,memory=deferred(),disk=new Map();try{
+  const p=installActualMemorySave(t,memory),memoryWait=c._awaitPostTurnJobsForSave;load(c,'tm-post-turn-jobs.js');c._awaitPostTurnJobsForSave=memoryWait;
+  const source=fs.readFileSync(path.join(__dirname,'../tm-save-lifecycle.js'),'utf8');
+  const start=source.indexOf('function _tmBackgroundSaveLeaseCurrent('),end=source.indexOf('function _tmNewDesktopAutoSaveSessionToken(',start);assert(start>=0&&end>start);
+  vm.runInContext('var _backgroundSavePending=null,_backgroundSaveInFlight=null,_backgroundSaveTimer=null,_backgroundSaveSequence=0,_BACKGROUND_SAVE_MAX_ATTEMPTS=2;\n'+source.slice(start,end),c,{filename:'tm-save-lifecycle.js background queue'});
+  c.isWorldTransactionActive=()=>!!c.GM._endTurnCommitPending;c._tmAdoptCommittedWorldSnapshot=()=>true;c._tmRequestDeferredDesktopAutoSaveFlush=()=>{};c._tmReportDesktopAutoSaveBoundaryError=error=>error;
+  let writes=0,requests=0;const enqueue=c.requestBackgroundAutosave;c.requestBackgroundAutosave=options=>{requests++;return enqueue(options);};
+  c.TM_SaveDB.saveManyAtomic=async(entries,options)=>{assert(!options.writeGuard||options.writeGuard());writes++;for(const entry of entries)disk.set(entry.id,JSON.parse(JSON.stringify(entry.gameState)));return true;};
+  assert.equal(await p.save(),true);t.start();await until(()=>t.background(),'consumer must wait on real producer');memory.reject(Error('SC25c persisted failure'));
+  await t.background();assert.equal((await c._tmAwaitBackgroundAutosaves()).ok,true);
+  assert.equal(requests,1);assert.equal(writes,2,'main commit and one pending-failure commit only');assert.equal(p.waits(),1);assert.equal(t.calls(),1);assert.equal(t.bases(),1);
+  for(const id of ['autosave','slot_0']){const row=disk.get(id).GM.shijiHistory[0].agentReview;assert.equal(row.status,'pending');assert.equal(row.verified,false);assert(row.reason.includes('SC25c persisted failure'));assert(row.pendingSources.some(source=>source.text===narrative));}
+ }finally{memory.resolve();t.dispose();}
 });
 run(tests);

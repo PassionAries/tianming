@@ -83,8 +83,26 @@ test('failed supplementary memory does not prevent canonical save or snapshot',a
   assert.equal(await f.save(),true);assert(f.events.includes('commit'));assert(f.events.includes('snapshot'));assert(f.events.includes('capture'));}
 });
 test('unresolved memory never blocks the turn and late success schedules a same-world save',async()=>{
- const f=renderFixture();let release,saves=0;f.c._awaitPostTurnJobsForSave=()=>new Promise(r=>{release=r;});f.c.requestBackgroundAutosave=async()=>{saves++;return {ok:true};};
- assert.equal(await f.save(),true);assert.equal(saves,0);release();await tick();assert.equal(saves,1);
+ const f=renderFixture();let release,saves=0,waits=0;f.c._awaitPostTurnJobsForSave=()=>{waits++;return new Promise(r=>{release=r;});};f.c.requestBackgroundAutosave=async()=>{saves++;return {ok:true,scheduled:true};};
+ assert.equal(await f.save(),true);assert.equal(saves,0);const owner=f.ctx.meta.postTurnMemorySavePromise;
+ assert.equal(f.c._endTurn_startPostTurnMemorySave(f.ctx,()=>true,4),owner);assert.equal(waits,1);
+ release();await tick();assert.equal(saves,1);assert.deepEqual(clone(await owner),{ok:true,scheduled:true,turn:4});
+});
+for(const change of ['world','player','load','turn'])test('original memory producer does not queue an obsolete '+change+' save',async()=>{
+ const f=renderFixture();let release,saves=0;f.c._awaitPostTurnJobsForSave=()=>new Promise(r=>{release=r;});f.c.requestBackgroundAutosave=async()=>{saves++;return {ok:true,scheduled:true};};
+ assert.equal(await f.save(),true);
+ if(change==='world')f.c.GM={...f.c.GM};else if(change==='player')f.c.P={};else if(change==='load')f.c._tmLoadGen++;else f.c.GM.turn++;
+ release();const receipt=await f.ctx.meta.postTurnMemorySavePromise;assert.equal(receipt.ok,false);assert.equal(receipt.stale,true);assert.equal(saves,0);assert.equal(f.disk.get('autosave').GM.turn,4);
+});
+for(const kind of ['missing','unscheduled','rejected','report-throws'])test('memory completion '+kind+' remains an explicit compact failure without affecting main commit',async()=>{
+ const f=renderFixture();let waits=0,requests=0,deferrals=0;
+ if(kind!=='missing')f.c._awaitPostTurnJobsForSave=async()=>{waits++;if(kind==='report-throws')throw Error('original memory error');};
+ f.c.requestBackgroundAutosave=async()=>{requests++;if(kind==='rejected')throw Error('queue rejected');return {ok:false,reason:'queue refused'};};
+ f.c.TM.Endturn={Validity:{defer(){deferrals++;if(kind==='report-throws')throw Error('diagnostic unavailable');}}};
+ assert.equal(await f.save(),true);const receipt=await f.ctx.meta.postTurnMemorySavePromise;
+ assert.equal(receipt.ok,false);assert.equal(deferrals,1);assert.equal(waits,kind==='missing'?0:1);assert.equal(requests,['missing','report-throws'].includes(kind)?0:1);
+ assert(receipt.reason.includes(kind==='missing'?'生产者不可用':kind==='unscheduled'?'queue refused':kind==='rejected'?'queue rejected':'original memory error'));
+ assert.deepEqual(Object.keys(receipt).sort(),['code','ok','reason']);assert.equal(f.disk.size,2);
 });
 test('a failed auxiliary turn-data file preserves its payload in the successful main save',async()=>{
  const f=renderFixture();f.ctx.meta.turnPresentation={turnData:{chronicle:'完整本期正文'}};f.c._endTurn_stageTurnData=async()=>{throw Error('sidecar failed');};

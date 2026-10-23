@@ -447,6 +447,16 @@
     }
     if(!skipSave&&typeof root.requestBackgroundAutosave==='function')return Promise.resolve(root.requestBackgroundAutosave({reason:'turn-review-'+status,expectedTurn:s.turn})).catch(function(e){console.warn('[TurnReview] 补正保存待处理:',e.message);return {ok:false,error:e};});
   }
+  function waitForBackgroundOwner(promise,signal){
+    return new Promise(function(resolve,reject){
+      var settled=false;
+      function finish(error,value){if(settled)return;settled=true;signal.removeEventListener('abort',aborted);if(error)reject(error);else resolve(value);}
+      function aborted(){finish(signal.reason||fault('AI_ABORTED','后台复核已取消'));}
+      if(signal.aborted){aborted();return;}
+      signal.addEventListener('abort',aborted,{once:true});
+      Promise.resolve(promise).then(function(value){finish(null,value);},function(error){finish(error);});
+    });
+  }
   function afterCommit(outer){
     live.forEach(function(s){
       var txn=s.ctx.meta&&s.ctx.meta.transaction;
@@ -458,23 +468,30 @@
       // The pipeline's source record is separate from the persisted history object.
       if(s.recordTarget)recordKeys.forEach(function(k){var v=s.recordTarget[savedRecordKeys[k]||k];if(typeof v==='string')s.ctx.record[k]=v;});
       function begin(){
-        var joined=false;
+        var joined=false,pendingSaveRequested=false;
         try{assert(s);if(s.g.busy){s.startTimer=setTimeout(begin,50);return;}
           if(typeof root.requestBackgroundAutosave!=='function'||typeof root._tmAwaitBackgroundAutosaves!=='function')throw fault('REVIEW_SAVE_BARRIER','复核待办的正式保存入口不可用');
           // Persist the pending sources before allocating another frozen review
           // basis. Both operations used to hold full GM/P copies concurrently.
           // The existing save queue owns its writes/retries; no world transaction
           // is held while waiting, and a changed/cancelled world never resumes.
+          // A producer failure must itself be saved once. After a pending save
+          // has been requested, its failure never starts a fresh retry budget.
+          s.waitingIdle=false;
           s.backgroundPromise=(async function(){
-            var requested=await publishBackground(s,'pending');assert(s);
+            var memoryOwner=outer.meta.postTurnMemorySavePromise;
+            if(!memoryOwner||typeof memoryOwner.then!=='function')throw fault('REVIEW_MEMORY_BARRIER','缺少本回合已启动的后台记忆保存凭据');
+            var memory=await waitForBackgroundOwner(memoryOwner,s.controller.signal);assert(s);
+            if(!memory||memory.ok!==true)throw fault(memory&&memory.code||'REVIEW_MEMORY_BARRIER','后台记忆保存尚未完成：'+String(memory&&memory.reason||'未取得完成回执'));
+            pendingSaveRequested=true;var requested=await publishBackground(s,'pending');assert(s);
             if(!requested||requested.ok!==true||requested.scheduled!==true)throw requested&&requested.error||fault('REVIEW_SAVE_BARRIER','复核待办未进入正式保存队列：'+String(requested&&requested.reason||'未取得排队回执'));
-            var saved=await root._tmAwaitBackgroundAutosaves();
+            var saved=await waitForBackgroundOwner(root._tmAwaitBackgroundAutosaves(),s.controller.signal);
             s.waitingIdle=false;assert(s);
             if(!saved||saved.ok!==true){
               throw saved&&saved.error||fault('REVIEW_SAVE_BARRIER','复核待办尚未完成正式保存：'+String(saved&&saved.reason||'未取得保存回执'));
             }
             joined=true;return join(s.ctx);
-          })().catch(function(error){deferred(s.ctx,error);if(joined)publishBackground(s,'pending',error);else{if(!s.controller.signal.aborted)publishBackground(s,'pending',error,true);s.controller.abort(error);cleanup(s);}});
+          })().catch(function(error){deferred(s.ctx,error);if(joined)publishBackground(s,'pending',error);else{if(!s.controller.signal.aborted)publishBackground(s,'pending',error,pendingSaveRequested);s.controller.abort(error);cleanup(s);}});
         }catch(error){deferred(s.ctx,error);if(!s.controller.signal.aborted)publishBackground(s,'pending',error,true);s.controller.abort(error);cleanup(s);}
       }
       s.startTimer=setTimeout(begin,0);

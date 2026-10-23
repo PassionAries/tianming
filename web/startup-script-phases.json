@@ -5948,6 +5948,7 @@
         "_endTurn_saveSnapshot",
         "_endTurn_showRenderFallback",
         "_endTurn_stageTurnData",
+        "_endTurn_startPostTurnMemorySave",
         "_endTurn_stateChecksum",
         "_endTurn_stripCommittedDraftsFromSnapshot",
         "_tmActivePreEndturnSnapshotId",

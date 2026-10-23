@@ -14,7 +14,7 @@ function reply(prompt,plan){return request(prompt).case.phase==='verify'?verifie
 const operation=(tool,input)=>({tool,input,reason:'补齐本期事实与实际状态',evidence:[{source:'original',quote:narrative}],postconditions:tool==='set_field'?[{path:input.path,equals:input.value}]:tool==='adjust_treasury'?[{path:(input.account||'guoku')+'.'+(input.currency||'money'),delta:input.delta}]:tool==='retry_main'?[{path:'chars.张甲.loyalty',equals:55}]:[]});
 const mood=value=>operation('set_field',{path:'chars.张甲.mood',value});
 function ctx(){return {input:{edicts:{text:narrative}},meta:{requireTurnReview:true},record:{shizhengji:narrative,zhengwen:'本期实录正文'},results:{sc1:{shizhengji:narrative}}};}
-function deferred(){let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};}
+function deferred(){let resolve,reject;const promise=new Promise((r,j)=>{resolve=r;reject=j;});return {promise,resolve,reject};}
 async function finishBackground(c,x,record){
  const txn=x.meta.transaction;txn.committed=true;c.GM._endTurnCommitPending=false;c.GM.busy=false;c.GM.turn++;
  c.GM.shijiHistory=[Object.assign({turn:c.GM.turn-1,html:'原纪事'},record||x.record)];let saves=0;c.requestBackgroundAutosave=async()=>{saves++;return {ok:true,scheduled:true};};
@@ -24,14 +24,17 @@ async function finishBackground(c,x,record){
 }
 function setup(settings={},observeBasis){
  const f=fixture(settings),c=f.c;c.GM=baseGM({_campaignId:'a',_timelineId:'b',_endTurnCommitPending:true,chars:[{id:'a',name:'张甲',mood:'平静',loyalty:50,alive:true}]});
+ // Isolated review cases assume a successful existing persistence boundary.
+ // The integration case below loads the actual production background queue.
+ c._tmAwaitBackgroundAutosaves=async()=>({ok:true});
  for(const file of ['tm-ai-change-pathutils.js','tm-ai-change-army.js','tm-ai-change-narrative.js','generated/tm-ai-change-applier.bundle.js','tm-social-formation.js','tm-agent-world-editor.js','tm-endturn-agent-write-tools.js','tm-emergency-recovery-review.js']){
-  if(file!=='tm-emergency-recovery-review.js'||!observeBasis){load(c,file);continue;}
+  if(file!=='tm-emergency-recovery-review.js'||!observeBasis&&!process.env.TM_REVIEW_SOURCE_OVERRIDE){load(c,file);continue;}
   // Observe private ownership at the real allocation boundary only in this VM.
   // Production exposes no inspector; this hook observes the real freeze boundary.
   c.__reviewBasisProbe=observeBasis;
-  const source=fs.readFileSync(path.join(__dirname,'..',file),'utf8'),marker='  function snapshot(g){';
+  const source=fs.readFileSync(process.env.TM_REVIEW_SOURCE_OVERRIDE||path.join(__dirname,'..',file),'utf8'),marker='  function snapshot(g){';
   assert.equal(source.split(marker).length,2,'one production snapshot allocation boundary');
-  vm.runInContext(source.replace(marker,marker+'root.__reviewBasisProbe({world:g,session:Array.from(live.values())[0],playerSnapshots:playerSnapshots});'),c,{filename:file});
+  vm.runInContext(observeBasis?source.replace(marker,marker+'root.__reviewBasisProbe({world:g,session:Array.from(live.values())[0],playerSnapshots:playerSnapshots});'):source,c,{filename:file});
  }
  return f;
 }
@@ -357,5 +360,91 @@ test('switching worlds with unread frozen roots still releases GM/P basis and re
   c.TM.RecoveryReview.start(okay,x.results.sc1,x);await assert.rejects(c.TM.RecoveryReview.join(x),e=>e.code==='AI_STALE_WORLD');
   assert.equal(owner.basis,null);assert.equal(players.has(basis),false);assert.equal(c.GM.chars[0].mood,'平静');assert.equal(c.TM.RecoveryReview.status().length,0);
  }finally{f.dispose();}
+});
+async function until(check,label){for(let i=0;i<100;i++){if(check())return;await new Promise(resolve=>setTimeout(resolve,2));}throw Error(label);}
+async function backgroundBarrierCase(){
+ let c,owner,calls=0,bases=0,entered=false;const events=[],gate=deferred();
+ const f=setup({},probe=>{if(probe.world===c.GM){owner=probe.session;bases++;events.push('review-basis');}});c=f.c;const x=ctx();x.meta.transaction={committed:false,rolledBack:false};
+ c.callAI=async prompt=>{calls++;events.push('model');return reply(prompt,empty());};
+ c.TM.RecoveryReview.start(okay,x.results.sc1,x);
+ await until(()=>c.TM.RecoveryReview.status().some(row=>row.phase==='prepared'),'initial review must prepare');
+ assert.equal(calls,1);assert.equal(bases,1);
+ x.record.shiluText='回合结束后才生成的实录，仍须复核。';c.TM.RecoveryReview.handoff(x);
+ x.meta.transaction.committed=true;c.GM._endTurnCommitPending=false;c.GM.busy=false;c.GM.turn++;
+ c.GM.shijiHistory=[Object.assign({turn:c.GM.turn-1,html:'原纪事'},x.record)];
+ c.requestBackgroundAutosave=async()=>{events.push('pending-save-request');return {ok:true,scheduled:true};};
+ c._tmAwaitBackgroundAutosaves=()=>{entered=true;events.push('save-barrier');return gate.promise;};
+ return {f,c,x,events,gate,abort:()=>owner.controller.abort(Error('background review signal cancelled')),start:()=>c.TM.RecoveryReview.afterCommit(x),entered:()=>entered,calls:()=>calls,bases:()=>bases,
+  dispose(){gate.resolve({ok:true});c.TM.RecoveryReview.cancel(x);f.dispose();}};
+}
+test('background pending sources are saved before a second frozen basis or model request is allocated',async()=>{
+ const t=await backgroundBarrierCase();try{t.start();await until(t.entered,'production review must await its pending canonical save');
+  assert.equal(t.bases(),1);assert.equal(t.calls(),1);assert.equal(t.c.GM._endTurnCommitPending,false);assert.equal(t.c.GM.busy,false);
+  assert(t.c.GM.shijiHistory[0].agentReview.pendingSources.some(row=>row.text==='回合结束后才生成的实录，仍须复核。'));
+  t.c.GM.chars[0].mood='保存期间有了新的实际情况';t.gate.resolve({ok:true});
+  await until(()=>t.c.TM.RecoveryReview.status().length===0,'saved review must finish');
+  assert.equal(t.calls(),2);assert.equal(t.bases(),2);assert(t.c.GM.shijiHistory[0].agentReview.verified);
+  assert(t.events.indexOf('save-barrier')<t.events.lastIndexOf('review-basis'));
+ }finally{t.dispose();}
+});
+for(const change of ['load-generation','world','player-state','turn','api','busy','cancel','signal'])test('background save wait rechecks '+change+' before any new basis or model call',async()=>{
+ const t=await backgroundBarrierCase();try{t.start();await until(t.entered,'save barrier must be entered');const old=t.c.GM;
+  if(change==='load-generation')t.c._tmLoadGen=(t.c._tmLoadGen||0)+1;
+  else if(change==='world')t.c.GM=Object.assign({},old,{chars:[{id:'fresh',name:'新人物',mood:'原状'}],shijiHistory:[]});
+  else if(change==='player-state')t.c.P=Object.assign({},t.c.P);
+  else if(change==='turn')t.c.GM.turn++;
+  else if(change==='api')t.c.P.ai=Object.assign({},t.c.P.ai,{model:'changed-model'});
+  else if(change==='busy')t.c.GM.busy=true;
+  else if(change==='signal')t.abort();
+  else t.c.TM.RecoveryReview.cancel(t.x);
+  t.gate.resolve({ok:true});await until(()=>t.c.TM.RecoveryReview.status().length===0,'stale review must retire');await new Promise(resolve=>setTimeout(resolve,5));
+  assert.equal(t.calls(),1);assert.equal(t.bases(),1);assert.equal(old.chars[0].mood,'平静');assert.equal(old.shijiHistory[0].agentReview.verified,false);assert.equal(t.events.filter(event=>event==='pending-save-request').length,1);
+ }finally{t.dispose();}
+});
+test('a rejected save barrier preserves its original error and does not create a fresh save retry',async()=>{
+ const t=await backgroundBarrierCase();try{t.start();await until(t.entered,'save barrier must be entered');t.gate.reject(Error('actual canonical rejection'));
+  await until(()=>t.c.TM.RecoveryReview.status().length===0,'rejected barrier must retire review');
+  assert.equal(t.calls(),1);assert.equal(t.bases(),1);assert.equal(t.events.filter(event=>event==='pending-save-request').length,1);
+  assert(t.c.GM.shijiHistory[0].agentReview.reason.includes('actual canonical rejection'));assert(t.c.GM.shijiHistory[0].agentReview.pendingSources.length);
+ }finally{t.dispose();}
+});
+for(const outcome of ['error','deferred','unavailable','empty-queue'])test('background '+outcome+' preserves pending sources and error without re-planning or leaking a live review',async()=>{
+ const t=await backgroundBarrierCase();try{
+  if(outcome==='unavailable')delete t.c._tmAwaitBackgroundAutosaves;
+  t.start();if(outcome!=='unavailable'){await until(t.entered,'save barrier must be entered');t.gate.resolve(outcome==='error'?{ok:false,error:Error('canonical disk write failed')}:outcome==='empty-queue'?{ok:false,skipped:true,reason:'no-background-save'}:{ok:false,deferred:true,reason:'world-transaction-active'});}
+  await until(()=>t.c.TM.RecoveryReview.status().length===0,'failed save wait must clean up');
+  const row=t.c.GM.shijiHistory[0].agentReview;assert.equal(row.status,'pending');assert.equal(row.verified,false);assert(row.pendingSources.some(source=>source.text===narrative));
+  assert(row.reason.includes(outcome==='error'?'canonical disk write failed':outcome==='deferred'?'world-transaction-active':outcome==='empty-queue'?'no-background-save':'保存入口不可用'));
+  assert.equal(t.calls(),1);assert.equal(t.bases(),1);assert.equal(t.x.meta.emergencyReview.approved,false);
+  assert.equal(t.events.filter(event=>event==='pending-save-request').length,outcome==='unavailable'?0:1,'save failure must not start a new retry cycle');
+ }finally{t.dispose();}
+});
+for(const reason of ['world-lease-unavailable','different-world-save-pending'])test('unaccepted '+reason+' request cannot be treated as a successful empty save queue',async()=>{
+ const t=await backgroundBarrierCase();try{let requests=0;t.c.requestBackgroundAutosave=async()=>{requests++;return {ok:false,skipped:true,reason};};
+  t.start();await until(()=>t.c.TM.RecoveryReview.status().length===0,'unscheduled request must stop review');
+  assert.equal(requests,1);assert.equal(t.entered(),false);assert.equal(t.calls(),1);assert.equal(t.bases(),1);
+  const row=t.c.GM.shijiHistory[0].agentReview;assert.equal(row.status,'pending');assert(row.reason.includes(reason));assert(row.pendingSources.length);
+ }finally{t.dispose();}
+});
+test('actual production background queue commits its detached pending evidence before review resumes',async()=>{
+ const t=await backgroundBarrierCase(),c=t.c,disk=deferred(),events=[];let writes=0;try{
+  load(c,'tm-post-turn-jobs.js');
+  const source=fs.readFileSync(path.join(__dirname,'../tm-save-lifecycle.js'),'utf8');
+  const start=source.indexOf('function _tmBackgroundSaveLeaseCurrent('),end=source.indexOf('function _tmNewDesktopAutoSaveSessionToken(',start);assert(start>=0&&end>start);
+  vm.runInContext('var _backgroundSavePending=null,_backgroundSaveInFlight=null,_backgroundSaveTimer=null,_backgroundSaveSequence=0,_BACKGROUND_SAVE_MAX_ATTEMPTS=2;\n'+source.slice(start,end),c,{filename:'tm-save-lifecycle.js background queue'});
+  c.isWorldTransactionActive=()=>!!c.GM._endTurnCommitPending;c._buildSaveState=()=>{events.push('capture');return JSON.parse(JSON.stringify({GM:c.GM,P:c.P}));};
+  c._tmAdoptCommittedWorldSnapshot=()=>{events.push('adopt');return true;};c._tmRequestDeferredDesktopAutoSaveFlush=()=>events.push('desktop-flush-request');
+  c._tmReportDesktopAutoSaveBoundaryError=error=>error;
+  c.TM_SaveDB={createCanonicalPayload:async state=>({state,json:JSON.stringify(state)}),saveManyAtomic:async(entries,options)=>{
+   assert.deepEqual(Array.from(entries,entry=>entry.id),['autosave','slot_0']);assert(options.writeGuard());writes++;events.push('disk-start');
+   const review=entries[0].gameState.GM.shijiHistory[0].agentReview;assert(review.verified||review.pendingSources.some(row=>row.text===narrative));
+   if(writes===1)await disk.promise;assert(options.writeGuard());events.push('disk-committed');return true;
+  }};
+  const realCall=c.callAI;c.callAI=async prompt=>{events.push('model');return realCall(prompt);};
+  t.start();await until(()=>writes===1,'real queue must reach its atomic dual-slot writer');
+  assert.equal(t.bases(),1);assert.equal(t.calls(),1);assert.equal(c.isWorldTransactionActive(),false);assert(c._backgroundSaveInFlight);
+  disk.resolve();await until(()=>c.TM.RecoveryReview.status().length===0,'queue receipt must release review');assert.equal((await c._tmAwaitBackgroundAutosaves()).ok,true);
+  assert.equal(t.calls(),2);assert.equal(t.bases(),2);assert(events.indexOf('disk-committed')<events.indexOf('model'));assert(c.GM.shijiHistory[0].agentReview.verified);
+ }finally{disk.resolve();t.dispose();}
 });
 run(tests);

@@ -24,11 +24,11 @@ test('profiles preserve complete ancestry without heap objects or collected allo
   assert(!('samples' in result)); assert(!JSON.stringify(result).includes('ordinal')); assert.equal(p.head.children[0].children[0].selfSize, 2048);
   assert.throws(() => compactAllocationProfile({}), /head missing/);
 });
-test('requested sampling uses existing CDP, one MiB interval and ten second polls without GC or limits', async () => {
+test('requested sampling uses existing CDP, one MiB interval and ten second polls without an explicit GC command or altered limits', async () => {
   const f = samplerFixture(), sampler = await startCompositeAllocationSampling(f.options);
   assert.deepEqual(f.commands, [['attach', '1.3'], ['HeapProfiler.startSampling', { samplingInterval: 1048576 }], ['HeapProfiler.getSamplingProfile', undefined]]);
   assert.equal([...f.timers.values()][0].ms, 10000); assert.equal(f.writes.length, 2);
-  assert.equal(f.writes[1].value.reason, 'initial'); assert.equal(f.writes[1].value.includeCollectedObjects, false);
+  assert.equal(f.writes[1].value.reason, 'initial'); assert.equal(f.writes[1].value.includeCollectedObjects, false); assert.equal(f.writes[1].value.protocolForcesGC, true);
   assert.equal(f.writes[1].value.nodes.length, 3); sampler.dispose(); assert.equal(f.timers.size, 0); assert.equal(f.failures.length, 0);
 });
 test('overlapping interval and stage requests send only one command and persist it once', async () => {
@@ -104,11 +104,11 @@ test('stage observers propagate exact synchronous errors and record Promise reje
   assert.equal(f.logs.filter(s => s.includes('"event":"throw"')).length, 1);
   assert.equal(f.logs.filter(s => s.includes('"event":"reject"')).length, 1); assert.equal(f.calls.length, 2);
 });
-test('allocation diagnostics are opt-in, run in CI and retain original gate deadlines', () => {
+test('allocation diagnostics are opt-in, disabled in ordinary CI and retain original gate deadlines', () => {
   const base = path.resolve(__dirname, '../..'), bridge = fs.readFileSync(path.join(base, 'scripts/electron/bridge-main.cjs'), 'utf8');
   const cases = fs.readFileSync(path.join(base, 'scripts/electron/npc-composite-cases.cjs'), 'utf8'), ci = fs.readFileSync(path.join(base, '.github/workflows/ci.yml'), 'utf8');
   assert(bridge.includes("mode==='npc-composite'&&process.env.TM_BRIDGE_HEAP_SAMPLING==='1'"));
-  assert(cases.includes("if(process.env.TM_BRIDGE_HEAP_SAMPLING==='1')")); assert(ci.includes("TM_BRIDGE_HEAP_SAMPLING: '1'"));
+  assert(cases.includes("if(process.env.TM_BRIDGE_HEAP_SAMPLING==='1')")); assert(ci.includes("TM_BRIDGE_HEAP_SAMPLING: '0'"));
   assert(bridge.includes("mode === 'npc-composite' ? 1800000")); assert(bridge.includes('process.getSystemMemoryInfo()'));
   const helper = fs.readFileSync(path.join(base, 'scripts/electron/npc-composite-diagnostics.cjs'), 'utf8');
   assert(!helper.includes('takeHeapSnapshot')); assert(!helper.includes("sendCommand('HeapProfiler.collectGarbage'")); assert(!helper.includes('max-old-space-size'));

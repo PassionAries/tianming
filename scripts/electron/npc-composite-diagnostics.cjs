@@ -1,6 +1,6 @@
 'use strict';
-// Disposable Electron gate diagnostics. No heap snapshot, GC, world read/write,
-// model call or altered V8 limit: sampled allocation stacks contain only code.
+// Diagnostic-only: reading a CDP sample forces GC in this V8; disable it for acceptance.
+// No heap snapshot, world write, model call or altered V8 limit; stacks contain code only.
 const fs = require('node:fs'), path = require('node:path');
 
 function compactAllocationProfile(profile) {
@@ -49,7 +49,7 @@ async function startCompositeAllocationSampling(options) {
     const request = Promise.resolve().then(() => dbg.sendCommand('HeapProfiler.getSamplingProfile')).then(result => {
       if (disposed) return null;
       const data = { sampleId, reason, startedAt, finishedAt: clock.now(), samplingInterval: 1048576,
-        includeCollectedObjects: false, ...compactAllocationProfile(result.profile) };
+        includeCollectedObjects: false, protocolForcesGC: true, ...compactAllocationProfile(result.profile) };
       write('allocation-profile-' + String(sampleId).padStart(4, '0') + '.json', JSON.stringify(data) + '\n');
       return { sampleId, startedAt, finishedAt: data.finishedAt, sampledLiveBytes: data.sampledLiveBytes, nodeCount: data.nodes.length };
     });
@@ -64,7 +64,7 @@ async function startCompositeAllocationSampling(options) {
     // Default collection policy records currently live sampled objects only.
     // Do not enable includeObjectsCollectedByMajorGC/MinorGC history.
     await dbg.sendCommand('HeapProfiler.startSampling', { samplingInterval: 1048576 });
-    event('started', { samplingInterval: 1048576, pollMs: 10000, includeCollectedObjects: false });
+    event('started', { samplingInterval: 1048576, pollMs: 10000, includeCollectedObjects: false, protocolForcesGC: true });
     await sample('initial');
     timer = clock.setInterval(() => { sample('interval').catch(() => {}); }, 10000);
     if (timer && timer.unref) timer.unref();

@@ -430,7 +430,7 @@
     }catch(error){cancel(ctx);return deferred(ctx,error);}
   }
   var savedRecordKeys={shiluText:'shilu',hourenXishuo:'houren'};
-  function publishBackground(s,status,error){
+  function publishBackground(s,status,error,skipSave){
     if(root.GM!==s.g||root.P!==s.p||root._tmLoadGen!==s.generation||s.g.turn!==s.turn||s.g._endTurnCommitPending)return;
     var row=s.recordTarget;
     if(row&&(s.g.shijiHistory||[]).includes(row)){
@@ -445,7 +445,7 @@
         row.html=s.originalHtml+'<section class="turn-review-correction"><h3>本回合复核修订</h3>'+Array.from(new Set(changed.map(function(c){return c.path;}))).map(function(k){return '<h4>'+escape(labels[k]||k)+'</h4><p style="white-space:pre-wrap">'+escape(s.ctx.record[k])+'</p>';}).join('')+'</section>'; // arch-ok: safely escaped presentation of the review-owned record patch.
       }
     }
-    if(typeof root.requestBackgroundAutosave==='function')Promise.resolve(root.requestBackgroundAutosave({reason:'turn-review-'+status,expectedTurn:s.turn})).catch(function(e){console.warn('[TurnReview] 补正保存待处理:',e.message);});
+    if(!skipSave&&typeof root.requestBackgroundAutosave==='function')return Promise.resolve(root.requestBackgroundAutosave({reason:'turn-review-'+status,expectedTurn:s.turn})).catch(function(e){console.warn('[TurnReview] 补正保存待处理:',e.message);return {ok:false,error:e};});
   }
   function afterCommit(outer){
     live.forEach(function(s){
@@ -458,9 +458,24 @@
       // The pipeline's source record is separate from the persisted history object.
       if(s.recordTarget)recordKeys.forEach(function(k){var v=s.recordTarget[savedRecordKeys[k]||k];if(typeof v==='string')s.ctx.record[k]=v;});
       function begin(){
-        try{assert(s);if(s.g.busy){s.startTimer=setTimeout(begin,50);return;}s.waitingIdle=false;publishBackground(s,'pending');
-          s.backgroundPromise=join(s.ctx).catch(function(error){deferred(s.ctx,error);publishBackground(s,'pending',error);});
-        }catch(error){deferred(s.ctx,error);cleanup(s);}
+        var joined=false;
+        try{assert(s);if(s.g.busy){s.startTimer=setTimeout(begin,50);return;}
+          if(typeof root.requestBackgroundAutosave!=='function'||typeof root._tmAwaitBackgroundAutosaves!=='function')throw fault('REVIEW_SAVE_BARRIER','复核待办的正式保存入口不可用');
+          // Persist the pending sources before allocating another frozen review
+          // basis. Both operations used to hold full GM/P copies concurrently.
+          // The existing save queue owns its writes/retries; no world transaction
+          // is held while waiting, and a changed/cancelled world never resumes.
+          s.backgroundPromise=(async function(){
+            var requested=await publishBackground(s,'pending');assert(s);
+            if(!requested||requested.ok!==true||requested.scheduled!==true)throw requested&&requested.error||fault('REVIEW_SAVE_BARRIER','复核待办未进入正式保存队列：'+String(requested&&requested.reason||'未取得排队回执'));
+            var saved=await root._tmAwaitBackgroundAutosaves();
+            s.waitingIdle=false;assert(s);
+            if(!saved||saved.ok!==true){
+              throw saved&&saved.error||fault('REVIEW_SAVE_BARRIER','复核待办尚未完成正式保存：'+String(saved&&saved.reason||'未取得保存回执'));
+            }
+            joined=true;return join(s.ctx);
+          })().catch(function(error){deferred(s.ctx,error);if(joined)publishBackground(s,'pending',error);else{if(!s.controller.signal.aborted)publishBackground(s,'pending',error,true);s.controller.abort(error);cleanup(s);}});
+        }catch(error){deferred(s.ctx,error);if(!s.controller.signal.aborted)publishBackground(s,'pending',error,true);s.controller.abort(error);cleanup(s);}
       }
       s.startTimer=setTimeout(begin,0);
     });

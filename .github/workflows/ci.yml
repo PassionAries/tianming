@@ -135,7 +135,7 @@ jobs:
         if: matrix.group == 'npc-composite'
         env:
           TM_BRIDGE_MEMORY_DIAGNOSTICS: '1'
-          TM_BRIDGE_HEAP_SAMPLING: '1'
+          TM_BRIDGE_HEAP_SAMPLING: '0'
           TM_BRIDGE_CPU_PROFILE: '0'
         run: node scripts/verify-electron-bridge.js --npc-composite
       - name: Edict office creation, recursive tree, appointment target and native save recovery

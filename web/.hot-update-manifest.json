@@ -2,7 +2,7 @@
   "type": "tianming-hot-update",
   "version": "1.3.5.3",
   "entry": "index.html",
-  "generatedAt": "2026-10-23T05:18:40.516Z",
+  "generatedAt": "2026-10-23T07:41:19.502Z",
   "files": [
     {
       "path": "ARCHITECTURE.md",
@@ -4406,8 +4406,8 @@
     },
     {
       "path": "startup-script-phases.json",
-      "sha256": "f32f3ee32daeef793cdc2fc457309aad78dc06347e308f9a2c3dcbb7b606bcc2",
-      "size": 391204
+      "sha256": "4cba8c4947ef7492ac0fb6861c700bf8e2a71a320c144261a3de77ae9822fc69",
+      "size": 391327
     },
     {
       "path": "styles.css",
@@ -4466,8 +4466,8 @@
     },
     {
       "path": "tm-ai-infra.js",
-      "sha256": "a65f823ea2f92633c4a393205619f3b045d1859a0f74880d7575720b4ed1440a",
-      "size": 168794
+      "sha256": "f4ed4cd58390390d3036fc310f6ea21dc8ae2e9b6dfd790364190e08b592bbaf",
+      "size": 168917
     },
     {
       "path": "tm-ai-narrative-guards.js",
@@ -5031,8 +5031,8 @@
     },
     {
       "path": "tm-emergency-recovery-review.js",
-      "sha256": "118a57db5c724661598f1eebe26df4e31fc5ecf819be4e507bce265c9cabf0ed",
-      "size": 46998
+      "sha256": "83c998c9565d481fd7e9fd8822ff417fcf8c47f0c983c6ff3e1ca9012de5259f",
+      "size": 51449
     },
     {
       "path": "tm-emergency-recovery-runtime.js",
@@ -5041,8 +5041,8 @@
     },
     {
       "path": "tm-emergency-recovery-settings.js",
-      "sha256": "6461a538d151e571e18e42df9e71dda2a0f31accd5ca2d9cdab288ddbf1e749d",
-      "size": 6977
+      "sha256": "3dc68e49ef2ffdce086dc697fdcda17f7a63ac415408404b75cc79ac31ac5cb6",
+      "size": 8652
     },
     {
       "path": "tm-emergency-recovery-tools.js",
@@ -5111,8 +5111,8 @@
     },
     {
       "path": "tm-endturn-core.js",
-      "sha256": "2a450b607736d1ee27d67459144ae13a66a1404bdb45bbd1d7cd29a1ef09a4d7",
-      "size": 110707
+      "sha256": "1500dba1c171d02a3e18b4edf08a799812a809b630505357d2e6a7dd8e5cd2f6",
+      "size": 112588
     },
     {
       "path": "tm-endturn-edict.js",
@@ -5206,13 +5206,13 @@
     },
     {
       "path": "tm-endturn-render.js",
-      "sha256": "5a16e2e8981863e9e0d1b9a2cc21920a15d7df897c2499456a9ffbd83638c030",
-      "size": 46358
+      "sha256": "f8a5a8bf29067a2c09eab645a9591eca606660cf5cca2b8665c5a4c1cce0a3f6",
+      "size": 47930
     },
     {
       "path": "tm-endturn-response-recovery.js",
-      "sha256": "6461ccfe9f0bd95c31dc95360718e52f506db2b99dafdafa46a5b5f91f055baa",
-      "size": 14074
+      "sha256": "8a15dd82804e920c06a1c50aab1bcb992f93f2e4fcbecd1ae5cae4a4fb5b91bc",
+      "size": 14974
     },
     {
       "path": "tm-endturn-save-reconcile.js",
@@ -5881,8 +5881,8 @@
     },
     {
       "path": "tm-mechanics-memory.js",
-      "sha256": "fe73e30f22af7f540458e2ea5370288673b52ca963222150bad18167d48da221",
-      "size": 82024
+      "sha256": "71ba316623394b4614af49d22b1a7162654237e4bc3f3c90cddee35f3fc1785b",
+      "size": 82858
     },
     {
       "path": "tm-mechanics-world.js",
@@ -6116,18 +6116,18 @@
     },
     {
       "path": "tm-npc-daily-activities.js",
-      "sha256": "c19cafbbebcb1ba89d6a5463cbae138e95db2ece94d5eb8bd4460aaa09c89fa1",
-      "size": 82056
+      "sha256": "1970a354a24bef4d946b064934320cd11d6dc300a1e91c0d78a1a6cdd8db9b08",
+      "size": 82888
     },
     {
       "path": "tm-npc-daily-ui.js",
-      "sha256": "70400c0e3864c4abcecebb23576fb2abdc4dd5f97143c59dd8c946a534cbcb39",
-      "size": 21985
+      "sha256": "6b0d7bab87589fb5946ad521834e5bdf561d6e28e75c6f8d40af053700dbae09",
+      "size": 27794
     },
     {
       "path": "tm-npc-decision-ai-driven.js",
-      "sha256": "149122cf898331322b0980dbeac45bfa5bb86829e028e3f552b301935e89523f",
-      "size": 64120
+      "sha256": "7d9934da2eb8083ee56d247e8758adc0d0782f250b6e39dff7ae3e83897fd60d",
+      "size": 66223
     },
     {
       "path": "tm-npc-decision.js",
@@ -6141,13 +6141,13 @@
     },
     {
       "path": "tm-npc-local-ai.js",
-      "sha256": "b435e8656aa549954ae34b6c8893625f54a1f59770a68dc5d27b900fb86dc1b2",
-      "size": 81044
+      "sha256": "782b553ff15d1897f53e239e691df5cf8c938a9e81e91b4c49317c844f18349b",
+      "size": 84288
     },
     {
       "path": "tm-npc-travel.js",
-      "sha256": "a7e81472f55ae1f427bb6b0036ce454ceeb0a126335b5b5cf129ae20d2da91e6",
-      "size": 64471
+      "sha256": "dab485ebfa29806134e62bcfa42b7dceef771d2363d9a2cf190cab74bd0cd084",
+      "size": 86053
     },
     {
       "path": "tm-number-parser.js",
@@ -6236,8 +6236,8 @@
     },
     {
       "path": "tm-office-tenure.js",
-      "sha256": "c0dea6152e8a21cf8c31576acd27ec159b2822555e854ed85ee1c3b1f747dadd",
-      "size": 43652
+      "sha256": "67b94d520279dad27c9277b918cca3cac8af1837d0d333e8fb86e16900549328",
+      "size": 56848
     },
     {
       "path": "tm-office-vacancy.js",
@@ -6371,8 +6371,8 @@
     },
     {
       "path": "tm-post-turn-jobs.js",
-      "sha256": "efcad561a913125f83db4a1467749841f9cd40133e119277842b0d74b115542f",
-      "size": 35443
+      "sha256": "aad8d466fda510e5c2b74fcd2d97ee46657c928a5a09f2f25702396041350ac5",
+      "size": 35701
     },
     {
       "path": "tm-project-assets.js",
@@ -6546,8 +6546,8 @@
     },
     {
       "path": "tm-sim-time.js",
-      "sha256": "d744d2d5d1147effb83363016347200ee38a3cf11ba464e322c9a1d435a0241b",
-      "size": 4448
+      "sha256": "57478e7c6b7c0660e876a79b90cc49f555731c10f2a6cd32674dd2aee689d213",
+      "size": 5701
     },
     {
       "path": "tm-social-formation.js",
@@ -6596,7 +6596,7 @@
     },
     {
       "path": "tm-start-runtime-manifest.json",
-      "sha256": "deef62fcbeea3a9540d846b443908731c1210498b0c3ee44a1d8bb4240aca947",
+      "sha256": "ecad1cb3f8a3d00c9fd39dd02456e3bb2709aba6ec3c3f8a9b853147223f3f2a",
       "size": 139151
     },
     {
@@ -6686,8 +6686,8 @@
     },
     {
       "path": "tm-time-utils.js",
-      "sha256": "87a31213e54b28f14c59e55a71dd2e2ed5ffcad9cf406ddf7a205c3fd1e31037",
-      "size": 12034
+      "sha256": "a6926b510fbda247c6f324ac63945bc99562c55fc441f27984139109949626f9",
+      "size": 12133
     },
     {
       "path": "tm-tinyi-v3-edict-personnel.js",

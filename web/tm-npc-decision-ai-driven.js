@@ -282,6 +282,33 @@ function _npcPlanningRequestStillValid(request, actor) {
   return { ok: true };
 }
 
+function _npcPlanningSummarizeDirection(direction) {
+  var steps = direction.steps || [], terminal = /^(completed|cancelled|rejected|expired|ended)$/;
+  if (steps.length && steps.every(function (step) { return terminal.test(step.status); })) {
+    direction.status = steps.every(function (step) { return step.status === 'completed'; }) ? 'completed' : 'ended';
+  }
+}
+
+function _npcPlanningActualOutcome(activity, receipt) {
+  if (!activity) return receipt.outcome === 'completed' ? 'needs_revision' : receipt.outcome;
+  if (/^(rejected|cancelled|expired|ended)$/.test(activity.status)) return activity.status;
+  if (activity.status === 'missed') return 'expired';
+  if (activity.status === 'done') {
+    var meeting = activity.localActivity && activity.localActivity.meeting;
+    if (meeting) {
+      var discussion = meeting.discussion;
+      var returned = ['actorReturnJourney', 'targetReturnJourney'].every(function (key) {
+        return meeting[key] && /^(returned|arrived|staying)$/.test(meeting[key].status);
+      });
+      if (!meeting.participation || meeting.status !== 'returned' || !returned) return 'needs_revision';
+      if (discussion && !(discussion.status === 'completed' && discussion.result && discussion.result.sourcePlanId === activity.id)) return 'ended';
+    }
+    return 'completed';
+  }
+  // A submitted utterance or a successful transport is not the whole objective.
+  return receipt.outcome === 'completed' ? 'waiting' : receipt.outcome;
+}
+
 function _npcPlanningReconcile(planning, chars) {
   var day = _npcPlanningDay(), turn = Number(GM.turn) || 0;
   planning.pending.forEach(function (q) {
@@ -300,8 +327,8 @@ function _npcPlanningReconcile(planning, chars) {
     if (direction.reviewDay != null && day >= Number(direction.reviewDay) && Number(direction.reviewedDay || -1) < day) {
       direction.reviewedDay = day;
       var waiting = (direction.steps || []).some(function (s) { return /^(waiting|blocked|needs_revision)$/.test(s.status); });
-      var open = (direction.steps || []).some(function (s) { return !/^(completed|cancelled|rejected|expired)$/.test(s.status); });
-      if (!open) direction.status = 'completed';
+      var open = (direction.steps || []).some(function (s) { return !/^(completed|cancelled|rejected|expired|ended)$/.test(s.status); });
+      if (!open) _npcPlanningSummarizeDirection(direction);
       else if (waiting) direction.status = direction.status === 'active' ? 'waiting' : direction.status;
     }
   });
@@ -380,7 +407,7 @@ function _npcPlanningGoalReady(goal) {
   var planning = _npcPlanningState(), direction = planning.directions[String(goal.planningDirectionId)];
   if (!direction) return false;
   var step = (direction.steps || []).find(function (s) { return String(s.id || s.goalId) === String(goal.planningStepId) || String(s.goalId) === String(goal.id); });
-  if (!step || /^(blocked|waiting|needs_revision|rejected|cancelled|expired)$/.test(step.status)) return false;
+  if (!step || /^(blocked|waiting|needs_revision|completed|rejected|cancelled|expired|ended)$/.test(step.status)) return false;
   return (step.dependsOn || []).every(function (dependency) {
     var prior = (direction.steps || []).find(function (s) { return String(s.id || s.goalId) === String(dependency); });
     return prior && prior.status === 'completed';
@@ -390,26 +417,29 @@ function _npcPlanningGoalReady(goal) {
 if (typeof window !== 'undefined') window._npcPlanningGoalReady = _npcPlanningGoalReady;
 
 function _npcPlanningStepResult(actorId, sourceGoalId, receipt) {
-  if (!sourceGoalId) return;
-  var planning = _npcPlanningState();
-  var ownerId = receipt && (receipt.planningOwnerId || receipt.planOwnerId || receipt.ownerId) || actorId;
+  if (!sourceGoalId || !receipt) return;
+  var planning = _npcPlanningState(), activities = GM._npcPlans || [];
+  var activity = receipt.planId && activities.find(function (p) { return p && String(p.id) === String(receipt.planId); });
+  if (receipt.planId && (!activity || !activity.localActivity || activity.localActivity.sourceGoalId !== sourceGoalId)) return;
+  var ownerId = activity ? activity.actorId : receipt.planningOwnerId || receipt.planOwnerId || receipt.ownerId || actorId;
   Object.keys(planning.directions).forEach(function (id) {
     var direction = planning.directions[id];
     if (!direction || direction.actorId !== String(ownerId)) return;
     var step = (direction.steps || []).find(function (s) { return s.goalSource === sourceGoalId || s.goalId === sourceGoalId; });
-    if (!step) return;
-    var wasCompleted = step.status === 'completed';
-    step.lastOutcome = receipt && receipt.outcome || '';
-    step.lastReason = receipt && receipt.reason || '';
-    if (!receipt) return;
-    if (/^(submitted|started)$/.test(receipt.outcome)) step.status = 'started';
-    else if (receipt.outcome === 'waiting' || receipt.outcome === 'partial') step.status = 'waiting';
-    else if (receipt.outcome === 'completed' && receipt.verified !== false) step.status = 'completed';
-    else if (receipt.outcome === 'rejected') step.status = 'rejected';
-    else if (receipt.outcome === 'cancelled') step.status = 'cancelled';
-    else if (receipt.outcome === 'expired') step.status = 'expired';
-    else if (receipt.outcome === 'blocked' || receipt.outcome === 'failed') step.status = 'needs_revision';
-    if (step.status === 'completed' && !wasCompleted) {
+    if (!step || /^(completed|cancelled|rejected|expired|ended)$/.test(step.status)) return;
+    var boundActivity = activity || activities.find(function (p) {
+      return p && String(p.actorId) === direction.actorId && p.localActivity && p.localActivity.sourceGoalId === sourceGoalId;
+    });
+    if (step.activityId && (!boundActivity || step.activityId !== boundActivity.id)) return;
+    if (boundActivity) step.activityId = boundActivity.id;
+    var outcome = _npcPlanningActualOutcome(boundActivity, receipt);
+    step.lastOutcome = outcome; step.lastReason = receipt.reason || '';
+    if (/^(submitted|started)$/.test(outcome)) step.status = 'started';
+    else if (outcome === 'waiting' || outcome === 'partial') step.status = 'waiting';
+    else if (/^(completed|rejected|cancelled|expired|ended)$/.test(outcome)) step.status = outcome;
+    else if (/^(blocked|failed|needs_revision)$/.test(outcome)) step.status = 'needs_revision';
+    var owner = (GM.chars || []).find(function (c) { return String(c.id) === direction.actorId; });
+    if (step.status === 'completed') {
       planning.completedSteps = Number(planning.completedSteps || 0) + 1;
       step.lastCompletionTurn = Number(GM.turn) || 0;
       (direction.steps || []).forEach(function (next) {
@@ -419,17 +449,20 @@ function _npcPlanningStepResult(actorId, sourceGoalId, receipt) {
           return prior && prior.status === 'completed';
         })) {
           next.status = 'ready';
-          var owner = (GM.chars || []).find(function (c) { return String(c.id) === String(direction.actorId); });
           if (owner && Array.isArray(owner.localGoals)) owner.localGoals.forEach(function (goal) { if (goal && goal.planningDirectionId === direction.id && goal.planningStepId === next.id) goal.status = 'active'; });
         }
       });
     }
-    if (step.status === 'rejected' || step.status === 'needs_revision') {
-      (direction.steps || []).forEach(function (next) { if ((next.dependsOn || []).indexOf(step.id) >= 0 && next.status === 'pending') next.status = 'blocked'; });
+    if (/^(rejected|cancelled|expired|ended|needs_revision)$/.test(step.status)) {
+      (direction.steps || []).forEach(function (next) {
+        if ((next.dependsOn || []).indexOf(step.id) >= 0 && /^(pending|ready|blocked)$/.test(next.status)) next.status = 'blocked';
+      });
       direction.status = 'needs_revision';
     }
-    var active = (direction.steps || []).filter(function (s) { return !/^(completed|cancelled|rejected|expired)$/.test(s.status); });
-    if (!active.length) direction.status = 'completed';
+    if (owner && Array.isArray(owner.localGoals) && /^(completed|rejected|cancelled|expired|ended)$/.test(step.status)) owner.localGoals.forEach(function (goal) {
+      if (goal && goal.planningDirectionId === direction.id && goal.planningStepId === step.id) goal.status = step.status;
+    });
+    _npcPlanningSummarizeDirection(direction);
   });
 }
 

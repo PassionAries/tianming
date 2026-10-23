@@ -3294,13 +3294,27 @@ ipcMain.on('auto-save-session-rotate', (event, requestedToken) => {
 let autoSaveWriteQueue = Promise.resolve();
 ipcMain.handle('auto-save', (event, payload) => {
   const wrapped = !!(payload && payload.__tmAutoSaveEnvelope === 1);
-  const data = wrapped ? payload.data : payload;
+  const textOnly = wrapped && Object.prototype.hasOwnProperty.call(payload, 'dataJson');
+  let data = wrapped ? payload.data : payload;
+  const json = textOnly ? payload.dataJson : null;
   let requestToken = normalizeAutoSaveSessionToken(wrapped ? payload.sessionToken : (data && data._tmAutoSaveSessionToken));
   // 所有 renderer 调用共享同一 .tmp；主进程串行化才可保证 write+rename 这一对不互踩。
   const task = autoSaveWriteQueue.then(async () => {
     try {
-      ensureSaveDir();
       let currentToken = getAutoSaveSessionToken();
+      if (textOnly) {
+        // Validate in the existing serial main-process queue, not in the
+        // renderer/preload heap. Invalid input changes neither files nor session.
+        if (Object.prototype.hasOwnProperty.call(payload, 'data') || typeof json !== 'string') {
+          return { success: false, code: 'AUTO_SAVE_JSON_INVALID', error: '自动存档 JSON 请求必须只有文本正文' };
+        }
+        try { data = JSON.parse(json); }
+        catch (_) { return { success: false, code: 'AUTO_SAVE_JSON_INVALID', error: '自动存档 JSON 无效' }; }
+        if (!data || typeof data !== 'object' || Array.isArray(data)) {
+          return { success: false, code: 'AUTO_SAVE_JSON_INVALID', error: '自动存档正文必须是对象' };
+        }
+      }
+      ensureSaveDir();
       // 新桥第一次运行且尚无 sidecar 时，由主进程创建 token 并随回包同步给 preload。
       if (wrapped && !requestToken && !currentToken) {
         requestToken = persistAutoSaveSessionToken(crypto.randomUUID());

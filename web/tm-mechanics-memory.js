@@ -1115,15 +1115,27 @@ var CharacterGrowthSystem = {
    * @param {string} charName
    * @param {string} domain - 历练领域
    * @param {string} desc - 具体经历描述
+   * @param {{characterId?: string}} [options] - 显式身份优先，不按同名回退
    */
-  recordExperience: function(charName, domain, desc) {
-    if (!GM.chars) return;
-    charName = _tmMemoryCanonName(charName);
-    var ch = _tmMemoryFindChar(charName);
-    if (!ch || ch.alive === false) return;
+  recordExperience: function(charName, domain, desc, options) {
+    if (!GM.chars) return false;
+    options = options || {};
+    var matches;
+    if (Object.prototype.hasOwnProperty.call(options, 'characterId')) {
+      // Explicit identity is authoritative: a bad ID never falls back to a name.
+      if (options.characterId == null || String(options.characterId) === '') return false;
+      matches = GM.chars.filter(function (ch) { return ch && ch.id != null && String(ch.id) === String(options.characterId); });
+    } else {
+      charName = _tmMemoryCanonName(charName);
+      matches = GM.chars.filter(function (ch) { return ch && ch.id != null && String(ch.id) === String(charName); });
+      if (!matches.length) matches = GM.chars.filter(function (ch) { return ch && _tmMemoryCanonName(ch.name) === charName; });
+    }
+    if (matches.length !== 1 || matches[0].alive === false) return false;
+    var ch = matches[0];
     if (!ch._lifeExp) ch._lifeExp = [];
     ch._lifeExp.push({ domain: domain, desc: desc, turn: GM.turn });
     if (ch._lifeExp.length > 20) ch._lifeExp = ch._lifeExp.slice(-20);
+    return true;
   },
 
   /**

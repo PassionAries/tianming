@@ -197,4 +197,140 @@ function reconcileCompositeEconomy(tickets, calls) {
   });
   return { turns: turns.length, systems: calls.systems.length, provinceEconomy: calls.provinceEconomy.length, intervals };
 }
-module.exports = { installCompositeWaits, installCompositeEconomyObservers, reconcileCompositeEconomy };
+// Observe the final review/save tail without starting, retrying or cancelling work.
+async function waitForCompositeBackground(root, deadlineAt, observedSince, clock) {
+  clock = clock || { now: () => Date.now(), setTimeout: (fn, ms) => root.setTimeout(fn, ms), clearTimeout: id => root.clearTimeout(id) };
+  function demand(value, message) { if (!value) throw Error('composite final background: ' + message); }
+  demand(Number.isFinite(deadlineAt) && Number.isFinite(observedSince), 'shared deadline and final turn start are required');
+  demand(clock.now() < deadlineAt, 'suite deadline exceeded');
+  demand(root.TM && root.TM.RecoveryReview && typeof root.TM.RecoveryReview.status === 'function'
+    && typeof root.isWorldTransactionActive === 'function' && typeof root.requestAnimationFrame === 'function'
+    && typeof root.cancelAnimationFrame === 'function', 'observation modules unavailable');
+  const fields = ['_backgroundSavePending', '_backgroundSaveInFlight', '_backgroundSaveTimer', '_autoSaveInFlight', '_autoSaveInFlightPromise',
+    '_autoSaveFlushTimer', '_autoSaveDeferred', '_autoSaveNativePending', '_autoSaveCommittedRevision', '_autoSaveLastSavedRevision',
+    '_autoSaveLastSavedTurn', '_autoSaveLastDoneMs', '_lastCommittedSnapshotIdentity', 'lastCommittedSnapshot', 'lastCommittedTurn',
+    'lastCommittedTransactionId', '_tmAutoSaveSessionToken', '_tmLoadGen'];
+  fields.forEach(key => demand(key in root && root[key] !== undefined, 'missing observation field ' + key));
+  demand(root.__compositeCalls && Array.isArray(root.__compositeCalls.fixtureErrors), 'fixture error observations unavailable');
+  function read() {
+    const g = root.GM, identity = root._lastCommittedSnapshotIdentity;
+    demand(g && root.P && typeof root._autoSaveInFlight === 'boolean' && typeof root._autoSaveDeferred === 'boolean', 'world or save flags unavailable');
+    const review = root.TM.RecoveryReview.status(); demand(Array.isArray(review), 'review status unavailable');
+    const jobs = [].concat(g._postTurnJobs && g._postTurnJobs.pending || [], g._postTurnDetachedJobs || []).map(job => ({
+      id: String(job.id || ''), status: String(job.status || ''), attempts: Number(job.attempts || 0),
+      turn: Number(job.lease && job.lease.turn || job.sourceTurn || 0), load: Number(job.lease && job.lease.loadGen || 0),
+      settled: /^(done|failed|retryable)$/.test(job.status || ''), hasPromise: !!(job.promise && typeof job.promise.then === 'function')
+    }));
+    const failures = (g._backgroundSaveFailures || []).map(row => ({ turn: Number(row.turn), at: Number(row.at),
+      attempts: Number(row.attempts), reasons: Array.from(row.reasons || [], String), message: String(row.message || '') }));
+    let lastReview = null;
+    for (let i = (g.shijiHistory || []).length - 1; i >= 0; i--) {
+      const row = g.shijiHistory[i]; if (Number(row.turn) !== Number(g.turn) - 1) continue;
+      const r = row.agentReview; lastReview = { turn: Number(row.turn), status: r ? String(r.status || '') : 'unrecorded',
+        verified: !!(r && r.verified), calls: Number(r && r.calls || 0), reason: String(r && r.reason || '') }; break;
+    }
+    return {
+      world: { turn: Number(g.turn), day: Number(root.TM.SimTime.now(g)), load: Number(root._tmLoadGen), campaignId: String(g._campaignId || ''),
+        timelineId: String(g._timelineId || ''), sessionToken: String(root._tmAutoSaveSessionToken || ''), running: g.running === true },
+      transactionActive: root.isWorldTransactionActive(), review: review.map(row => ({ id: String(row.id), phase: String(row.phase), calls: Number(row.calls || 0) })),
+      background: { pending: !!root._backgroundSavePending, inFlight: !!root._backgroundSaveInFlight, timer: root._backgroundSaveTimer !== null },
+      desktop: { inFlight: root._autoSaveInFlight, promise: !!root._autoSaveInFlightPromise, timer: root._autoSaveFlushTimer !== null,
+        deferred: root._autoSaveDeferred, nativePending: root._autoSaveNativePending !== null,
+        nativeTimedOut: !!(root._autoSaveNativePending && root._autoSaveNativePending.timedOut) },
+      canonical: { present: !!(root.lastCommittedSnapshot && root.lastCommittedSnapshot.GM && root.lastCommittedSnapshot.P), revision: Number(root._autoSaveCommittedRevision), turn: Number(root.lastCommittedTurn),
+        transactionId: String(root.lastCommittedTransactionId || ''), identity: identity ? { campaignId: String(identity.campaignId || ''),
+          timelineId: String(identity.timelineId || ''), sessionToken: String(identity.sessionToken || ''), load: Number(identity.loadGeneration),
+          turn: Number(identity.turn), transactionId: String(identity.transactionId || '') } : null },
+      saved: { revision: Number(root._autoSaveLastSavedRevision), turn: Number(root._autoSaveLastSavedTurn), at: Number(root._autoSaveLastDoneMs) },
+      requiredJobs: jobs.filter(job => /^(sc25|sc25c)$/.test(job.id)), otherJobs: jobs.filter(job => !/^(sc25|sc25c)$/.test(job.id)),
+      lastReview, failures, fixtureErrors: root.__compositeCalls.fixtureErrors.length
+    };
+  }
+  function ready(s) {
+    const w = s.world, c = s.canonical, i = c.identity;
+    return w.running && !s.transactionActive && !s.review.length && !Object.values(s.background).some(Boolean)
+      && !Object.values(s.desktop).some(Boolean) && s.requiredJobs.every(job => job.settled)
+      && c.present && Number.isInteger(c.revision) && c.revision > 0 && c.turn === w.turn && c.transactionId
+      && i && i.campaignId === w.campaignId && i.timelineId === w.timelineId && i.sessionToken === w.sessionToken
+      && w.campaignId && w.timelineId && w.sessionToken && i.load === w.load && i.turn === w.turn && i.transactionId === c.transactionId
+      && s.saved.revision === c.revision && s.saved.turn === w.turn && s.saved.at > 0;
+  }
+  function transportEvents() {
+    return Array.isArray(root._autoSaveTransportEvents) ? root._autoSaveTransportEvents.map(row => [String(row.phase || ''), Number(row.at)]) : null;
+  }
+  const startedAt = clock.now(), first = read(), anchor = JSON.stringify(first.world), priorFailures = new Set(first.failures.map(row => JSON.stringify(row)));
+  let timer, frame = null, last = first, previousReady = '', lastLogged = '', observations = 0;
+  const producerReceipts = [];
+  function emit(phase, s, error) {
+    const signature = JSON.stringify(s); if (phase === 'observing' && signature === lastLogged) return;
+    lastLogged = signature; observations++;
+    // The bridge caps each renderer log line at 2500 characters. Fragments
+    // preserve complete machine evidence even when detached-job metadata grows.
+    const payload = JSON.stringify({ phase, at: clock.now(), deadlineAt, observedSince, state: s, producerReceipts, error: error || null });
+    for (let offset = 0; offset < payload.length; offset += 1000) {
+      if (root.console && root.console.info) root.console.info('COMPOSITE_FINAL_BACKGROUND ' + JSON.stringify({ phase, observation: observations,
+        part: offset / 1000, parts: Math.ceil(payload.length / 1000), payload: payload.slice(offset, offset + 1000) }));
+    }
+  }
+  const deadline = new Promise((resolve, reject) => { timer = clock.setTimeout(() => reject(Error('composite final background: suite deadline exceeded')), deadlineAt - clock.now()); });
+  try {
+    while (true) {
+      demand(clock.now() < deadlineAt, 'suite deadline exceeded'); last = read(); emit('observing', last);
+      demand(JSON.stringify(last.world) === anchor, 'world changed while observing final work');
+      demand(last.fixtureErrors === 0, 'late fixture protocol failure');
+      demand(!last.failures.some(row => !priorFailures.has(JSON.stringify(row)) || !Number.isFinite(row.at) || row.at >= observedSince), 'final background canonical save failed');
+      const signature = JSON.stringify(last), complete = ready(last);
+      if (complete && signature === previousReady) {
+        emit('settled', last); return { status: 'settled', scope: 'final-review-and-save', startedAt, finishedAt: clock.now(), observedSince, deadlineAt, observations, producerReceipts, state: last };
+      }
+      previousReady = complete ? signature : '';
+      // Existing producers retain ownership. Never call a drain/retry/save API.
+      const existing = [{ kind: 'canonical', promise: root._backgroundSaveInFlight },
+        { kind: 'desktop', promise: root._autoSaveInFlightPromise, revision: last.canonical.revision, transport: transportEvents(), observedAt: clock.now() }];
+      [].concat(root.GM._postTurnJobs && root.GM._postTurnJobs.pending || [], root.GM._postTurnDetachedJobs || []).forEach(job => {
+        if (/^(sc25|sc25c)$/.test(job.id) && !/^(done|failed|retryable)$/.test(job.status)) existing.push({ kind: job.id, promise: job.promise });
+      });
+      const pending = existing.filter(entry => entry.promise && typeof entry.promise.then === 'function');
+      if (pending.length) {
+        const outcomes = await Promise.race([Promise.allSettled(pending.map(entry => entry.promise)), deadline]);
+        outcomes.forEach((outcome, index) => {
+          const kind = pending[index].kind, value = outcome.value;
+          const receipt = { kind, status: outcome.status, ok: !!(value && value.ok === true),
+            stale: !!(value && value.stale === true), deferred: !!(value && value.deferred === true), skipped: !!(value && value.skipped === true),
+            error: outcome.status === 'rejected' ? String(outcome.reason && outcome.reason.message || outcome.reason) : value && value.error ? String(value.error.message || value.error) : null,
+            errorCode: String(value && value.error && value.error.code || ''), superseded: false };
+          producerReceipts.push(receipt);
+          if (kind === 'canonical' || kind === 'desktop') {
+            const retryScheduled = kind === 'canonical' && outcome.status === 'fulfilled' && value && value.ok === false && !!root._backgroundSavePending;
+            const knownNoWrite = kind === 'canonical' && outcome.status === 'fulfilled' && value && value.ok === false && !receipt.error
+              && (receipt.stale || receipt.deferred || receipt.skipped);
+            if (kind === 'desktop' && outcome.status === 'fulfilled' && value && value.ok === false && receipt.errorCode === 'DESKTOP_AUTOSAVE_STALE') {
+              const next = read(), identity = next.canonical.identity;
+              const prior = pending[index].transport, transport = transportEvents(), event = transport && transport[transport.length - 1];
+              // The same error code also protects a foreign success reply.
+              // Only one provably new rejected event establishes this no-send path.
+              const rejectedBeforeDispatch = !!(prior && transport && prior.length <= 12 && transport.length === Math.min(12, prior.length + 1)
+                // A wrapped ring with a repeated tail cannot prove how many entries were evicted.
+                && (prior.length < 12 || prior.filter(row => row[0] === prior[11][0] && row[1] === prior[11][1]).length === 1)
+                && event && event[0] === 'rejected' && Number.isFinite(event[1]) && event[1] >= pending[index].observedAt
+                && (!prior.length || event[1] > prior[prior.length - 1][1])
+                && JSON.stringify(transport.slice(0, -1)) === JSON.stringify(prior.slice(Math.max(0, prior.length - 11))));
+              receipt.transportEvidence = { before: prior, after: transport, rejectedBeforeDispatch };
+              const newFlush = next.desktop.deferred || next.desktop.timer || (next.desktop.inFlight
+                && root._autoSaveInFlightPromise && root._autoSaveInFlightPromise !== pending[index].promise);
+              receipt.superseded = !!(rejectedBeforeDispatch && JSON.stringify(next.world) === anchor && next.canonical.revision > pending[index].revision && newFlush
+                && identity && identity.campaignId === next.world.campaignId && identity.timelineId === next.world.timelineId
+                && identity.sessionToken === next.world.sessionToken && identity.load === next.world.load && identity.turn === next.world.turn
+                && identity.transactionId === next.canonical.transactionId);
+              if (receipt.superseded) { receipt.fromRevision = pending[index].revision; receipt.toRevision = next.canonical.revision; }
+            }
+            demand(receipt.ok || retryScheduled || knownNoWrite || receipt.superseded, kind + ' save producer did not confirm success');
+          }
+        });
+      }
+      await Promise.race([new Promise(resolve => { frame = root.requestAnimationFrame(() => { frame = null; resolve(); }); }), deadline]);
+    }
+  } catch (error) { emit('failed', last, String(error.message || error)); throw error; }
+  finally { clock.clearTimeout(timer); if (frame !== null) root.cancelAnimationFrame(frame); }
+}
+module.exports = { installCompositeWaits, installCompositeEconomyObservers, reconcileCompositeEconomy, waitForCompositeBackground };

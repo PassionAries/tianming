@@ -20,13 +20,22 @@ if (mode === 'npc-composite' && process.env.TM_BRIDGE_MEMORY_DIAGNOSTICS === '1'
   require('electron').crashReporter.start({ uploadToServer:false });
   app.whenReady().then(() => setInterval(() => {
     const metrics = app.getAppMetrics().map(m => ({ pid:m.pid, type:m.type, cpu:m.cpu, memory:m.memory }));
-    fs.appendFileSync(path.join(path.dirname(process.env.TM_BRIDGE_TEST_REPORT), 'process-memory.jsonl'), JSON.stringify({ at:new Date().toISOString(), metrics })+'\n');
+    const system = process.getSystemMemoryInfo(); // Electron KiB fields; no heap/commit limit changes.
+    fs.appendFileSync(path.join(path.dirname(process.env.TM_BRIDGE_TEST_REPORT), 'process-memory.jsonl'), JSON.stringify({ at:new Date().toISOString(), metrics, system, osMemoryBytes:{total:os.totalmem(),free:os.freemem()} })+'\n');
   }, 5000).unref());
 }
 const deny = () => { throw new Error('test-external-network-denied'); };
 for (const name of ['http', 'https']) { require(name).request = deny; require(name).get = deny; }
 net.request = deny; net.fetch = deny; global.fetch = deny;
 const results = [], failures = [];
+const allocationSamplers = [];
+function recordCompositeDiagnosticFailure(error) {
+  const message = 'allocation diagnostic failed: ' + String(error && (error.stack || error.message) || error);
+  failures.push(message);
+  console.error('COMPOSITE_DIAGNOSTIC_FAILURE ' + message);
+  // Runtime protocol failure may precede render-process-gone. Preserve that
+  // actual terminal event; the recorded diagnostic still makes the gate fail.
+}
 const bridgeStartedAt = Date.now();
 const controls = {};
 let performanceReport;
@@ -70,6 +79,7 @@ Module._load = function(request, parent, ...rest) {
 let finished = false;
 function finish(error) {
   if (finished) return; finished = true;
+  allocationSamplers.forEach(sampler => sampler.dispose());
   if (error) failures.push(String(error.stack || error));
   const report = { complete: true, ok: failures.length === 0, mode, baseline, versions: process.versions, results, failures,
     timing: { startedAt: new Date(bridgeStartedAt).toISOString(), assertionsFinishedAt: new Date().toISOString(), elapsedMs: Date.now()-bridgeStartedAt, nodeUptimeSeconds: process.uptime() },
@@ -92,15 +102,24 @@ setTimeout(() => finish(new Error('electron-bridge-timeout')), bridgeTimeoutMs);
 process.on('uncaughtException', finish); process.on('unhandledRejection', finish);
 process.on('exit', code => { if (finished) process.stdout.write('BRIDGE_NODE_EXIT '+JSON.stringify({mode,at:new Date().toISOString(),code})+'\n'); });
 app.on('browser-window-created', (_event, win) => {
+  let allocationSampler = null;
   if (!visibleWindow) win.show = () => {};
   win.setFullScreen = () => {};
   win.webContents.on('console-message',(_e,level,message)=>{if(/^RELIEF_DIGEST_/.test(message))fs.appendFileSync(path.join(path.dirname(process.env.TM_BRIDGE_TEST_REPORT),'digest-progress.log'),new Date().toISOString()+' '+message+'\n');if(/^RELIEF_|^STRATEGIC_/.test(message)||level>=3)console.log('BRIDGE_RENDER_DIAG '+String(message).slice(0,2200));});
-  if (mode === 'npc-composite') win.webContents.on('console-message',(_e,level,message)=>{ if(level>=1)fs.appendFileSync(path.join(path.dirname(process.env.TM_BRIDGE_TEST_REPORT),'renderer.log'),new Date().toISOString()+' '+level+' '+String(message).slice(0,2500)+'\n'); });
+  if (mode === 'npc-composite') win.webContents.on('console-message',(_e,level,message)=>{ if(level>=1)fs.appendFileSync(path.join(path.dirname(process.env.TM_BRIDGE_TEST_REPORT),'renderer.log'),new Date().toISOString()+' '+level+' '+String(message).slice(0,2500)+'\n');
+    if(allocationSampler&&String(message).startsWith('COMPOSITE_ALLOCATION_STAGE '))allocationSampler.sample('stage:'+String(message).slice(27,450)).catch(()=>{});
+  });
   win.webContents.on('preload-error', (_event, file, error) => finish(new Error('production-preload-failed: ' + file + ': ' + error.message)));
   win.webContents.on('render-process-gone', (_event, details) => finish(new Error('render-process-gone: ' + JSON.stringify(details))));
   win.webContents.on('did-fail-load', (_event, code, description, url, mainFrame) => { if (mainFrame) finish(new Error('did-fail-load: ' + code + ' ' + description + ' ' + url)); });
   win.webContents.once('did-finish-load', async () => {
     try {
+      if(mode==='npc-composite'&&process.env.TM_BRIDGE_HEAP_SAMPLING==='1'){
+        if(process.env.TM_BRIDGE_CPU_PROFILE==='1')throw Error('composite allocation sampling and CPU profiling require separate runs');
+        allocationSampler=await require('./npc-composite-diagnostics.cjs').startCompositeAllocationSampling({debugger:win.webContents.debugger,
+          directory:path.dirname(process.env.TM_BRIDGE_TEST_REPORT),onFailure:recordCompositeDiagnosticFailure});
+        allocationSamplers.push(allocationSampler);
+      }
       await check('locked-electron-runtime', () => assert.equal(process.versions.electron, require(path.resolve(__dirname, '../../package-lock.json')).packages['node_modules/electron'].version));
       await check('production-webpreferences', () => {
         const p = win.webContents.getLastWebPreferences();
@@ -185,6 +204,7 @@ app.on('browser-window-created', (_event, win) => {
       else if (mode === 'authoring-efficiency') await require('./authoring-efficiency-cases.cjs')({ win, root, temp, check });
       else if (mode === 'relief-pilot' || mode === 'relief-inspect') await require('./relief-pilot-cases.cjs')({ win, root, temp, check, mode });
       else if (!baseline) await require('./desktop-cases.cjs')({ win, root, temp, mode, controls, check });
+      if(allocationSampler)await allocationSampler.sample('scenario-complete');
       finish();
     } catch (error) { finish(error); }
   });

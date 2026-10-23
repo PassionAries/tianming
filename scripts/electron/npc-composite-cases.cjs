@@ -2,6 +2,7 @@
 // Real official startup and formal controls. No player saves or external models are used.
 const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
 const { installCompositeWaits, installCompositeEconomyObservers, reconcileCompositeEconomy, waitForCompositeBackground } = require('./npc-composite-waits.cjs');
+const { installCompositeAllocationStages } = require('./npc-composite-diagnostics.cjs');
 module.exports = async function ({ win, root, check, results, deadlineAt }) {
   assert(Number.isFinite(deadlineAt), 'the original Electron suite deadline must be supplied');
   const dir = path.dirname(process.env.TM_BRIDGE_TEST_REPORT), timeline = [], traffic = [];
@@ -9,6 +10,7 @@ module.exports = async function ({ win, root, check, results, deadlineAt }) {
   for(const f of ['tm-npc-travel.js','tm-npc-local-ai.js','tm-npc-daily-activities.js','tm-npc-daily-ui.js','tm-npc-action-ledger.js','tm-office-tenure.js','tm-sim-time.js','tm-endturn-core.js'])identity.runtime[f]=require('crypto').createHash('sha256').update(fs.readFileSync(path.join(root,'web',f))).digest('hex');
   identity.harness={};for(const f of ['scripts/electron/npc-composite-cases.cjs','scripts/electron/npc-composite-model-fixture.cjs','web/tm-start-runtime-manifest.json'])identity.harness[f]=require('crypto').createHash('sha256').update(fs.readFileSync(path.join(root,f))).digest('hex');
   const waitHelperPath='scripts/electron/npc-composite-waits.cjs';identity.harness[waitHelperPath]=require('crypto').createHash('sha256').update(fs.readFileSync(path.join(root,waitHelperPath))).digest('hex');
+  const diagnosticHelperPath='scripts/electron/npc-composite-diagnostics.cjs';identity.harness[diagnosticHelperPath]=require('crypto').createHash('sha256').update(fs.readFileSync(path.join(root,diagnosticHelperPath))).digest('hex');
   win.webContents.session.webRequest.onBeforeRequest({urls:['http://*/*','https://*/*','ws://*/*','wss://*/*']}, (details, callback) => {
     const url = new URL(details.url); traffic.push({host:url.host,path:url.pathname}); callback({cancel:true});
   });
@@ -131,6 +133,7 @@ module.exports = async function ({ win, root, check, results, deadlineAt }) {
 
     return true;
   })()`);
+  if(process.env.TM_BRIDGE_HEAP_SAMPLING==='1')await js(`(${installCompositeAllocationStages.toString()})(window)`);
   // Declared initial test visibility: one existing nearby public venue.
   // People and their official scenario relationships remain unmodified; no
   // completed contact, localGoal, permission or activity is supplied.
@@ -202,12 +205,23 @@ module.exports = async function ({ win, root, check, results, deadlineAt }) {
   await check('NPC answers the real question, both return, and the official population continues through 30 days',async()=>{
     let s=await record('returned'),p=s.plans.find(p=>p.id===meeting.id);assert.equal(p.status,'done',JSON.stringify(p));assert.equal(p.meeting.discussion.status,'completed');assert(p.meeting.discussion.result.targetContent);assert.equal(p.meeting.actorReturnJourney.status,'returned');assert.equal(p.meeting.targetDecision.response,'accept','the NPC independently accepted the current meeting');assert.equal(p.meeting.targetReturnMode,'return');assert.equal(p.meeting.targetReturnJourney.status,'returned');const physical=await js(`['char_jianyan1_01','char_jianyan1_16'].map(id=>({id,location:TM.NPC.DailyActivities.exactLocation(GM.chars.find(c=>c.id===id),GM)}))`);assert.equal(physical[0].location,p.meeting.actorJourney.fromRegionId,'actor really returns to their own departure location');assert.equal(physical[1].location,p.meeting.targetJourney.fromRegionId,'target really returns to their own departure location');timeline.push({stage:'physical-return',planId:p.id,physical,actorOrigin:p.meeting.actorJourney.fromRegionId,targetOrigin:p.meeting.targetJourney.fromRegionId});assert.equal(p.meeting.discussion.result.id,'meeting-discussion:'+p.id+':1');assert.equal(p.meeting.discussion.effectsApplied,true);assert.equal(p.steps.filter(s=>s.phase==='discuss').length,1);assert.equal(p.steps.filter(s=>s.phase==='discuss_response').length,1);const life=await js(`GM.chars.find(c=>c.id==='char_jianyan1_01')._lifeExp||[]`);assert.equal(life.filter(e=>e.domain==='现场请益·'+p.meeting.discussion.result.topicId&&e.desc===p.meeting.discussion.result.targetContent).length,1,'only one actual learning experience for the performed discussion');const memories=await js(`GM.chars.filter(c=>['char_jianyan1_01','char_jianyan1_16'].includes(c.id)).map(c=>({id:c.id,entries:(c._memory||[]).concat(c._memArchive||[]).filter(m=>String(m.sourceId||'').startsWith(${JSON.stringify(p.meeting.discussion.result.id)}))}))`);for(const row of memories)assert.equal(row.entries.length,1,'each real participant receives exactly one discussion memory');timeline.push({stage:'personal-result',planId:p.id,resultId:p.meeting.discussion.result.id,life,memories});
     for(let i=0;s.day<30&&i<15;i++){await formalTurn();s=await record('continuous-run');}
-    assert(s.day>=30);assert(s.people>=500);await openLetters();assert((await js(`document.querySelector(${JSON.stringify(card)}).textContent`)).includes(p.meeting.discussion.result.targetContent));await screenshot('04-completed-return');
+    assert(s.day>=30);assert(s.people>=500);
     const finalTurn=(await js(`__compositeWaits.snapshot()`)).filter(row=>row.kind==='turn').slice(-1)[0];
     assert(finalTurn&&finalTurn.status==='completed'&&Number.isFinite(finalTurn.startedAt),'the final genuine turn must identify its background work');
     await record('before-final-background-settlement');
     const background=await js(`(${waitForCompositeBackground.toString()})(window,${deadlineAt},${finalTurn.startedAt})`);
     assert.equal(background.status,'settled');timeline.push({stage:'final-review-and-save-settled',...background});
+    // Background world rendering may legitimately close a prior letter panel.
+    // Reopen through the same real controls after it settles, and prove the
+    // actual result paragraph is visible rather than reading hidden DOM text.
+    await closeLetters();await openLetters();
+    const resultSelector=await js(`(()=>{const card=document.querySelector(${JSON.stringify(card)});if(!card)throw Error('completed meeting card missing');const details=Array.from(card.querySelectorAll(':scope > details'));const index=details.findIndex(d=>d.querySelector('summary')?.textContent.trim()==='现场讨论结果');if(index<0)throw Error('onsite result section missing');return ${JSON.stringify(card)}+' > details:nth-of-type('+(index+1)+')';})()`);
+    if(!await js(`document.querySelector(${JSON.stringify(resultSelector)}).open`))await click(resultSelector+' > summary');
+    const visibleResult=`(()=>{const e=document.querySelector(${JSON.stringify(resultSelector+' > p')});if(!e)return null;e.scrollIntoView({block:'center',inline:'nearest'});for(let n=e;n;n=n.parentElement){const style=getComputedStyle(n);if(style.display==='none'||style.visibility!=='visible'||Number(style.opacity)===0)return null;}const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,hit=document.elementFromPoint(x,y);return r.width>0&&r.height>0&&x>=0&&x<innerWidth&&y>=0&&y<innerHeight&&hit&&(hit===e||e.contains(hit))&&e.textContent===${JSON.stringify(p.meeting.discussion.result.targetContent)}?{text:e.textContent,rect:{x:r.x,y:r.y,width:r.width,height:r.height},hit:true,day:TM.SimTime.now(GM),load:window._tmLoadGen}:null;})()`;
+    await wait(visibleResult,'actual onsite result must be visible on the formal page');
+    const shownResult=await js(visibleResult);assert(shownResult,'result was hidden before capture');
+    await screenshot('04-completed-return');assert(await js(visibleResult),'result was hidden during capture');
+    timeline.push({stage:'visible-formal-result',planId:p.id,resultId:p.meeting.discussion.result.id,...shownResult});
     const calls=await js(`__compositeCalls`);assert.equal(calls.fixtureErrors.length,0,'no unknown or invalid external protocol may be hidden by a production catch');assert(calls.systems.length>0);assert(calls.provinceEconomy.every(r=>r.days>0&&r.before&&r.after),'real province samples must be recorded around every settlement');assert(calls.provinceEconomy.some(r=>JSON.stringify(r.before)!==JSON.stringify(r.after)),'the real economy must change its source fields during the run');assert.equal(calls.provinceEconomy.length,calls.systems.length,'real provincial economy runs once per actual top-level interval');assert.equal(new Set(calls.provinceEconomy.map(r=>r.turn)).size,calls.provinceEconomy.length,'meeting substeps must not repeat provincial settlement');calls.economyReconciliation=reconcileCompositeEconomy(await js(`__compositeWaits.snapshot()`),calls);results.push({name:'official-composite-model-boundary',status:'PASS',value:calls});
   });
   await record('completed-evidence');
